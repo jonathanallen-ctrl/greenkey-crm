@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GreenKey CRM</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2/dist/index.min.js"></script>
+<!-- MSAL loaded dynamically inside initMSAL() -->
 <style>
   :root {
     --bg-base:#0f1117;--bg-surface:#181c25;--bg-elevated:#1e2330;--bg-hover:#252b3a;
@@ -7016,6 +7016,11 @@ const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY];
 
 // ── MSAL INIT ──
 async function initMSAL() {
+  // Dynamically import MSAL as ES module and expose as global
+  if (typeof msal === 'undefined') {
+    const msalModule = await import('https://cdn.jsdelivr.net/npm/@azure/msal-browser@2/dist/index.js');
+    window.msal = msalModule;
+  }
   _msal = new msal.PublicClientApplication({
     auth: {
       clientId: AZURE_CLIENT_ID,
