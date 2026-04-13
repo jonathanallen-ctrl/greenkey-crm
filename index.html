@@ -7018,7 +7018,7 @@ const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY];
 async function initMSAL() {
   // Dynamically import MSAL as ES module and expose as global
   if (typeof msal === 'undefined') {
-    const msalModule = await import('https://cdn.jsdelivr.net/npm/@azure/msal-browser@2/dist/index.js');
+    const msalModule = await import('https://esm.sh/@azure/msal-browser@2');
     window.msal = msalModule;
   }
   _msal = new msal.PublicClientApplication({
