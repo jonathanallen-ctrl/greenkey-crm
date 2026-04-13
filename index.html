@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GreenKey CRM</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <style>
   :root {
     --bg-base:#0f1117;--bg-surface:#181c25;--bg-elevated:#1e2330;--bg-hover:#252b3a;
@@ -591,6 +592,11 @@
       <input class="fi" type="password" id="lpw" placeholder="Enter your password" autocomplete="current-password">
     </div>
     <button class="btn btn-p btn-full" onclick="doLogin()">Sign in</button>
+    <div class="ldiv">or</div>
+    <button class="biobtn" onclick="msalLogin()" style="border-color:#0078d4;gap:10px">
+      <svg width="16" height="16" viewBox="0 0 21 21" fill="none"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
+      Sign in with Microsoft
+    </button>
     <div id="biosec" style="display:none">
       <div class="ldiv">or</div>
       <button class="biobtn" onclick="doBioLogin()">
@@ -1114,7 +1120,7 @@ function nextJobId() {
 function getCustomers() {
   try { return JSON.parse(localStorage.getItem(CK)||'[]'); } catch{ return []; }
 }
-function saveCustomers(arr) { localStorage.setItem(CK, JSON.stringify(arr)); }
+function saveCustomers(arr) { localStorage.setItem(CK, JSON.stringify(arr)); queueSPSync(); }
 function getCustomer(id) { return getCustomers().find(c=>c.id===id)||null; }
 
 function upsertCustomer(data) {
@@ -1131,7 +1137,7 @@ function upsertCustomer(data) {
 function getLeads() {
   try { return JSON.parse(localStorage.getItem(LK)||'[]'); } catch{ return []; }
 }
-function saveLeads(arr) { localStorage.setItem(LK, JSON.stringify(arr)); }
+function saveLeads(arr) { localStorage.setItem(LK, JSON.stringify(arr)); queueSPSync(); }
 function getLead(id) { return getLeads().find(l=>l.id===id)||null; }
 
 function upsertLead(data) {
@@ -1258,6 +1264,12 @@ async function login(user) {
 }
 
 function doLogout() {
+  // Sign out of Microsoft session if applicable
+  if (_msal) {
+    const accounts = _msal.getAllAccounts();
+    if (accounts.length > 0) { _msal.logoutPopup({ account: accounts[0] }).catch(()=>{}); }
+  }
+  _gToken = null; _spSite = null; _spList = null; _spDrive = null;
   S.user = null;
   localStorage.removeItem(SK);
   document.getElementById('app').classList.add('hidden');
@@ -2414,7 +2426,7 @@ function getQQPricing(){
 }
 
 function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
-function saveQuotes(a){localStorage.setItem(QK,JSON.stringify(a));}
+function saveQuotes(a){localStorage.setItem(QK,JSON.stringify(a));queueSPSync();}
 function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 function upsertQuote(data){
   const a=getQuotes(),idx=a.findIndex(q=>q.id===data.id),now=new Date().toISOString();
@@ -2424,7 +2436,7 @@ function upsertQuote(data){
 }
 
 function getMaterials(){try{return JSON.parse(localStorage.getItem(MK)||'[]');}catch{return[];}}
-function saveMaterials(a){localStorage.setItem(MK,JSON.stringify(a));}
+function saveMaterials(a){localStorage.setItem(MK,JSON.stringify(a));queueSPSync();}
 function initMaterials(){
   if(getMaterials().length) return;
   saveMaterials([
@@ -4259,6 +4271,12 @@ function addFileRecord(jobId, category, subFolder, file, dataUrl) {
     dataUrl
   };
   _filesCache.push(rec);        // update cache immediately (synchronous)
+  // Upload to SharePoint in background for cross-device access
+  if (_gToken && _spDrive) {
+    _uploadPhotoToSP(jobId, category, file, dataUrl).then(url => {
+      if (url) { rec.spUrl = url; _idbPut(rec); }
+    });
+  }
   _idbPut(rec).catch(e => {    // persist to IndexedDB (async)
     console.error('[GK] Failed to save file:', e);
     toast('Error saving file — please try again', 'error');
@@ -4827,7 +4845,7 @@ const NK = 'gk_notifications';
 
 // ── TASK CRUD ──
 function getTasks() { try { return JSON.parse(localStorage.getItem(TK)||'[]'); } catch{ return []; } }
-function saveTasks(arr) { localStorage.setItem(TK, JSON.stringify(arr)); }
+function saveTasks(arr) { localStorage.setItem(TK, JSON.stringify(arr)); queueSPSync(); }
 function getTask(id) { return getTasks().find(t=>t.id===id)||null; }
 
 function upsertTask(data) {
@@ -4858,7 +4876,7 @@ function completeTask(id, note) {
 
 // ── NOTIFICATION CRUD ──
 function getNotifications() { try { return JSON.parse(localStorage.getItem(NK)||'[]'); } catch{ return []; } }
-function saveNotifications(arr) { localStorage.setItem(NK, JSON.stringify(arr)); }
+function saveNotifications(arr) { localStorage.setItem(NK, JSON.stringify(arr)); queueSPSync(); }
 function getNotification(id) { return getNotifications().find(n=>n.id===id)||null; }
 
 function upsertNotification(data) {
@@ -6974,18 +6992,298 @@ function seedImportData() {
 }
 /* ─── End seed ─── */
 
-// ── INIT ──
-function init() {
-  seedImportData();
-  const ses=JSON.parse(localStorage.getItem(SK)||'null');
-  if (ses && Date.now()-ses.ts < 8*60*60*1000) {
-    const user=getUsers().find(u=>u.id===ses.userId);
-    if (user) { login(user); return; }
+// ════════════════════════════════════════════════════════════
+// AZURE / MSAL / SHAREPOINT INTEGRATION
+// ════════════════════════════════════════════════════════════
+
+const AZURE_CLIENT_ID   = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
+const AZURE_TENANT_ID   = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
+const AZURE_REDIRECT    = 'https://jonathanallen-ctrl.github.io/greenkey-crm/';
+const SP_HOSTNAME       = 'greenkeyusa.sharepoint.com';
+const SP_LIST_NAME      = 'GreenKeyCRM_Data';
+const SP_PHOTO_LIB_NAME = 'GreenKeyCRM_Photos';
+const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read'];
+
+let _msal    = null;
+let _gToken  = null;
+let _spSite  = null;
+let _spList  = null;
+let _spDrive = null;
+let _syncTmr = null;
+let _syncing = false;
+
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY];
+
+// ── MSAL INIT ──
+async function initMSAL() {
+  _msal = new msal.PublicClientApplication({
+    auth: {
+      clientId: AZURE_CLIENT_ID,
+      authority: `https://login.microsoftonline.com/${AZURE_TENANT_ID}`,
+      redirectUri: AZURE_REDIRECT
+    },
+    cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: false }
+  });
+  await _msal.initialize();
+
+  try {
+    const resp = await _msal.handleRedirectPromise();
+    if (resp) { _gToken = resp.accessToken; await _onMSALSuccess(resp.account); return; }
+  } catch(e) { console.warn('[GK] Redirect response:', e); }
+
+  const accounts = _msal.getAllAccounts();
+  if (accounts.length > 0) {
+    try {
+      const tr = await _msal.acquireTokenSilent({ account: accounts[0], scopes: GRAPH_SCOPES });
+      _gToken = tr.accessToken;
+      await _onMSALSuccess(accounts[0]);
+    } catch(e) {
+      console.log('[GK] Silent token failed, showing login screen');
+      // Fall back to local session check
+      const ses = JSON.parse(localStorage.getItem(SK)||'null');
+      if (ses && Date.now()-ses.ts < 8*60*60*1000) {
+        const user = getUsers().find(u=>u.id===ses.userId);
+        if (user) { login(user); }
+      }
+    }
+  } else {
+    // No MSAL accounts — check for local session fallback
+    const ses = JSON.parse(localStorage.getItem(SK)||'null');
+    if (ses && Date.now()-ses.ts < 8*60*60*1000) {
+      const user = getUsers().find(u=>u.id===ses.userId);
+      if (user) { login(user); }
+    }
   }
-  const bio=JSON.parse(localStorage.getItem(BK)||'{}');
-  if (Object.keys(bio).length>0) document.getElementById('biosec').style.display='block';
+}
+
+async function msalLogin() {
+  try {
+    const resp = await _msal.loginPopup({ scopes: GRAPH_SCOPES });
+    _gToken = resp.accessToken;
+    await _onMSALSuccess(resp.account);
+  } catch(e) {
+    if (e.errorCode !== 'user_cancelled') {
+      toast('Microsoft sign-in failed: ' + (e.message || e.errorCode || 'Unknown error'), 'error');
+    }
+  }
+}
+
+async function _onMSALSuccess(account) {
+  const email = (account.username || '').toLowerCase();
+  const displayName = account.name || account.username;
+  const parts = displayName.split(' ').filter(Boolean);
+  const initials = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2) || 'GK';
+
+  let role = 'tech';
+  if (email.includes('jonathan') || email.includes('j.allen')) role = 'admin';
+  if (email.includes('sherri') || email.includes('s.allen')) role = 'admin';
+
+  const user = { id: account.homeAccountId, username: email, name: displayName, initials, role, active: true };
+
+  _syncStatusShow('Connecting to SharePoint…');
+  try {
+    await _spInit();
+    await _syncFromSP();
+  } catch(e) {
+    console.warn('[GK] SharePoint unavailable, using local data:', e);
+    toast('SharePoint sync failed — running with local data', 'error');
+  }
+  _syncStatusHide();
+  await login(user);
+}
+
+// ── GRAPH API HELPER ──
+async function _graphFetch(path, opts = {}) {
+  const url = path.startsWith('https://') ? path : `https://graph.microsoft.com/v1.0${path}`;
+  if (!_gToken && _msal) {
+    const accounts = _msal.getAllAccounts();
+    if (accounts.length > 0) {
+      const tr = await _msal.acquireTokenSilent({ account: accounts[0], scopes: GRAPH_SCOPES });
+      _gToken = tr.accessToken;
+    }
+  }
+  const resp = await fetch(url, {
+    ...opts,
+    headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json', ...(opts.headers||{}) }
+  });
+  if (resp.status === 204) return null;
+  if (!resp.ok) { const t = await resp.text(); throw new Error(`Graph ${resp.status}: ${t.slice(0,300)}`); }
+  return resp.json();
+}
+
+// ── SHAREPOINT INIT ──
+async function _spInit() {
+  if (_spSite) return;
+  const site = await _graphFetch(`/sites/${SP_HOSTNAME}`);
+  _spSite = site.id;
+  _spList = await _spEnsureList();
+  _spDrive = await _spEnsureDrive();
+  console.log('[GK] SharePoint initialized. Site:', _spSite);
+}
+
+async function _spEnsureList() {
+  const res = await _graphFetch(`/sites/${_spSite}/lists?$filter=displayName eq '${SP_LIST_NAME}'&$select=id`);
+  if (res.value.length > 0) return res.value[0].id;
+  const created = await _graphFetch(`/sites/${_spSite}/lists`, {
+    method: 'POST',
+    body: JSON.stringify({
+      displayName: SP_LIST_NAME,
+      columns: [{ name: 'DataValue', text: { allowMultipleLines: true, linesForEditing: 6 } }],
+      list: { template: 'genericList' }
+    })
+  });
+  console.log('[GK] Created SharePoint list:', SP_LIST_NAME);
+  return created.id;
+}
+
+async function _spEnsureDrive() {
+  const drives = await _graphFetch(`/sites/${_spSite}/drives`);
+  const lib = drives.value.find(d => d.name === SP_PHOTO_LIB_NAME);
+  if (lib) return lib.id;
+  const docs = drives.value.find(d => d.webUrl && (d.webUrl.includes('Shared%20Documents') || d.webUrl.includes('Shared Documents')));
+  return docs ? docs.id : (drives.value[0]?.id || null);
+}
+
+// ── SYNC FROM SHAREPOINT → localStorage ──
+async function _syncFromSP() {
+  if (!_spSite || !_spList) return;
+  let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$top=200`;
+  let count = 0;
+  while (nextLink) {
+    const res = await _graphFetch(nextLink);
+    for (const item of (res.value || [])) {
+      const key = item.fields?.Title;
+      const val = item.fields?.DataValue;
+      if (key && val) { localStorage.setItem(key, val); count++; }
+    }
+    nextLink = res['@odata.nextLink'] || null;
+  }
+  console.log('[GK] Synced from SharePoint:', count, 'keys');
+}
+
+// ── SYNC localStorage → SHAREPOINT (debounced 3s) ──
+function queueSPSync() {
+  if (!_gToken) return;
+  clearTimeout(_syncTmr);
+  _syncTmr = setTimeout(_syncToSP, 3000);
+}
+
+async function _syncToSP() {
+  if (_syncing || !_spSite || !_spList) return;
+  _syncing = true;
+  try {
+    // Fetch existing item map (Title → itemId)
+    let existMap = {};
+    let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$select=id,fields/Title&$top=200`;
+    while (nextLink) {
+      const res = await _graphFetch(nextLink);
+      for (const item of (res.value||[])) if (item.fields?.Title) existMap[item.fields.Title] = item.id;
+      nextLink = res['@odata.nextLink'] || null;
+    }
+    const yr = new Date().getFullYear();
+    const keys = [...SYNC_KEYS, `gk_seq_${yr}`];
+    for (const key of keys) {
+      const val = localStorage.getItem(key);
+      if (!val) continue;
+      if (existMap[key]) {
+        await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items/${existMap[key]}/fields`, {
+          method: 'PATCH', body: JSON.stringify({ DataValue: val })
+        });
+      } else {
+        await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items`, {
+          method: 'POST', body: JSON.stringify({ fields: { Title: key, DataValue: val } })
+        });
+      }
+    }
+    console.log('[GK] Synced to SharePoint:', keys.length, 'keys');
+  } catch(e) {
+    console.warn('[GK] Sync to SharePoint failed:', e);
+  } finally {
+    _syncing = false;
+  }
+}
+
+// ── PHOTO UPLOAD TO SHAREPOINT ──
+async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
+  if (!_gToken || !_spDrive) return null;
+  try {
+    const fname = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const spPath = `${SP_PHOTO_LIB_NAME}/${jobId}/${category}/${fname}`;
+    const blob = _dataUrlToBlob(dataUrl);
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${spPath}:/content`, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': file.type || 'image/jpeg' },
+      body: blob
+    });
+    if (!resp.ok) throw new Error('Upload failed: ' + resp.status);
+    const result = await resp.json();
+    console.log('[GK] Photo uploaded to SharePoint:', result.webUrl);
+    return result.webUrl || null;
+  } catch(e) {
+    console.warn('[GK] SP photo upload failed:', e);
+    return null;
+  }
+}
+
+function _dataUrlToBlob(dataUrl) {
+  const arr = dataUrl.split(','), mime = arr[0].match(/:(.*?);/)[1];
+  const bstr = atob(arr[1]);
+  const u8arr = new Uint8Array(bstr.length);
+  for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+  return new Blob([u8arr], { type: mime });
+}
+
+// ── SYNC STATUS INDICATOR ──
+function _syncStatusShow(msg) {
+  let el = document.getElementById('sp-sync-status');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sp-sync-status';
+    el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1e2330;border:1px solid #2a3145;border-radius:8px;padding:12px 16px;font-size:13px;color:#8892a4;z-index:9999;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,0.4)';
+    el.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span id="sp-sync-msg"></span>';
+    document.body.appendChild(el);
+    const style = document.createElement('style');
+    style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(style);
+  }
+  document.getElementById('sp-sync-msg').textContent = msg;
+  el.style.display = 'flex';
+}
+function _syncStatusHide() {
+  const el = document.getElementById('sp-sync-status');
+  if (el) el.style.display = 'none';
+}
+
+// Also sync on page visibility change (when user switches back to tab)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && _gToken && _spSite && S.user) {
+    _syncFromSP().then(() => {
+      // Re-render current page with fresh data
+      if (typeof navigate === 'function') navigate(S.page);
+    }).catch(e => console.warn('[GK] Visibility sync failed:', e));
+  }
+});
+
+// ── INIT ──
+async function init() {
+  seedImportData();
   document.getElementById('lpw').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
   document.getElementById('luser').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('lpw').focus(); });
+  const bio=JSON.parse(localStorage.getItem(BK)||'{}');
+  if (Object.keys(bio).length>0) document.getElementById('biosec').style.display='block';
+
+  // Try MSAL auto-login first (resumes existing Microsoft session)
+  try {
+    await initMSAL();
+  } catch(e) {
+    console.warn('[GK] MSAL init failed, falling back to local login:', e);
+    // Fall back to localStorage session
+    const ses=JSON.parse(localStorage.getItem(SK)||'null');
+    if (ses && Date.now()-ses.ts < 8*60*60*1000) {
+      const user=getUsers().find(u=>u.id===ses.userId);
+      if (user) { login(user); return; }
+    }
+  }
 }
 
 init();
