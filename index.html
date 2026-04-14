@@ -7269,8 +7269,31 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// ── ONE-TIME LEAD CLEANUP (archive leads >50 days old) ──
+function archiveOldLeads() {
+  const CLEANUP_KEY = 'gk_cleanup_archive50_v1';
+  if (localStorage.getItem(CLEANUP_KEY)) return; // already ran
+  const leads = JSON.parse(localStorage.getItem('gk_leads') || '[]');
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 50);
+  let count = 0;
+  const updated = leads.map(l => {
+    if (new Date(l.createdAt) < cutoff && l.stage !== 'archived') {
+      count++;
+      return { ...l, stage: 'archived', stageAt: new Date().toISOString() };
+    }
+    return l;
+  });
+  if (count > 0) {
+    localStorage.setItem('gk_leads', JSON.stringify(updated));
+    console.log(`[GK] Auto-archived ${count} leads older than 50 days`);
+  }
+  localStorage.setItem(CLEANUP_KEY, '1'); // mark as done
+}
+
 // ── INIT ──
 async function init() {
+  archiveOldLeads();
   seedImportData();
   document.getElementById('lpw').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
   document.getElementById('luser').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('lpw').focus(); });
