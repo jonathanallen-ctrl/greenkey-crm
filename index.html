@@ -3747,7 +3747,25 @@ function deleteJobNote(leadId, noteId) {
   toast('Note deleted', 'success');
 }
 
-function saveJobSnapshot(leadId) {
+// ── AUTO-SAVE DEBOUNCE ──
+const _asTimers = {};
+function _autoSave(key, fn) {
+  clearTimeout(_asTimers[key]);
+  _asTimers[key] = setTimeout(fn, 800);
+}
+function autoSaveSnapshot(lid) { _autoSave('snap_'+lid, ()=>saveJobSnapshot(lid, true)); }
+function autoSaveCharger(lid)  { _autoSave('char_'+lid, ()=>saveChargerInfo(lid, true)); }
+function autoSaveUtility(lid)  { _autoSave('util_'+lid, ()=>saveUtilityInfo(lid, true)); }
+function _showAutoSaved(sectionId) {
+  const btn = document.getElementById(sectionId);
+  if (!btn) return;
+  const orig = btn.textContent;
+  btn.textContent = 'Saved ✓';
+  btn.style.color = 'var(--green)';
+  setTimeout(()=>{ btn.textContent=orig; btn.style.color=''; }, 1500);
+}
+
+function saveJobSnapshot(leadId, silent=false) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
@@ -3767,7 +3785,8 @@ function saveJobSnapshot(leadId) {
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Electrical snapshot saved','success');
+  if (silent) _showAutoSaved('snap-save-btn');
+  else toast('Electrical snapshot saved','success');
 }
 
 const _ISSUE_TASKS = {
@@ -3821,7 +3840,7 @@ function onChargerMakeChange(makeVal) {
     models.map(m => `<option value="${m}">${m}</option>`).join('');
 }
 
-function saveChargerInfo(leadId) {
+function saveChargerInfo(leadId, silent=false) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
@@ -3833,10 +3852,11 @@ function saveChargerInfo(leadId) {
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Charger info saved','success');
+  if (silent) _showAutoSaved('char-save-btn');
+  else toast('Charger info saved','success');
 }
 
-function saveUtilityInfo(leadId) {
+function saveUtilityInfo(leadId, silent=false) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
@@ -3850,7 +3870,8 @@ function saveUtilityInfo(leadId) {
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Utility info saved','success');
+  if (silent) _showAutoSaved('util-save-btn');
+  else toast('Utility info saved','success');
 }
 
 function savePlatformFields(leadId) {
@@ -4011,9 +4032,9 @@ function renderJobDetail(id) {
   // ── Electrical Snapshot ──
   const snapSec = `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Electrical Snapshot</div>
-      <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveJobSnapshot('${id}')">Save</button>
+      <button id="snap-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveJobSnapshot('${id}')">Save</button>
     </div>
-    <div class="jd-sb">
+    <div class="jd-sb" onchange="autoSaveSnapshot('${id}')" oninput="autoSaveSnapshot('${id}')">`
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Service Size</div><select class="jd-fi" id="snap-panels">
           ${['400A','300A','200A','150A','100A','Other'].map(o=>`<option value="${o}"${(snap.serviceSize||snap.numPanels||'200A')==o?' selected':''}>${o}</option>`).join('')}
@@ -4061,9 +4082,9 @@ function renderJobDetail(id) {
   // ── Charger Info (EV only) ──
   const chargerSec = !isEV ? '' : `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Charger Info</div>
-      <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveChargerInfo('${id}')">Save</button>
+      <button id="char-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveChargerInfo('${id}')">Save</button>
     </div>
-    <div class="jd-sb">
+    <div class="jd-sb" onchange="autoSaveCharger('${id}')" oninput="autoSaveCharger('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Make</div>
           <select class="jd-fsel" id="ch-make" onchange="onChargerMakeChange(this.value)">
@@ -4098,9 +4119,9 @@ function renderJobDetail(id) {
   // ── Utility Info (upgrade / new service) ──
   const utilitySec = !isUpgrade ? '' : `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Utility Info</div>
-      <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveUtilityInfo('${id}')">Save</button>
+      <button id="util-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveUtilityInfo('${id}')">Save</button>
     </div>
-    <div class="jd-sb">
+    <div class="jd-sb" onchange="autoSaveUtility('${id}')" oninput="autoSaveUtility('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Utility Company</div><input class="jd-fi" id="ut-company" placeholder="e.g. Dominion Energy" value="${utility.utilityCompany||''}"></div>
         <div class="jd-f"><div class="jd-fl">Approval Status</div>
