@@ -2514,10 +2514,7 @@ function openNewQuote(){
   if(!leads.length){toast('No active jobs found — create a lead first','warning');return;}
   const body=`
     <div class="fsec"><div class="fsec-title">Select Job</div>
-      <select class="fsel" id="qt-lead-sel">
-        <option value="">— Select a job —</option>
-        ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);return`<option value="${l.id}">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;}).join('')}
-      </select>
+      ${_leadSearchUI(leads,custs)}
     </div>
     <div class="fsec"><div class="fsec-title">Quote Type</div>
       <div style="display:flex;gap:12px;flex-direction:column">
@@ -2535,9 +2532,39 @@ function openNewQuote(){
 }
 function selectQTType(t){document.querySelectorAll('input[name="qt-type"]').forEach(r=>{r.checked=r.value===t;});}
 
+function filterLeadSelect(term){
+  const leads=getLeads().filter(l=>l.stage!=='archived');
+  const custs=getCustomers();
+  const sel=document.getElementById('qt-lead-sel');
+  if(!sel) return;
+  const q=(term||'').toLowerCase();
+  const filtered=!q?leads:leads.filter(l=>{
+    const c=custs.find(x=>x.id===l.customerId);
+    const name=c?custFullName(c):(l.customerName||'');
+    return l.id.toLowerCase().includes(q)||name.toLowerCase().includes(q)||(l.siteCity||'').toLowerCase().includes(q);
+  });
+  sel.innerHTML=filtered.map(l=>{
+    const c=custs.find(x=>x.id===l.customerId);
+    return `<option value="${l.id}">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;
+  }).join('');
+}
+
+function _leadSearchUI(leads,custs,selectedId=''){
+  return `
+    <div style="position:relative;margin-bottom:6px">
+      <input class="fi" type="text" id="qt-lead-search" placeholder="Search by name, city, or job ID…" oninput="filterLeadSelect(this.value)" autocomplete="off" style="padding-left:32px">
+      <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.4" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
+    </div>
+    <select class="fsel" id="qt-lead-sel" size="6" style="height:150px;overflow-y:auto">
+      ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);return`<option value="${l.id}"${l.id===selectedId?' selected':''}>${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;}).join('')}
+    </select>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${leads.length} active jobs</div>`;
+}
+
 function startQuoteBuilder(){
-  const leadId=document.getElementById('qt-lead-sel').value;
-  if(!leadId){toast('Please select a job','error');return;}
+  const sel=document.getElementById('qt-lead-sel');
+  const leadId=sel?.value||(sel?.options[0]?.value)||'';
+  if(!leadId){toast('Please select a job from the list','error');return;}
   const qtype=document.querySelector('input[name="qt-type"]:checked')?.value||'quick';
   closeDrawer();
   const lead=getLead(leadId);
@@ -3856,7 +3883,11 @@ function renderJobDetail(id) {
     <span style="font-family:var(--mono);font-size:12px;color:var(--text-muted)">${latestQ.id}</span>
     ${quoteStatusChip(latestQ.status)}
     <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto">${fmt$(latestQ.quoteTotal)}</span>
-    <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="openQuoteBuilder('${latestQ.id}')">Open</button>
+    <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openQuoteBuilder('${latestQ.id}')">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 2l3 3-8 8H3v-3L11 2z"/></svg>
+      Edit Quote
+    </button>
+    <button class="btn btn-g" style="padding:4px 10px;font-size:12px" onclick="openNewQuote_ForJob('${id}')" title="Create a new quote for this job">+ New</button>
   </div>` : `<div style="display:flex;align-items:center;gap:10px;margin-top:6px">
     <span style="font-size:12px;color:var(--text-muted)">No quote yet</span>
     <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
@@ -4161,10 +4192,7 @@ function openNewQuote_ForJob(leadId) {
     if(!leads.length){toast('No active jobs found — create a lead first','warning');return;}
     const body=`
       <div class="fsec"><div class="fsec-title">Select Job</div>
-        <select class="fsel" id="qt-lead-sel">
-          <option value="">— Select a job —</option>
-          ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);return`<option value="${l.id}"${l.id===leadId?' selected':''}>${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;}).join('')}
-        </select>
+        ${_leadSearchUI(leads,custs,leadId)}
       </div>
       <div class="fsec"><div class="fsec-title">Quote Type</div>
         <div style="display:flex;gap:12px;flex-direction:column">
