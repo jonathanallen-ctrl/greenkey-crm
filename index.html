@@ -1990,6 +1990,58 @@ function closeDrawer() {
   S.drawerMode = null;
 }
 
+// ── DUPLICATE CUSTOMER DETECTION ──
+function findDuplicateCustomers(fn, ln, email, phone) {
+  const custs = getCustomers();
+  const norm  = s => (s||'').toLowerCase().replace(/\W/g,'');
+  const normP = p => (p||'').replace(/\D/g,'');
+  const matches = [];
+  for (const c of custs) {
+    let score = 0; const reasons = [];
+    const ph = normP(phone);
+    if (ph.length >= 7 && normP(c.phone) === ph)                       { score+=3; reasons.push('same phone'); }
+    if (norm(email).length>3 && norm(c.email) === norm(email))          { score+=3; reasons.push('same email'); }
+    if (norm(fn) && norm(ln) && norm(c.firstName)===norm(fn) && norm(c.lastName)===norm(ln)) { score+=2; reasons.push('same name'); }
+    if (score >= 2) matches.push({cust:c, score, reasons});
+  }
+  return matches.sort((a,b)=>b.score-a.score);
+}
+
+function checkLeadFormDuplicate() {
+  const fn    = document.getElementById('lf-fn')?.value?.trim()||'';
+  const ln    = document.getElementById('lf-ln')?.value?.trim()||'';
+  const email = document.getElementById('lf-email')?.value?.trim()||'';
+  const phone = document.getElementById('lf-phone')?.value?.trim()||'';
+  const banner = document.getElementById('lf-dupe-banner');
+  if (!banner) return;
+  const custId = document.getElementById('lf-custid')?.value;
+  if (custId) { banner.style.display='none'; return; } // already linked
+  const dupes = findDuplicateCustomers(fn, ln, email, phone);
+  if (!dupes.length) { banner.style.display='none'; return; }
+  const {cust:c, reasons} = dupes[0];
+  const leads = getLeads().filter(l=>l.customerId===c.id&&l.stage!=='archived');
+  banner.style.display = 'block';
+  banner.innerHTML = `<div style="background:var(--amber-dim);border:1px solid var(--amber);border-radius:var(--r);padding:10px 14px;margin-top:10px">
+    <div style="font-weight:600;color:var(--amber);margin-bottom:4px">⚠ Existing customer match (${reasons.join(', ')})</div>
+    <div style="font-size:13px;color:var(--text-primary)">${custFullName(c)}${c.phone?' · '+c.phone:''}${c.email?' · '+c.email:''}</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${leads.length} active job${leads.length!==1?'s':''} on file</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-p" style="font-size:12px;padding:5px 12px" onclick="linkLeadToExistingCust('${c.id}')">Link to ${escHtml(c.firstName)}</button>
+      <button class="btn btn-g" style="font-size:12px;padding:5px 12px" onclick="document.getElementById('lf-dupe-banner').style.display='none'">Create as new</button>
+    </div>
+  </div>`;
+}
+
+function linkLeadToExistingCust(custId) {
+  const c = getCustomer(custId); if (!c) return;
+  document.getElementById('lf-custid').value = custId;
+  const nameEl = document.getElementById('lf-custname');
+  if (nameEl) nameEl.value = custFullName(c);
+  document.getElementById('cust-fields').style.display = 'none';
+  document.getElementById('lf-dupe-banner').style.display = 'none';
+  toast('Linked to existing customer: '+custFullName(c),'success');
+}
+
 // ── LEAD FORM ──
 function openNewLead() { S.drawerMode='new-lead'; S.drawerData={}; showLeadForm(null); }
 function openNewLeadForCustomer(custId) {
@@ -2058,9 +2110,10 @@ function showLeadForm(lead, prefillCustId) {
           <div class="fg"><div class="fl">Last Name</div><input class="fi" id="lf-ln" placeholder="Last" value="${l.customerLastName||''}"></div>
         </div>
         <div class="frow2">
-          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" value="${l.customerEmail||''}"></div>
-          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" value="${l.customerPhone||''}" oninput="fmtPhone(this)"></div>
+          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" value="${l.customerEmail||''}" onblur="checkLeadFormDuplicate()"></div>
+          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" value="${l.customerPhone||''}" oninput="fmtPhone(this)" onblur="checkLeadFormDuplicate()"></div>
         </div>
+        <div id="lf-dupe-banner" style="display:none"></div>
       </div>
     </div>
     <div class="fsec">
@@ -3698,13 +3751,19 @@ function saveJobSnapshot(leadId) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
+  const panelBrand = document.getElementById('snap-panel-brand')?.value||'';
+  const breakerSize = document.getElementById('snap-breaker-size')?.value||'';
   arr[idx].electricalSnapshot = {
-    serviceSize: document.getElementById('snap-panels')?.value||'200A',
-    subpanel:  document.getElementById('snap-subpanel')?.checked||false,
-    major240VLoads: document.getElementById('snap-loads')?.value||'',  // stores Issues Identified selection
-    solar:     document.getElementById('snap-solar')?.checked||false,
-    battery:   document.getElementById('snap-battery')?.checked||false,
-    generator: document.getElementById('snap-generator')?.checked||false
+    serviceSize:      document.getElementById('snap-panels')?.value||'200A',
+    panelBrand,
+    panelBrandOther:  panelBrand==='Other' ? (document.getElementById('snap-panel-brand-other')?.value||'') : '',
+    breakerSize,
+    breakerSizeOther: breakerSize==='Other' ? (document.getElementById('snap-breaker-size-other')?.value||'') : '',
+    subpanel:         document.getElementById('snap-subpanel')?.checked||false,
+    major240VLoads:   document.getElementById('snap-loads')?.value||'',
+    solar:            document.getElementById('snap-solar')?.checked||false,
+    battery:          document.getElementById('snap-battery')?.checked||false,
+    generator:        document.getElementById('snap-generator')?.checked||false
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
@@ -3967,6 +4026,28 @@ function renderJobDetail(id) {
           <option value="Panel - old and requires replacement without service upgrade"${snap.major240VLoads==='Panel - old and requires replacement without service upgrade'?' selected':''}>Panel - old and requires replacement without service upgrade</option>
           <option value="Panel - old and requires replacement with service upgrade"${snap.major240VLoads==='Panel - old and requires replacement with service upgrade'?' selected':''}>Panel - old and requires replacement with service upgrade</option>
         </select></div>
+      </div>
+      <div class="jd-fg" style="margin-top:10px">
+        <div class="jd-f">
+          <div class="jd-fl">Panel / Breaker Make & Model</div>
+          <select class="jd-fi" id="snap-panel-brand" onchange="document.getElementById('snap-panel-brand-other-wrap').style.display=this.value==='Other'?'block':'none'">
+            ${['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Other'].map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${!snap.panelBrand?'<option value="" selected disabled>— Select —</option>':''}
+          </select>
+          <div id="snap-panel-brand-other-wrap" style="margin-top:6px;display:${snap.panelBrand==='Other'?'block':'none'}">
+            <input class="jd-fi" id="snap-panel-brand-other" placeholder="Enter make / model" value="${snap.panelBrandOther||''}">
+          </div>
+        </div>
+        <div class="jd-f">
+          <div class="jd-fl">Breaker Size</div>
+          <select class="jd-fi" id="snap-breaker-size" onchange="document.getElementById('snap-breaker-size-other-wrap').style.display=this.value==='Other'?'block':'none'">
+            ${['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'].map(o=>`<option value="${o}"${(snap.breakerSize||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${!snap.breakerSize?'<option value="" selected disabled>— Select —</option>':''}
+          </select>
+          <div id="snap-breaker-size-other-wrap" style="margin-top:6px;display:${snap.breakerSize==='Other'?'block':'none'}">
+            <input class="jd-fi" id="snap-breaker-size-other" placeholder="Enter breaker size" value="${snap.breakerSizeOther||''}">
+          </div>
+        </div>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
         ${[['snap-subpanel','Sub-panel',snap.subpanel],['snap-solar','Solar',snap.solar],['snap-battery','Battery Storage',snap.battery],['snap-generator','Generator',snap.generator]].map(([eid,lbl,val])=>`
