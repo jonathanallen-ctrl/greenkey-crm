@@ -2422,7 +2422,7 @@ function toast(msg, type='success') {
 const QK='gk_quotes', MK='gk_materials';
 
 function getQQPricing(){
-  return {garage:650,interior:900,addl10Surface:150,handDig10:200,machineTrenchBase:650,machineTrench10:150,tandemBreaker:40,post:150,standardPermit:250,specialPermit:500,materialsBuffer:0.10,qmeritFlat:199,qmeritPct:0.12,nema1450Inside:50,nema1450Outside:100};
+  return {garage:450,interior:700,addl10Surface:150,handDig10:200,machineTrenchBase:650,machineTrench10:150,tandemBreaker:40,post:150,standardPermit:250,specialPermit:500,materialsBuffer:0.10,qmeritFlat:199,qmeritPct:0.12,nema1450Inside:50,nema1450Outside:100,travelPerBlock:80,travelFreeMin:30};
 }
 
 function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
@@ -2666,8 +2666,8 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Panel Location</div>
       <div class="fg"><div class="fl">Panel Location</div>
         <select class="fsel" id="qq-panel" onchange="onQQChange('${q.id}')">
-          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 10 ft) — $650</option>
-          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 10 ft) — $900</option>
+          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 10 ft) — $450</option>
+          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 10 ft) — $700</option>
         </select>
       </div>
     </div>
@@ -2707,6 +2707,13 @@ function renderQuickQuoteForm(q){
       <div class="qq-row">
         <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Unusual access, tight spaces, attic runs, etc.</div></div>
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Travel Time (minutes from office)</div>
+          <div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       ${isQmerit?`<div class="qq-row">
         <div><div class="qq-lbl">Travel Fee</div><div class="qq-sub">Optional — Qmerit jobs only</div></div>
@@ -2770,8 +2777,13 @@ function onQQChange(qid){
   const nemaLocation=document.getElementById('qq-nema-loc')?.value||(q.qq?.nemaLocation||'inside');
   const tandemBreakers=parseInt(document.getElementById('qq-tandem')?.value)||0;
   const difficultyFee=parseFloat(document.getElementById('qq-difficulty')?.value)||0;
+  const travelMinutes=parseInt(document.getElementById('qq-travel-min')?.value)||0;
+  const travelAdder=Math.ceil(Math.max(0,travelMinutes-30)/30)*80;
   const travelFee=parseFloat(document.getElementById('qq-travel')?.value)||0;
   const travelFeeType=document.getElementById('qq-travtype')?.value||'baked';
+  // Update travel calc display
+  const tCalcEl=document.getElementById('qq-travel-calc');
+  if(tCalcEl) tCalcEl.textContent='$'+travelAdder;
   const permitFee=parseFloat(document.getElementById('qq-permit')?.value)||(q.specialJurisdiction?500:250);
   const runSegs=q.qq?.runSegs||[];
   let lm=panelLoc==='garage'?p.garage:p.interior;
@@ -2785,12 +2797,13 @@ function onQQChange(qid){
   if(!isNema&&mountType==='post') lm+=p.post;
   if(tandemBreakers>0) lm+=tandemBreakers*p.tandemBreaker;
   lm+=difficultyFee;
+  lm+=travelAdder;
   (q.qq?.extras||[]).forEach(ex=>{lm+=parseFloat(ex.price)||0;});
   if(travelFeeType==='baked'&&travelFee>0) lm+=travelFee;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
   const quoteTotal=lm+qmeritFee+permitFee;
-  const updated={...q,qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelFee,travelFeeType,extras:q.qq?.extras||[]},permitFee,laborAndMaterials:lm,qmeritFee,quoteTotal};
+  const updated={...q,qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[]},permitFee,laborAndMaterials:lm,qmeritFee,quoteTotal};
   upsertQuote(updated);
   refreshQBSidebar(qid);
 }
