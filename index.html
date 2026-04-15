@@ -2104,14 +2104,14 @@ function showLeadForm(lead, prefillCustId) {
           ${prefillCust?'data-custid="'+prefillCust.id+'"':''}>
         <div class="csd" id="csd"></div>
       </div>
-      <div id="cust-fields" style="margin-top:12px;display:${prefillCust?'none':'block'}">
-        <div class="frow2">
-          <div class="fg"><div class="fl">First Name</div><input class="fi" id="lf-fn" placeholder="First" value="${l.customerFirstName||''}"></div>
-          <div class="fg"><div class="fl">Last Name</div><input class="fi" id="lf-ln" placeholder="Last" value="${l.customerLastName||''}"></div>
+      <div id="cust-fields" style="margin-top:12px;display:${prefillCust&&isNew?'none':'block'}">
+        <div class="frow2" style="display:${prefillCust?'none':'flex'}">
+          <div class="fg"><div class="fl">First Name</div><input class="fi" id="lf-fn" placeholder="First" value="${prefillCust?.firstName||l.customerFirstName||''}"></div>
+          <div class="fg"><div class="fl">Last Name</div><input class="fi" id="lf-ln" placeholder="Last" value="${prefillCust?.lastName||l.customerLastName||''}"></div>
         </div>
         <div class="frow2">
-          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" value="${l.customerEmail||''}" onblur="checkLeadFormDuplicate()"></div>
-          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" value="${l.customerPhone||''}" oninput="fmtPhone(this)" onblur="checkLeadFormDuplicate()"></div>
+          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" value="${prefillCust?.email||l.customerEmail||''}" onblur="checkLeadFormDuplicate()"></div>
+          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" value="${prefillCust?.phone||l.customerPhone||''}" oninput="fmtPhone(this)" onblur="checkLeadFormDuplicate()"></div>
         </div>
         <div id="lf-dupe-banner" style="display:none"></div>
       </div>
@@ -2268,9 +2268,10 @@ function saveLead() {
     };
   }
 
-  // Upsert customer if no existing custId
+  // Upsert customer
   let finalCustId = custId;
   if (!finalCustId && (fn||custName)) {
+    // New customer
     const firstName = fn || custName.split(' ')[0];
     const lastName  = ln || (custName.includes(' ') ? custName.split(' ').slice(1).join(' ') : '');
     finalCustId = upsertCustomer({
@@ -2279,6 +2280,16 @@ function saveLead() {
       street, city, state, zip,
       propertyType: 'residential'
     });
+  } else if (finalCustId) {
+    // Existing customer — update phone/email if they were changed
+    const existingCust = getCustomer(finalCustId);
+    if (existingCust) {
+      upsertCustomer({
+        ...existingCust,
+        email: email || existingCust.email,
+        phone: phone || existingCust.phone
+      });
+    }
   }
 
   // Preserve fields that are edited inline on the detail page (not in this form)
@@ -2836,7 +2847,11 @@ function renderQuickQuoteForm(q){
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
     </div>
     <div class="qq-section">
-      <div class="qq-title">Scope of Work</div>
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+        Scope of Work
+        ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
+      </div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
       <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
@@ -2950,6 +2965,14 @@ function addQQExtra(qid,eid,name,price){const q=getQuote(qid);if(!q)return;const
 function removeQQExtra(qid,idx){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras.splice(idx,1);upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function updateQQExtra(qid,idx,v){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras[idx]={...extras[idx],price:parseFloat(v)||0};upsertQuote({...q,qq:{...(q.qq||{}),extras}});onQQChange(qid);}
 function onQQScopeChange(qid){const v=document.getElementById('qq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
+function pullLeadScope(qid){
+  const q=getQuote(qid); if(!q) return;
+  const lead=getLead(q.leadId); if(!lead?.scopeOfWork) return;
+  const ta=document.getElementById('qq-scope')||document.getElementById('dq-scope'); if(!ta) return;
+  ta.value=lead.scopeOfWork;
+  upsertQuote({...q,scope:lead.scopeOfWork});
+  toast('Scope pulled from job Scope of Work','success');
+}
 function onQQIncChange(qid){const v=document.getElementById('qq-inc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,inclusions:v});}
 function onQQExcChange(qid){const v=document.getElementById('qq-exc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,exclusions:v});}
 
@@ -2960,7 +2983,7 @@ function autoScope(q){
   const segs=qq.runSegs||[];
   const runParts=segs.map(seg=>{
     const ft=seg.ft||0;
-    if(seg.type==='surface') return `${ft} ft surface/crawl space/attic run`;
+    if(seg.type==='surface') return `${ft} ft surface run`;
     if(seg.type==='hand-trench') return `${ft} ft of hand-dug trenching`;
     if(seg.type==='machine-trench') return `approximately ${Math.max(ft,50)} ft of machine trenching`;
     return '';
@@ -2971,7 +2994,7 @@ function autoScope(q){
     return `Supply and install a dedicated 50-amp, 240-volt circuit protected by a 50-amp GFCI breaker from the main electrical panel located in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted)${run}. All work performed to NEC standards and local code requirements.`;
   }
   const mount=qq.mountType==='post'?' mounted on a 4×4 treated post with concrete footing':'';
-  return `Supply and install a dedicated 60-amp, 240-volt circuit from the main electrical panel located in the ${loc} to a Level 2 EV charging outlet${mount}${run}. All work performed to NEC standards and local code requirements.`;
+  return `Supply and install a dedicated 60-amp, 240-volt circuit from the main electrical panel located in the ${loc} to a Level 2 EV charger installation${mount}${run}. All work performed to NEC standards and local code requirements.`;
 }
 function autoInclusions(q){
   const lines=['• All labor and materials','• Permit application and inspection coordination','• Cleanup and job site restoration'];
@@ -3063,7 +3086,11 @@ function renderDetailedQuoteForm(q){
       </div>
     </div>`:''}
     <div class="qq-section">
-      <div class="qq-title">Scope of Work</div>
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+        Scope of Work
+        ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
+      </div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
       <textarea class="fta" id="dq-scope" rows="4" style="min-height:100px" oninput="onDQScopeChange('${q.id}')">${q.scope||''}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="dq-inc" rows="3" style="min-height:72px" oninput="onDQIncChange('${q.id}')">${q.inclusions||''}</textarea>
@@ -3227,89 +3254,34 @@ function emailQuote(qid){
   const pdfBase64=pdfResult.dataUrl.split(',')[1];
   const pdfFilename=pdfResult.filename;
 
-  // HTML signature with logo table
-  const sigLogoSrc=typeof GK_LOGO_B64!=='undefined'?GK_LOGO_B64:'';
-  const signature=`
-<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;font-size:13px;color:#222;margin-top:24px;">
-  <tr>
-    <td style="padding-right:18px;border-right:3px solid #2e7d32;vertical-align:middle;">
-      ${sigLogoSrc?`<img src="${sigLogoSrc}" alt="GreenKey" style="width:130px;display:block;" />`:'<strong style="font-size:18px;color:#2e7d32;">GreenKey</strong>'}
-    </td>
-    <td style="padding-left:18px;vertical-align:middle;line-height:1.6;">
-      <strong style="font-size:14px;">Jonathan Allen</strong><br/>
-      Cofounder &amp; President | <span style="color:#2e7d32;font-weight:600;">GreenKey</span><br/>
-      Class A Electrical Contractor | Licensed &amp; Insured<br/>
-      <span style="color:#555;">📞 (804) 770-2210 &nbsp;|&nbsp; 📱 (804) 310-5368</span><br/>
-      <a href="mailto:jonathan.allen@greenkey-usa.com" style="color:#2e7d32;">jonathan.allen@greenkey-usa.com</a> &nbsp;|&nbsp;
-      <a href="https://greenkey-usa.com" style="color:#2e7d32;">greenkey-usa.com</a>
-    </td>
-  </tr>
-</table>`;
+  // Download the PDF so it's ready to attach
+  previewQuotePDF(qid);
 
-  // HTML email body
-  const subject=`Your GreenKey Quote — ${q.id}`;
-  const htmlBody=`<!DOCTYPE html>
-<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;max-width:640px;margin:0 auto;">
-<p>Hi ${custFirst},</p>
-<p>Thank you for choosing GreenKey! Please find your quote attached to this email.</p>
-<table cellpadding="6" cellspacing="0" border="0" style="border:1px solid #e0e0e0;border-radius:6px;margin:16px 0;width:100%;">
-  <tr style="background:#f5f5f5;">
-    <td style="font-weight:600;width:140px;">Quote Number</td>
-    <td>${q.id}</td>
-  </tr>
-  <tr>
-    <td style="font-weight:600;">Property</td>
-    <td>${addr}</td>
-  </tr>
-  <tr style="background:#f5f5f5;">
-    <td style="font-weight:600;">Total</td>
-    <td style="color:#2e7d32;font-weight:700;">${total}</td>
-  </tr>
-</table>
-<p>This quote is valid for 30 days. If you have any questions or would like to move forward, please don't hesitate to reach out — we'd love to work with you!</p>
-<p>Best regards,</p>
-${signature}
-</body></html>`;
+  // Build plain-text email body for mailto link
+  const subject = `Your GreenKey Quote — ${q.id}`;
+  const body = [
+    `Hi ${custFirst},`,
+    ``,
+    `Thank you for choosing GreenKey! Please find your quote attached to this email.`,
+    ``,
+    `Quote Number:  ${q.id}`,
+    `Property:      ${addr}`,
+    `Total:         ${total}`,
+    ``,
+    `This quote is valid for 30 days. If you have any questions or would like to move forward, please don't hesitate to reach out — we'd love to work with you!`,
+    ``,
+    `Best regards,`,
+    `Jonathan Allen`,
+    `Cofounder & President | GreenKey`,
+    `Class A Electrical Contractor | Licensed & Insured`,
+    `(804) 770-2210 | (804) 310-5368`,
+    `jonathan.allen@greenkey-usa.com | greenkey-usa.com`,
+  ].join('\n');
 
-  // Build MIME multipart EML
-  // Base64-encode the HTML body so non-ASCII chars (emojis etc.) survive MIME intact
-  const htmlBodyB64=btoa(unescape(encodeURIComponent(htmlBody))).match(/.{1,76}/g).join('\r\n');
-
-  const boundary='----=_GreenKeyEML_'+Date.now();
-  const emlParts=[
-    `MIME-Version: 1.0`,
-    `From: Jonathan Allen <jonathan.allen@greenkey-usa.com>`,
-    `To: ${toEmail}`,
-    `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
-    `X-Unsent: 1`,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/html; charset="UTF-8"`,
-    `Content-Transfer-Encoding: base64`,
-    ``,
-    htmlBodyB64,
-    ``,
-    `--${boundary}`,
-    `Content-Type: application/pdf; name="${pdfFilename}"`,
-    `Content-Transfer-Encoding: base64`,
-    `Content-Disposition: attachment; filename="${pdfFilename}"`,
-    ``,
-    pdfBase64.match(/.{1,76}/g).join('\r\n'),
-    ``,
-    `--${boundary}--`,
-  ];
-  const eml=emlParts.join('\r\n');
-
-  const blob=new Blob([eml],{type:'message/rfc822'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download=`Quote_${q.id}.eml`;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},2000);
-  toast('Email file downloaded — right-click it and choose "Open with → Outlook" to send!','success');
+  // Open Outlook (or default mail client) with fields pre-filled
+  const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = mailto;
+  toast('Outlook opened — attach the PDF that just downloaded and hit Send!', 'success');
 }
 function switchQuoteType(qid,t){const q=getQuote(qid);if(!q)return;upsertQuote({...q,type:t});renderQuoteBuilder(qid);}
 
@@ -3676,7 +3648,7 @@ function updateJobStage(leadId, newStage) {
 
 // ── SECTION SAVE FUNCTIONS ──
 // ── SCOPE OF WORK ──
-function saveScopeOfWork(leadId) {
+function saveScopeOfWork(leadId, silent=false) {
   const ta = document.getElementById('scope-ta-' + leadId);
   if (!ta) return;
   const arr = getLeads();
@@ -3685,8 +3657,10 @@ function saveScopeOfWork(leadId) {
   arr[idx].scopeOfWork = ta.value;
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Scope of work saved', 'success');
+  if (silent) _showAutoSaved('scope-save-btn-'+leadId);
+  else toast('Scope of work saved', 'success');
 }
+function autoSaveScope(lid){ _autoSave('scope_'+lid, ()=>saveScopeOfWork(lid, true)); }
 
 // ── JOB NOTES ──
 function addJobNote(leadId) {
@@ -3992,10 +3966,13 @@ function renderJobDetail(id) {
   const scopeSec = `<div class="jd-sec">
     <div class="jd-sh">
       <div class="jd-st">Scope of Work</div>
-      <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveScopeOfWork('${id}')">Save</button>
+      <button id="scope-save-btn-${id}" class="btn btn-p" style="padding:5px 14px;font-size:12px" onclick="saveScopeOfWork('${id}')">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V4l-2-2z"/><path d="M5 14v-5h6v5M9 2v3"/></svg>
+        Save
+      </button>
     </div>
     <div class="jd-sb">
-      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…">${(lead.scopeOfWork||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…" oninput="autoSaveScope('${id}')">${(lead.scopeOfWork||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
     </div>
   </div>`;
 
