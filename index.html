@@ -4034,7 +4034,7 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Electrical Snapshot</div>
       <button id="snap-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveJobSnapshot('${id}')">Save</button>
     </div>
-    <div class="jd-sb" onchange="autoSaveSnapshot('${id}')" oninput="autoSaveSnapshot('${id}')">`
+    <div class="jd-sb" onchange="autoSaveSnapshot('${id}')" oninput="autoSaveSnapshot('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Service Size</div><select class="jd-fi" id="snap-panels">
           ${['400A','300A','200A','150A','100A','Other'].map(o=>`<option value="${o}"${(snap.serviceSize||snap.numPanels||'200A')==o?' selected':''}>${o}</option>`).join('')}
