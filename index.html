@@ -633,6 +633,37 @@
 </div>
 <div id="drovl" onclick="closeDrawer()"></div>
 
+<!-- SMS MODAL -->
+<div class="moverlay" id="sms-modal">
+  <div class="modal" style="max-width:480px">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--green)" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+      Send Intro Text
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">To</div>
+      <div id="sms-to-display" style="font-size:13.5px;color:var(--text-primary)"></div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Message</div>
+        <span id="sms-char-count" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+      <textarea id="sms-body" style="width:100%;min-height:160px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.6;transition:border-color 0.15s" oninput="document.getElementById('sms-char-count').textContent=this.value.length+' chars'"></textarea>
+    </div>
+    <div id="sms-prev-wrap" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
+      <span style="color:var(--green);font-weight:600">Previously sent</span> — <span id="sms-prev-date"></span>
+    </div>
+    <div class="mact">
+      <button class="btn btn-g" onclick="document.getElementById('sms-modal').classList.remove('show')">Cancel</button>
+      <button class="btn btn-p" id="sms-send-btn" onclick="sendIntroSMS()">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+        Send Text
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- CAMERA MODAL -->
 <div class="moverlay" id="camera-modal">
   <div class="modal" style="max-width:500px">
@@ -3913,6 +3944,10 @@ function renderJobDetail(id) {
     </div>
     <div style="display:flex;gap:8px;align-items:flex-start;flex-shrink:0;flex-wrap:wrap">
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="showLeadForm(getLead('${id}'))">✎ Edit Info</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="openSMSModal('${id}')">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+        Send Text
+      </button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
   </div>`;
@@ -7388,6 +7423,117 @@ document.addEventListener('visibilitychange', () => {
     }).catch(e => console.warn('[GK] Visibility sync failed:', e));
   }
 });
+
+// ════════════════════════════════════════════════════════════
+// SMS / TWILIO INTEGRATION
+// ════════════════════════════════════════════════════════════
+
+// Set this to your Azure Function URL once deployed
+// Format: https://<your-function-app>.azurewebsites.net/api/SendSMS?code=<function-key>
+const SMS_FUNCTION_URL = '';
+
+// Platform sources — use the partner template
+const SMS_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink'];
+
+let _smsLeadId = null;
+
+function _buildSMSMessage(lead, cust) {
+  const firstName = cust?.firstName || lead?.customerName?.split(' ')[0] || 'there';
+  const source    = lead?.source || '';
+  const isPlatform = SMS_PLATFORM_SOURCES.includes(source);
+
+  if (isPlatform) {
+    return `Hey ${firstName}! 👋 This is Jonathan over at GreenKey — we're the local electrical team that ${source} connected you with to get your project taken care of. Just wanted to reach out personally and let you know we received your info and we're already working on your quote. We'll be in touch if we need anything else from you, but in the meantime, don't hesitate to reach out with any questions. We're happy to help however we can. Talk soon! 😊`;
+  }
+  return `Hey ${firstName}! 👋 This is Jonathan over at GreenKey — just wanted to reach out personally and let you know we received your info and we're already working on your quote. We'll be in touch if we need anything else from you, but in the meantime, don't hesitate to reach out with any questions. We're happy to help however we can. Talk soon! 😊`;
+}
+
+function openSMSModal(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const cust = getCustomer(lead.customerId);
+  const phone = cust?.phone || lead?.customerPhone || '';
+
+  if (!phone) {
+    toast('No phone number on file — add one in Edit Info first', 'warning');
+    return;
+  }
+
+  if (!SMS_FUNCTION_URL) {
+    toast('SMS not yet configured — Azure Function URL needed', 'warning');
+    return;
+  }
+
+  _smsLeadId = leadId;
+  const msg = _buildSMSMessage(lead, cust);
+  const name = cust ? custFullName(cust) : (lead.customerName || 'Customer');
+
+  document.getElementById('sms-to-display').textContent = `${name} · ${phone}`;
+  const ta = document.getElementById('sms-body');
+  ta.value = msg;
+  document.getElementById('sms-char-count').textContent = msg.length + ' chars';
+
+  // Show if already texted
+  const prevWrap = document.getElementById('sms-prev-wrap');
+  if (lead.introSmsSentAt) {
+    prevWrap.style.display = 'block';
+    document.getElementById('sms-prev-date').textContent = new Date(lead.introSmsSentAt).toLocaleString();
+  } else {
+    prevWrap.style.display = 'none';
+  }
+
+  document.getElementById('sms-modal').classList.add('show');
+}
+
+async function sendIntroSMS() {
+  const lead = getLead(_smsLeadId);
+  if (!lead) return;
+  const cust = getCustomer(lead.customerId);
+  const phone = cust?.phone || lead?.customerPhone || '';
+  const message = document.getElementById('sms-body').value.trim();
+
+  if (!message) { toast('Message cannot be empty', 'error'); return; }
+
+  const btn = document.getElementById('sms-send-btn');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+
+  try {
+    const resp = await fetch(SMS_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: phone, message })
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) throw new Error(data?.message || data?.error || 'Send failed');
+
+    // Log to lead notes
+    const arr = getLeads();
+    const idx = arr.findIndex(l => l.id === _smsLeadId);
+    if (idx >= 0) {
+      arr[idx].introSmsSentAt = new Date().toISOString();
+      const note = {
+        id: 'n-' + Date.now(),
+        text: `📱 Intro text sent: "${message.slice(0, 80)}${message.length > 80 ? '…' : ''}"`,
+        author: S.user?.name || 'System',
+        createdAt: new Date().toISOString()
+      };
+      arr[idx].notes = [...(arr[idx].notes || []), note];
+      saveLeads(arr);
+    }
+
+    document.getElementById('sms-modal').classList.remove('show');
+    toast('Text sent successfully! 📱', 'success');
+
+  } catch(e) {
+    toast('Failed to send: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg> Send Text';
+  }
+}
 
 // ── ONE-TIME LEAD CLEANUP (archive leads >50 days old) ──
 function archiveOldLeads() {
