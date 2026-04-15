@@ -2783,6 +2783,7 @@ function renderQuickQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
   const qq=q.qq||{};
   const isQmerit=q.source==='Qmerit';
+  const lead=getLead(q.leadId);
   wrap.innerHTML=`
     <div class="qq-section">
       <div class="qq-title">Panel Location</div>
@@ -3046,6 +3047,7 @@ function autoExclusions(q){
 function renderDetailedQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
   const isQmerit=q.source==='Qmerit';
+  const lead=getLead(q.leadId);
   const mats=getMaterials();
   const lines=q.lines||[];
   const rentals=q.rentals||[];
