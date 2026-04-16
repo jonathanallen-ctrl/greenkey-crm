@@ -664,6 +664,42 @@
   </div>
 </div>
 
+<!-- EMAIL PREVIEW MODAL -->
+<div class="moverlay" id="email-modal">
+  <div class="modal" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      Preview & Edit Email
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Sending from <strong id="em-from"></strong> — edit anything below, then click Send.</div>
+    <div style="overflow-y:auto;flex:1;padding-right:4px">
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">To</div>
+        <input id="em-to" type="email" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Subject</div>
+        <input id="em-subject" type="text" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Message</div>
+        <textarea id="em-body" style="width:100%;min-height:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55;white-space:pre"></textarea>
+      </div>
+      <div style="margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        <span>Attachment: <strong id="em-attach-name"></strong></span>
+      </div>
+    </div>
+    <div class="mact" style="flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:8px">
+      <button class="btn btn-g" onclick="document.getElementById('email-modal').classList.remove('show')">Cancel</button>
+      <button class="btn btn-p" id="em-send-btn" onclick="sendQuoteEmail()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Send Email
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- CAMERA MODAL -->
 <div class="moverlay" id="camera-modal">
   <div class="modal" style="max-width:500px">
@@ -2756,7 +2792,7 @@ function renderQuoteBuilder(qid){
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V5l-4-4z"/><path d="M9 1v4h4"/></svg>
             Download Quote PDF
           </button>
-          <button class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
+          <button id="qb-email-btn" class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
             Email Quote to Customer
           </button>
@@ -3267,7 +3303,10 @@ function saveQuoteChanges(qid){
 }
 function markQuoteStatus(qid,s){const q=getQuote(qid);if(!q)return;upsertQuote({...q,status:s});toast('Quote marked as '+s,'success');renderQuoteBuilder(qid);}
 
-function emailQuote(qid){
+// Holds the pending email payload while the preview modal is open
+let _pendingEmail = null;
+
+async function emailQuote(qid){
   const q=getQuote(qid);if(!q)return;
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
@@ -3287,34 +3326,170 @@ function emailQuote(qid){
   const pdfBase64=pdfResult.dataUrl.split(',')[1];
   const pdfFilename=pdfResult.filename;
 
-  // Download the PDF so it's ready to attach
-  previewQuotePDF(qid);
+  // Determine charger recommendations based on plug type
+  const plugType = lead?.chargerInfo?.plugType || '';
+  const isNACS    = plugType === 'NACS';
+  const isJ1772   = plugType === 'J1772';
+  const isBoth    = plugType === 'Both' || !plugType;
 
-  // Build plain-text email body for mailto link
+  let chargerRecs = '';
+  if (isNACS || isBoth) {
+    chargerRecs += `FOR TESLA VEHICLES (NACS connector):
+  • Tesla Wall Connector (Hardwired) — $395
+    https://shop.tesla.com/product/wall-connector\n\n`;
+  }
+  if (isJ1772 || isBoth) {
+    chargerRecs += `FOR ALL OTHER EVs (J1772 connector):
+  • ChargePoint Home Flex (Hardwired, 50-amp)
+    https://www.chargepoint.com/drivers/home/chargepoint-home-flex/
+  • Emporia Classic (Hardwired, 48-amp)
+    https://www.emporiaenergy.com/\n\n`;
+  }
+  chargerRecs += `FOR HOUSEHOLDS WITH MULTIPLE EVs (or want future-proofing):
+  • Tesla Universal Wall Connector — works with ALL EVs (NACS + J1772)
+    https://shop.tesla.com/product/universal-wall-connector\n\n`;
+  chargerRecs += `⚠ IMPORTANT: When ordering, please select the HARDWIRED version of whichever charger you choose — that is what our installation and permit are designed for.`;
+
   const subject = `Your GreenKey Quote — ${q.id}`;
-  const body = [
-    `Hi ${custFirst},`,
-    ``,
-    `Thank you for choosing GreenKey! Please find your quote attached to this email.`,
-    ``,
-    `Quote Number:  ${q.id}`,
-    `Property:      ${addr}`,
-    `Total:         ${total}`,
-    ``,
-    `This quote is valid for 30 days. If you have any questions or would like to move forward, please don't hesitate to reach out — we'd love to work with you!`,
-    ``,
-    `Best regards,`,
-    `Jonathan Allen`,
-    `Cofounder & President | GreenKey`,
-    `Class A Electrical Contractor | Licensed & Insured`,
-    `(804) 770-2210 | (804) 310-5368`,
-    `jonathan.allen@greenkey-usa.com | greenkey-usa.com`,
-  ].join('\n');
+  const body = `Hi ${custFirst},
 
-  // Open Outlook (or default mail client) with fields pre-filled
-  const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  window.location.href = mailto;
-  toast('Outlook opened — attach the PDF that just downloaded and hit Send!', 'success');
+Thank you for choosing GreenKey! Please find your quote attached to this email.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ABOUT YOUR EV CHARGER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your quote covers the electrical installation only — the EV charger itself is purchased separately by you. The good news is there are some great options at every price point! Here are our top recommendations:
+
+${chargerRecs}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's exactly how the process works once you're ready to go:
+
+  1. APPROVE YOUR QUOTE
+     Reply to this email or give us a call to confirm you'd like to move forward.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once approved, we submit your electrical permit to the local jurisdiction.
+     Permit approval typically takes 1–2 weeks.
+
+  3. YOU ORDER YOUR CHARGER
+     While we're waiting on the permit, go ahead and order your charger using
+     one of the recommendations above. Remember — hardwired version!
+
+  4. WE GET YOU SCHEDULED
+     Once we have your permit in hand AND you've received your charger,
+     we'll get you on the calendar for installation day.
+
+Total timeline from start to finish: typically 2–4 weeks.
+We'll keep you updated every step of the way!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
+
+Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+
+  // Stash the payload and open the preview/edit modal
+  _pendingEmail = {
+    qid,
+    toEmail,
+    subject,
+    body,
+    pdfFilename,
+    pdfBase64,
+    hasGraph: !!_gToken
+  };
+
+  // Populate modal fields
+  document.getElementById('em-to').value       = toEmail;
+  document.getElementById('em-subject').value  = subject;
+  document.getElementById('em-body').value     = body;
+  document.getElementById('em-attach-name').textContent = pdfFilename;
+  const fromEl = document.getElementById('em-from');
+  let fromEmail = '';
+  try {
+    if (_gToken && typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts[0]) fromEmail = accts[0].username || '';
+    }
+  } catch(_){}
+  if (_gToken) {
+    fromEl.textContent = fromEmail || 'your Microsoft account';
+  } else {
+    fromEl.textContent = 'Outlook (not signed in — will open draft)';
+  }
+  const sendBtn = document.getElementById('em-send-btn');
+  if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
+
+  document.getElementById('email-modal').classList.add('show');
+}
+
+async function sendQuoteEmail(){
+  if (!_pendingEmail) return;
+  const toEmail  = document.getElementById('em-to').value.trim();
+  const subject  = document.getElementById('em-subject').value;
+  const body     = document.getElementById('em-body').value;
+  const { pdfFilename, pdfBase64, hasGraph } = _pendingEmail;
+
+  if (!toEmail) { toast('Please enter a recipient email', 'warning'); return; }
+
+  const sendBtn = document.getElementById('em-send-btn');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+
+  if (hasGraph && _gToken) {
+    try {
+      await _graphFetch('/me/sendMail', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: {
+            subject,
+            body: { contentType: 'Text', content: body },
+            toRecipients: [{ emailAddress: { address: toEmail } }],
+            attachments: [{
+              '@odata.type': '#microsoft.graph.fileAttachment',
+              name: pdfFilename,
+              contentType: 'application/pdf',
+              contentBytes: pdfBase64
+            }]
+          },
+          saveToSentItems: true
+        })
+      });
+      toast('✅ Email sent with PDF attached!', 'success');
+      document.getElementById('email-modal').classList.remove('show');
+      _pendingEmail = null;
+    } catch(e) {
+      toast('Email failed: ' + e.message + ' — falling back to Outlook', 'error');
+      if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
+      const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+      if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
+    }
+  } else {
+    // Not signed in via Microsoft — fall back to mailto, download PDF
+    if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
+    const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+    toast('📎 Attach the PDF from your Downloads folder, then hit Send!', 'success');
+    document.getElementById('email-modal').classList.remove('show');
+    _pendingEmail = null;
+  }
 }
 function switchQuoteType(qid,t){const q=getQuote(qid);if(!q)return;upsertQuote({...q,type:t});renderQuoteBuilder(qid);}
 
@@ -7159,7 +7334,7 @@ const AZURE_REDIRECT    = 'https://jonathanallen-ctrl.github.io/greenkey-crm/';
 const SP_HOSTNAME       = 'greenkeyusa.sharepoint.com';
 const SP_LIST_NAME      = 'GreenKeyCRM_Data';
 const SP_PHOTO_LIB_NAME = 'GreenKeyCRM_Photos';
-const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read'];
+const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read','Mail.Send'];
 
 let _msal    = null;
 let _gToken  = null;
