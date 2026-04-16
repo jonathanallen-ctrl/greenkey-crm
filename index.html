@@ -3473,7 +3473,9 @@ async function sendQuoteEmail(){
       });
       toast('✅ Email sent with PDF attached!', 'success');
       document.getElementById('email-modal').classList.remove('show');
+      const stayQid = _pendingEmail && _pendingEmail.qid;
       _pendingEmail = null;
+      if (stayQid) openQuoteBuilder(stayQid);
     } catch(e) {
       toast('Email failed: ' + e.message + ' — falling back to Outlook', 'error');
       if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
