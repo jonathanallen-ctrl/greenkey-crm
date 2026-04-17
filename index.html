@@ -608,11 +608,15 @@
   <div class="modal" style="max-width:480px">
     <div class="mtitle" style="display:flex;align-items:center;gap:8px">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--green)" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
-      Send Intro Text
+      Send Text Message
     </div>
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">To</div>
       <div id="sms-to-display" style="font-size:13.5px;color:var(--text-primary)"></div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Template</div>
+      <select id="sms-tpl-sel" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none"></select>
     </div>
     <div style="margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
@@ -4352,6 +4356,22 @@ function renderJobDetail(id) {
     </div>
   </div>`;
 
+  // ── SMS Thread (running text with this customer) ──
+  const smsSec = `<div class="jd-sec">
+    <div class="jd-sh">
+      <div class="jd-st">Text Messages</div>
+      <button class="btn btn-g" style="padding:4px 10px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="openSMSModal('${id}')">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-1px;margin-right:2px"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+        New Text
+      </button>
+    </div>
+    <div class="jd-sb">
+      <div id="sms-thread-${id}" style="max-height:340px;overflow-y:auto;padding:4px 2px">
+        <div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>
+      </div>
+    </div>
+  </div>`;
+
   // ── Job Notes ──
   const jobNotes = (lead.jobNotes||[]).slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
   const notesListHtml = jobNotes.length ? jobNotes.map(n=>{
@@ -4631,11 +4651,14 @@ function renderJobDetail(id) {
 
   // ── Assemble ──
   dv.innerHTML = hdr + `<div class="jd-wrap">
-    <div>${custSec}${jobSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
+    <div>${custSec}${smsSec}${jobSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${milestoneSec}</div>
   </div>`;
 
   document.getElementById('content').scrollTop = 0;
+
+  // Asynchronously load the SMS thread for this lead.
+  try { renderSMSThread(id); } catch (e) { console.warn('[GK] renderSMSThread failed:', e); }
 }
 
 // Helper: open new quote pre-linked to a specific job
@@ -7803,28 +7826,110 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ════════════════════════════════════════════════════════════
-// SMS / TWILIO INTEGRATION
+// SMS / TWILIO INTEGRATION  (via Cloudflare Worker + MSAL)
 // ════════════════════════════════════════════════════════════
+//
+// The Cloudflare Worker "greenkey-sms" handles outbound sends, inbound Twilio
+// webhooks, and thread reads.  It authenticates callers using MSAL access
+// tokens scoped to SMS.Send on the "GreenKey CRM SMS Relay" API app
+// registration.  See cloudflare-worker/README.md for one-time setup.
 
-// Set this to your Azure Function URL once deployed
-// Format: https://<your-function-app>.azurewebsites.net/api/SendSMS?code=<function-key>
-const SMS_FUNCTION_URL = '';
+// Worker deployment URL — paste once after `wrangler deploy`.
+// Example: 'https://greenkey-sms.your-subdomain.workers.dev'
+const SMS_WORKER_URL  = '';
 
-// Platform sources — use the partner template
+// MSAL scope for the SMS Relay API.  Format: api://<api-app-client-id>/SMS.Send
+// Example: 'api://00000000-0000-0000-0000-000000000000/SMS.Send'
+const SMS_SCOPE_URL   = '';
+const SMS_SCOPES      = SMS_SCOPE_URL ? [SMS_SCOPE_URL] : [];
+
 const SMS_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink'];
 
-let _smsLeadId = null;
-
-function _buildSMSMessage(lead, cust) {
-  const firstName = cust?.firstName || lead?.customerName?.split(' ')[0] || 'there';
-  const source    = lead?.source || '';
-  const isPlatform = SMS_PLATFORM_SOURCES.includes(source);
-
-  if (isPlatform) {
-    return `Hey ${firstName}! 👋 This is Jonathan over at GreenKey — we're the local electrical team that ${source} connected you with to get your project taken care of. Just wanted to reach out personally and let you know we received your info and we're already working on your quote. We'll be in touch if we need anything else from you, but in the meantime, don't hesitate to reach out with any questions. We're happy to help however we can. Talk soon! 😊`;
+// Pre-canned templates.  Variables: {firstName}, {repName}, {source},
+// {sourceSuffix}, {techName}, {etaMinutes}, {jobAddress}.
+// User overrides are persisted to localStorage['gk_sms_templates'] and
+// merged over these defaults.
+const SMS_TEMPLATES_DEFAULT = {
+  intro: {
+    label: 'Intro',
+    body:  "Hey {firstName}! 👋 This is {repName} over at GreenKey — we're the local electrical team{sourceSuffix}. Just wanted to reach out personally and let you know we received your info and we're already working on your quote. Feel free to reply here with any questions — talk soon! 😊"
+  },
+  permitFollowup: {
+    label: 'Post-permit follow-up',
+    body:  "Hi {firstName}, good news — your permit is approved and we can now schedule your install. What days/times work best for you this week?"
+  },
+  apptConfirm: {
+    label: 'Appointment confirmation',
+    body:  "Hi {firstName}, just confirming our appointment at {jobAddress}. We'll see you soon — reply here if anything changes."
+  },
+  onTheWay: {
+    label: 'We are on the way',
+    body:  "Hi {firstName}, {techName} is on the way and should arrive in about {etaMinutes} minutes. See you shortly!"
+  },
+  thanksReview: {
+    label: 'Thanks / review request',
+    body:  "Thanks for choosing GreenKey, {firstName}! If you were happy with the work, we'd really appreciate a quick Google review — it helps us a ton. 🙏"
   }
-  return `Hey ${firstName}! 👋 This is Jonathan over at GreenKey — just wanted to reach out personally and let you know we received your info and we're already working on your quote. We'll be in touch if we need anything else from you, but in the meantime, don't hesitate to reach out with any questions. We're happy to help however we can. Talk soon! 😊`;
+};
+
+function getSMSTemplates() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('gk_sms_templates') || 'null');
+    if (saved && typeof saved === 'object') {
+      return { ...SMS_TEMPLATES_DEFAULT, ...saved };
+    }
+  } catch (_) { /* ignore corrupt storage */ }
+  return { ...SMS_TEMPLATES_DEFAULT };
 }
+
+function substituteTemplate(body, ctx) {
+  const sourceSuffix = ctx.source ? ` that ${ctx.source} connected you with` : '';
+  return body
+    .replace(/\{firstName\}/g,    ctx.firstName || 'there')
+    .replace(/\{repName\}/g,      ctx.repName   || 'GreenKey')
+    .replace(/\{source\}/g,       ctx.source    || '')
+    .replace(/\{sourceSuffix\}/g, sourceSuffix)
+    .replace(/\{techName\}/g,     ctx.techName  || 'our tech')
+    .replace(/\{etaMinutes\}/g,   String(ctx.etaMinutes ?? 30))
+    .replace(/\{jobAddress\}/g,   ctx.jobAddress || 'your place');
+}
+
+function _buildTemplateContext(lead, cust) {
+  const firstName = cust?.firstName || lead?.customerName?.split(' ')[0] || 'there';
+  const addr      = lead?.siteAddress || lead?.address || cust?.address || 'your place';
+  return {
+    firstName,
+    repName:    (S.user?.name || 'Jonathan').split(' ')[0],
+    source:     lead?.source || '',
+    techName:   S.user?.name || 'our tech',
+    etaMinutes: 30,
+    jobAddress: addr
+  };
+}
+
+let _smsLeadId = null;
+let _smsCurrentTemplateKey = 'intro';
+
+// Acquire an MSAL access token scoped to the SMS Relay API.
+async function _acquireSMSToken() {
+  if (!SMS_SCOPE_URL) {
+    throw new Error('SMS scope not configured — set SMS_SCOPE_URL');
+  }
+  if (typeof _msal === 'undefined' || !_msal) {
+    throw new Error('MSAL not initialized — please sign in first');
+  }
+  const accounts = _msal.getAllAccounts();
+  if (!accounts.length) throw new Error('No signed-in account — please sign in');
+  try {
+    const r = await _msal.acquireTokenSilent({ account: accounts[0], scopes: SMS_SCOPES });
+    return r.accessToken;
+  } catch (_) {
+    const r = await _msal.acquireTokenPopup({ scopes: SMS_SCOPES });
+    return r.accessToken;
+  }
+}
+
+function _smsConfigured() { return !!SMS_WORKER_URL && !!SMS_SCOPE_URL; }
 
 function openSMSModal(leadId) {
   const lead = getLead(leadId);
@@ -7836,33 +7941,47 @@ function openSMSModal(leadId) {
     toast('No phone number on file — add one in Edit Info first', 'warning');
     return;
   }
-
-  if (!SMS_FUNCTION_URL) {
-    toast('SMS not yet configured — Azure Function URL needed', 'warning');
+  if (!_smsConfigured()) {
+    toast('SMS not yet configured — set SMS_WORKER_URL and SMS_SCOPE_URL in index.html', 'warning');
     return;
   }
 
   _smsLeadId = leadId;
-  const msg = _buildSMSMessage(lead, cust);
   const name = cust ? custFullName(cust) : (lead.customerName || 'Customer');
-
   document.getElementById('sms-to-display').textContent = `${name} · ${phone}`;
-  const ta = document.getElementById('sms-body');
-  ta.value = msg;
-  document.getElementById('sms-char-count').textContent = msg.length + ' chars';
 
-  // Show if already texted
-  const prevWrap = document.getElementById('sms-prev-wrap');
-  if (lead.introSmsSentAt) {
-    prevWrap.style.display = 'block';
-    document.getElementById('sms-prev-date').textContent = new Date(lead.introSmsSentAt).toLocaleString();
-  } else {
-    prevWrap.style.display = 'none';
+  // Populate template dropdown and wire change handler.
+  const templates = getSMSTemplates();
+  const tplSel = document.getElementById('sms-tpl-sel');
+  if (tplSel) {
+    tplSel.innerHTML = Object.entries(templates).map(
+      ([k, t]) => `<option value="${k}">${escHtml(t.label)}</option>`
+    ).join('');
+    tplSel.value = 'intro';
+    tplSel.onchange = () => applySMSTemplate(tplSel.value, lead, cust);
   }
 
+  // Hide the legacy "previously sent" banner (thread now shows full history).
+  const prevWrap = document.getElementById('sms-prev-wrap');
+  if (prevWrap) prevWrap.style.display = 'none';
+
+  applySMSTemplate('intro', lead, cust);
   document.getElementById('sms-modal').classList.add('show');
 }
 
+function applySMSTemplate(key, lead, cust) {
+  _smsCurrentTemplateKey = key;
+  const tpl = getSMSTemplates()[key];
+  if (!tpl) return;
+  const ctx = _buildTemplateContext(lead, cust);
+  const body = substituteTemplate(tpl.body, ctx);
+  const ta = document.getElementById('sms-body');
+  if (ta) ta.value = body;
+  const cc = document.getElementById('sms-char-count');
+  if (cc) cc.textContent = body.length + ' chars';
+}
+
+// Outbound send (kept name "sendIntroSMS" for existing button handler).
 async function sendIntroSMS() {
   const lead = getLead(_smsLeadId);
   if (!lead) return;
@@ -7877,39 +7996,82 @@ async function sendIntroSMS() {
   btn.textContent = 'Sending…';
 
   try {
-    const resp = await fetch(SMS_FUNCTION_URL, {
+    const token = await _acquireSMSToken();
+    const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to: phone, message })
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({
+        leadId:      _smsLeadId,
+        to:          phone,
+        message,
+        templateKey: _smsCurrentTemplateKey
+      })
     });
-
-    const data = await resp.json();
-
-    if (!resp.ok) throw new Error(data?.message || data?.error || 'Send failed');
-
-    // Log to lead notes
-    const arr = getLeads();
-    const idx = arr.findIndex(l => l.id === _smsLeadId);
-    if (idx >= 0) {
-      arr[idx].introSmsSentAt = new Date().toISOString();
-      const note = {
-        id: 'n-' + Date.now(),
-        text: `📱 Intro text sent: "${message.slice(0, 80)}${message.length > 80 ? '…' : ''}"`,
-        author: S.user?.name || 'System',
-        createdAt: new Date().toISOString()
-      };
-      arr[idx].notes = [...(arr[idx].notes || []), note];
-      saveLeads(arr);
-    }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data?.error || data?.message || 'Send failed');
 
     document.getElementById('sms-modal').classList.remove('show');
     toast('Text sent successfully! 📱', 'success');
-
+    renderSMSThread(_smsLeadId);
   } catch(e) {
     toast('Failed to send: ' + e.message, 'error');
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg> Send Text';
+  }
+}
+
+// Fetch & render the full SMS thread for a lead.
+async function renderSMSThread(leadId) {
+  const el = document.getElementById('sms-thread-' + leadId);
+  if (!el) return;
+
+  if (!_smsConfigured()) {
+    el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">SMS not yet configured. Set <code>SMS_WORKER_URL</code> and <code>SMS_SCOPE_URL</code> in index.html, then deploy the Cloudflare Worker (see cloudflare-worker/README.md).</div>`;
+    return;
+  }
+
+  el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>`;
+
+  try {
+    const token = await _acquireSMSToken();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/sms/thread?leadId=' + encodeURIComponent(leadId),
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data?.error || 'Failed to load thread');
+
+    const msgs = data.messages || [];
+    if (!msgs.length) {
+      el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">No messages yet. Use "New Text" above to start the conversation.</div>`;
+      return;
+    }
+
+    el.innerHTML = msgs.map(m => {
+      const out = m.direction === 'out';
+      const dt  = new Date(m.created_at);
+      const ts  = dt.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+      const who = out ? (m.user_upn ? m.user_upn.split('@')[0] : 'GreenKey') : 'Customer';
+      const align  = out ? 'flex-end' : 'flex-start';
+      const bg     = out ? 'var(--green-dim)' : 'var(--bg-elevated)';
+      const border = out ? '1px solid var(--green)' : '1px solid var(--border)';
+      const statusChip = (m.status && !['sent','delivered','received','queued'].includes(m.status))
+        ? ` · <span style="color:#e74c3c">${escHtml(m.status)}</span>` : '';
+      return `<div style="display:flex;justify-content:${align};margin:6px 0">
+        <div style="max-width:78%;padding:8px 12px;background:${bg};border:${border};border-radius:10px;font-size:13px;line-height:1.45;color:var(--text-primary);white-space:pre-wrap">
+          ${escHtml(m.body)}
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">${escHtml(who)} · ${ts}${statusChip}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.innerHTML = `<div style="font-size:12.5px;color:#e74c3c;padding:4px 0">Failed to load thread: ${escHtml(e.message)}</div>`;
   }
 }
 
