@@ -2920,7 +2920,7 @@ function renderQuickQuoteForm(q){
         ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
       </div>
       <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
-      <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
+      <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||lead?.scopeOfWork||autoScope(q)}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
       </div>
@@ -3160,7 +3160,7 @@ function renderDetailedQuoteForm(q){
         ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
       </div>
       <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
-      <textarea class="fta" id="dq-scope" rows="4" style="min-height:100px" oninput="onDQScopeChange('${q.id}')">${q.scope||''}</textarea>
+      <textarea class="fta" id="dq-scope" rows="4" style="min-height:100px" oninput="onDQScopeChange('${q.id}')">${q.scope||lead?.scopeOfWork||''}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="dq-inc" rows="3" style="min-height:72px" oninput="onDQIncChange('${q.id}')">${q.inclusions||''}</textarea>
       </div>
