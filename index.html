@@ -3445,14 +3445,40 @@ async function sendQuoteEmail(){
   const toEmail  = document.getElementById('em-to').value.trim();
   const subject  = document.getElementById('em-subject').value;
   const body     = document.getElementById('em-body').value;
-  const { pdfFilename, pdfBase64, hasGraph } = _pendingEmail;
+  const { pdfFilename, pdfBase64 } = _pendingEmail;
 
   if (!toEmail) { toast('Please enter a recipient email', 'warning'); return; }
 
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
-  if (hasGraph && _gToken) {
+  // Ensure we have a Graph token if the user is signed in via MSAL.
+  // _gToken may be null even when an account exists (lazy acquire).
+  let canGraph = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        if (!_gToken) {
+          try {
+            const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
+            _gToken = tr.accessToken;
+          } catch(silentErr) {
+            // Silent failed (likely needs consent for Mail.Send) — try interactive
+            console.warn('[GK] silent token failed, trying popup:', silentErr);
+            const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+            _gToken = tr2.accessToken;
+          }
+        }
+        canGraph = !!_gToken;
+      }
+    }
+  } catch(e) {
+    console.warn('[GK] Could not acquire Graph token:', e);
+    canGraph = false;
+  }
+
+  if (canGraph) {
     try {
       await _graphFetch('/me/sendMail', {
         method: 'POST',
