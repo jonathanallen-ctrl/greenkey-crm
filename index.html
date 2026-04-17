@@ -3452,23 +3452,22 @@ async function sendQuoteEmail(){
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
-  // Ensure we have a Graph token if the user is signed in via MSAL.
-  // _gToken may be null even when an account exists (lazy acquire).
+  // Always re-acquire a Graph token at send time so we pick up the latest
+  // scopes (e.g. Mail.Send added after the user was already signed in).
+  // A cached token from before Mail.Send was granted will 403 on /me/sendMail.
   let canGraph = false;
   try {
     if (typeof _msal !== 'undefined' && _msal) {
       const accts = _msal.getAllAccounts();
       if (accts && accts.length > 0) {
-        if (!_gToken) {
-          try {
-            const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
-            _gToken = tr.accessToken;
-          } catch(silentErr) {
-            // Silent failed (likely needs consent for Mail.Send) — try interactive
-            console.warn('[GK] silent token failed, trying popup:', silentErr);
-            const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
-            _gToken = tr2.accessToken;
-          }
+        try {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+          _gToken = tr.accessToken;
+        } catch(silentErr) {
+          // Silent failed — scope needs interactive consent (first time Mail.Send)
+          console.warn('[GK] silent token failed, trying popup:', silentErr);
+          const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+          _gToken = tr2.accessToken;
         }
         canGraph = !!_gToken;
       }
@@ -3503,7 +3502,8 @@ async function sendQuoteEmail(){
       _pendingEmail = null;
       if (stayQid) openQuoteBuilder(stayQid);
     } catch(e) {
-      toast('Email failed: ' + e.message + ' — falling back to Outlook', 'error');
+      console.error('[GK] Graph sendMail failed:', e);
+      alert('Graph email failed — falling back to Outlook draft.\n\nError details:\n' + e.message);
       if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
       const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       window.location.href = mailto;
