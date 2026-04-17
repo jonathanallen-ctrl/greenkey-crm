@@ -41,8 +41,6 @@
   .fi::placeholder{color:var(--text-muted)}
   .ldiv{display:flex;align-items:center;gap:12px;margin:16px 0;color:var(--text-muted);font-size:12px}
   .ldiv::before,.ldiv::after{content:'';flex:1;height:1px;background:var(--border)}
-  .biobtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);color:var(--text-secondary);font-family:var(--font);font-size:13.5px;cursor:pointer;transition:all var(--t)}
-  .biobtn:hover{border-color:var(--green);color:var(--green);background:var(--green-dim)}
 
   /* MODALS */
   .moverlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:900;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;pointer-events:none;transition:opacity 0.2s}
@@ -581,43 +579,15 @@
       <div class="ltext">Green<span>Key</span> CRM</div>
     </div>
     <div class="ltitle">Welcome back</div>
-    <div class="lsub">Sign in to your GreenKey account</div>
+    <div class="lsub">Sign in with your GreenKey Microsoft 365 account</div>
     <div class="lerr" id="lerr"></div>
-    <div class="fg">
-      <div class="fl">Username</div>
-      <input class="fi" type="text" id="luser" placeholder="Enter your username" autocomplete="username">
-    </div>
-    <div class="fg">
-      <div class="fl">Password</div>
-      <input class="fi" type="password" id="lpw" placeholder="Enter your password" autocomplete="current-password">
-    </div>
-    <button class="btn btn-p btn-full" onclick="doLogin()">Sign in</button>
-    <div class="ldiv">or</div>
-    <button class="biobtn" onclick="msalLogin()" style="border-color:#0078d4;gap:10px">
+    <button class="btn btn-p btn-full" onclick="msalLogin()" style="display:flex;align-items:center;justify-content:center;gap:10px">
       <svg width="16" height="16" viewBox="0 0 21 21" fill="none"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
       Sign in with Microsoft
     </button>
-    <div id="biosec" style="display:none">
-      <div class="ldiv">or</div>
-      <button class="biobtn" onclick="doBioLogin()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M12 1C8.13 1 5 4.13 5 8c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-          <circle cx="12" cy="8" r="2.5"/>
-        </svg>
-        Sign in with Face ID / Biometrics
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- BIOMETRIC SETUP MODAL -->
-<div class="moverlay" id="biomodal">
-  <div class="modal">
-    <div class="mtitle">Enable biometric login?</div>
-    <div class="mdesc">Use Face ID, fingerprint, or Windows Hello to sign in faster on this device. Your biometric data never leaves your device.</div>
-    <div class="mact">
-      <button class="btn btn-g" onclick="dismissBio()">Not now</button>
-      <button class="btn btn-p" onclick="enrollBio()">Enable</button>
+    <div style="margin-top:16px;font-size:11.5px;color:var(--text-muted);text-align:center;line-height:1.5">
+      Access is restricted to authorized <strong>greenkey-usa.com</strong> accounts.<br>
+      New user? Ask an admin to grant you access in Microsoft 365.
     </div>
   </div>
 </div>
@@ -1059,8 +1029,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 // ── CONSTANTS ──
-const UK = 'gk_users', SK = 'gk_session', BK = 'gk_biometric';
+const UK = 'gk_users', SK = 'gk_session';
 const CK = 'gk_customers', LK = 'gk_leads';
+// Clean up legacy biometric enrollment data from previous builds.
+try { localStorage.removeItem('gk_biometric'); } catch(_){}
 
 // ── STAGES ──
 const STAGES = [
@@ -1290,15 +1262,23 @@ function moveLeadToStage(leadId, stageId) {
 }
 
 // ── USERS ──
+// Users are registered automatically the first time they sign in via Microsoft
+// 365. No passwords are stored here — authentication is handled entirely by
+// Azure AD through MSAL. The user record tracks display name, role, and any
+// per-user preferences; it never contains credentials.
 function getUsers() {
   const s = localStorage.getItem(UK);
-  if (s) return JSON.parse(s);
-  const d = [
-    { id:'u-jon', username:'jonathan', password:btoa('GreenKey2024!'), name:'Jonathan Allen', initials:'JA', role:'admin', active:true },
-    { id:'u-she', username:'sherri',   password:btoa('GreenKey2024!'), name:'Sherri Allen',   initials:'SA', role:'admin', active:true }
-  ];
-  localStorage.setItem(UK, JSON.stringify(d));
-  return d;
+  if (s) {
+    // Migration: strip any legacy `password` fields from pre-MSAL data.
+    try {
+      const arr = JSON.parse(s);
+      let mutated = false;
+      for (const u of arr) { if ('password' in u) { delete u.password; mutated = true; } }
+      if (mutated) localStorage.setItem(UK, JSON.stringify(arr));
+      return arr;
+    } catch { return []; }
+  }
+  return [];
 }
 function saveUsers(u) { localStorage.setItem(UK, JSON.stringify(u)); }
 
@@ -1306,23 +1286,9 @@ function saveUsers(u) { localStorage.setItem(UK, JSON.stringify(u)); }
 const S = { user:null, page:'dashboard', tab:'site', photos:{site:[],panel:[],install:[],inspection:[]}, stream:null, pipeMode:'kanban', custView:null, drawerMode:null, drawerData:null };
 
 // ── LOGIN ──
-function doLogin() {
-  const u = document.getElementById('luser').value.trim().toLowerCase();
-  const p = document.getElementById('lpw').value;
-  const err = document.getElementById('lerr');
-  if (!u || !p) { showErr('Please enter your username and password.'); return; }
-  const users = getUsers();
-  const user = users.find(x => x.username === u && x.active);
-  if (!user || atob(user.password) !== p) { showErr('Incorrect username or password.'); return; }
-  err.classList.remove('show');
-  login(user);
-  if (window.PublicKeyCredential) {
-    const bio = JSON.parse(localStorage.getItem(BK)||'{}');
-    if (!bio[user.id]) setTimeout(()=>document.getElementById('biomodal').classList.add('show'), 800);
-  }
-}
-
-function showErr(m) { const e=document.getElementById('lerr'); e.textContent=m; e.classList.add('show'); }
+// All authentication flows through Microsoft 365 via MSAL (see msalLogin() and
+// _onMSALSuccess() below). No local passwords are ever accepted or stored.
+function showErr(m) { const e=document.getElementById('lerr'); if(!e)return; e.textContent=m; e.classList.add('show'); }
 
 async function login(user) {
   S.user = user;
@@ -1345,50 +1311,11 @@ function doLogout() {
   localStorage.removeItem(SK);
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login').classList.remove('hidden');
-  document.getElementById('lpw').value = '';
-  document.getElementById('lerr').classList.remove('show');
+  const lerr = document.getElementById('lerr');
+  if (lerr) lerr.classList.remove('show');
 }
 
-// ── BIOMETRIC ──
-async function enrollBio() {
-  document.getElementById('biomodal').classList.remove('show');
-  if (!window.PublicKeyCredential) { toast('Biometrics not supported on this device','warning'); return; }
-  try {
-    const ch = new Uint8Array(32); crypto.getRandomValues(ch);
-    const cred = await navigator.credentials.create({ publicKey: {
-      challenge: ch,
-      rp: { name:'GreenKey CRM', id: location.hostname||'localhost' },
-      user: { id: new TextEncoder().encode(S.user.id), name: S.user.username, displayName: S.user.name },
-      pubKeyCredParams: [{alg:-7,type:'public-key'},{alg:-257,type:'public-key'}],
-      authenticatorSelection: { userVerification:'preferred' },
-      timeout: 60000
-    }});
-    const bio = JSON.parse(localStorage.getItem(BK)||'{}');
-    bio[S.user.id] = { credentialId: Array.from(new Uint8Array(cred.rawId)) };
-    localStorage.setItem(BK, JSON.stringify(bio));
-    document.getElementById('biosec').style.display = 'block';
-    toast('Biometric login enabled for this device','success');
-  } catch(e) { if (e.name!=='NotAllowedError') toast('Enrollment failed: '+e.message,'error'); }
-}
-
-function dismissBio() { document.getElementById('biomodal').classList.remove('show'); }
-
-async function doBioLogin() {
-  if (!window.PublicKeyCredential) return;
-  try {
-    const ch = new Uint8Array(32); crypto.getRandomValues(ch);
-    const ass = await navigator.credentials.get({ publicKey:{ challenge:ch, userVerification:'preferred', timeout:60000 }});
-    const bio = JSON.parse(localStorage.getItem(BK)||'{}');
-    const cid = Array.from(new Uint8Array(ass.rawId)).join(',');
-    for (const [uid,d] of Object.entries(bio)) {
-      if (d.credentialId.join(',') === cid) {
-        const user = getUsers().find(u => u.id === uid);
-        if (user) { login(user); return; }
-      }
-    }
-    toast('Biometric not recognized — please use password','error');
-  } catch(e) { if(e.name!=='NotAllowedError') toast('Biometric failed — use password','error'); }
-}
+// Biometric login was removed — all authentication flows through Microsoft 365.
 
 // ── APP BUILDER ──
 const ICONS = {
@@ -1447,8 +1374,6 @@ function buildApp(user) {
   buildSettingsNav(user);
   // Prime task badges and dashboard widget after login
   setTimeout(()=>{ updateTaskBadge(); updateDashboardWidget(); }, 50);
-  const bio = JSON.parse(localStorage.getItem(BK)||'{}');
-  if (Object.keys(bio).length > 0) document.getElementById('biosec').style.display='block';
 }
 
 // ── NAVIGATION ──
@@ -1508,8 +1433,8 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Scheduling','Users & Access','Change Password']
-    : ['Change Password'];
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Scheduling','Users & Access','Account']
+    : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
   showSec(nav.firstChild, secs[0]);
@@ -1567,20 +1492,20 @@ const SECS = {
     </div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSchedSettings()">Save Changes</button></div>`,
 
-  'Users & Access':`<div class="stitle">Users & Access</div><div class="sdesc">Manage team members and their access levels.</div>
+  'Users & Access':`<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically.</div>
     <div id="ulist">${renderUsers()}</div>
-    <div style="margin-top:20px">
-      <button class="btn btn-p" onclick="showAddUser()">
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
-        Add User
-      </button>
+    <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
+      To grant or revoke access, manage users in the Microsoft 365 admin center. Only <strong>greenkey-usa.com</strong> accounts can sign in to this CRM.
     </div>`,
 
-  'Change Password':`<div class="stitle">Change Password</div><div class="sdesc">Update your login password.</div>
-    <div class="fg"><div class="fl">Current Password</div><input class="fi" type="password" id="pwc" placeholder="Current password"></div>
-    <div class="fg"><div class="fl">New Password</div><input class="fi" type="password" id="pwn" placeholder="New password (min 8 chars)"></div>
-    <div class="fg"><div class="fl">Confirm New Password</div><input class="fi" type="password" id="pwf" placeholder="Confirm new password"></div>
-    <div style="margin-top:8px"><button class="btn btn-p" onclick="changePw()">Update Password</button></div>`
+  'Account':`<div class="stitle">Account</div><div class="sdesc">Your sign-in is managed by Microsoft 365. There is no separate CRM password to change.</div>
+    <div class="srow"><div><div class="srl">Signed in as</div><div class="srd" id="acct-email">${(S.user&&S.user.username)||'—'}</div></div></div>
+    <div class="srow"><div><div class="srl">Display name</div><div class="srd">${(S.user&&S.user.name)||'—'}</div></div></div>
+    <div class="srow"><div><div class="srl">Role</div><div class="srd">${(S.user&&S.user.role)||'—'}</div></div></div>
+    <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
+      To change your password or manage two-factor authentication, go to your Microsoft account at <a href="https://myaccount.microsoft.com" target="_blank" rel="noopener">myaccount.microsoft.com</a>.
+    </div>
+    <div style="margin-top:20px"><button class="btn btn-g" onclick="doLogout()">Sign out</button></div>`
 };
 
 function showSec(el, sec) {
@@ -1602,53 +1527,10 @@ function renderUsers() {
     </div>`).join('');
 }
 
-function showAddUser() {
-  document.getElementById('spanel').innerHTML += `
-    <div class="card" style="margin-top:20px;padding:20px;border:1px solid var(--border)">
-      <div style="font-size:14px;font-weight:600;margin-bottom:16px">Add New User</div>
-      <div class="fg"><div class="fl">Full Name</div><input class="fi" id="nn" placeholder="e.g. John Smith"></div>
-      <div class="fg"><div class="fl">Username</div><input class="fi" id="nu" placeholder="e.g. john"></div>
-      <div class="fg"><div class="fl">Temporary Password</div><input class="fi" type="password" id="np" placeholder="They can change on first login"></div>
-      <div class="fg"><div class="fl">Role</div>
-        <select class="fi" id="nr"><option value="tech">Technician</option><option value="sales">Sales</option><option value="admin">Admin</option></select>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-p" onclick="addUser()">Add User</button>
-        <button class="btn btn-g" onclick="showSec(null,'Users & Access')">Cancel</button>
-      </div>
-    </div>`;
-}
-
-function addUser() {
-  const name=document.getElementById('nn').value.trim();
-  const uname=document.getElementById('nu').value.trim().toLowerCase();
-  const pw=document.getElementById('np').value;
-  const role=document.getElementById('nr').value;
-  if (!name||!uname||!pw) { toast('Please fill in all fields','error'); return; }
-  const users=getUsers();
-  if (users.find(u=>u.username===uname)) { toast('Username already exists','error'); return; }
-  const init=name.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2);
-  users.push({id:'u-'+Date.now(),username:uname,password:btoa(pw),name,initials:init,role,active:true});
-  saveUsers(users);
-  toast('User added: '+name,'success');
-  showSec(null,'Users & Access');
-}
-
-function changePw() {
-  const c=document.getElementById('pwc').value;
-  const n=document.getElementById('pwn').value;
-  const f=document.getElementById('pwf').value;
-  if (!c||!n||!f) { toast('Please fill in all fields','error'); return; }
-  if (atob(S.user.password)!==c) { toast('Current password is incorrect','error'); return; }
-  if (n!==f) { toast('New passwords do not match','error'); return; }
-  if (n.length<8) { toast('Password must be at least 8 characters','error'); return; }
-  const users=getUsers();
-  const u=users.find(x=>x.id===S.user.id);
-  u.password=btoa(n); S.user.password=u.password;
-  saveUsers(users);
-  toast('Password updated successfully','success');
-  ['pwc','pwn','pwf'].forEach(id=>document.getElementById(id).value='');
-}
+// User management has been moved to Microsoft 365.
+// New users are provisioned by signing in with an authorized @greenkey-usa.com
+// account (see ALLOWED_EMAIL_DOMAINS in _onMSALSuccess). Password changes are
+// handled at https://myaccount.microsoft.com — there is no local password.
 
 function saveSets() { toast('Settings saved','success'); }
 
@@ -3673,6 +3555,16 @@ async function sendQuoteEmail(){
     canGraph = false;
   }
 
+  // Capture the lead id up-front so every exit branch can return the user to
+  // the lead/job detail page they started from, instead of stranding them on
+  // the quotes list or quote builder.
+  const stayLeadId = _pendingEmail && _pendingEmail.leadId;
+  const returnToLead = () => {
+    if (stayLeadId && typeof openLeadDetail === 'function') {
+      try { openLeadDetail(stayLeadId); } catch(e) { console.warn('[GK] returnToLead failed:', e); }
+    }
+  };
+
   if (canGraph) {
     try {
       await _graphFetch('/me/sendMail', {
@@ -3692,9 +3584,8 @@ async function sendQuoteEmail(){
         : `✅ Email sent with ${attachments.length} PDF${attachments.length>1?'s':''} attached!`,
         'success');
       document.getElementById('email-modal').classList.remove('show');
-      const stayQid = _pendingEmail && _pendingEmail.qid;
       _pendingEmail = null;
-      if (stayQid) openQuoteBuilder(stayQid);
+      returnToLead();
     } catch(e) {
       console.error('[GK] Graph sendMail failed:', e);
       alert('Graph email failed — falling back to Outlook draft.\n\nError details:\n' + e.message);
@@ -3702,6 +3593,9 @@ async function sendQuoteEmail(){
       checkedIds.forEach(cid => previewQuotePDF(cid));
       const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       window.location.href = mailto;
+      document.getElementById('email-modal').classList.remove('show');
+      _pendingEmail = null;
+      returnToLead();
       if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
     }
   } else {
@@ -3715,6 +3609,7 @@ async function sendQuoteEmail(){
       'success');
     document.getElementById('email-modal').classList.remove('show');
     _pendingEmail = null;
+    returnToLead();
   }
 }
 function switchQuoteType(qid,t){const q=getQuote(qid);if(!q)return;upsertQuote({...q,type:t});renderQuoteBuilder(qid);}
@@ -7674,17 +7569,48 @@ async function msalLogin() {
   }
 }
 
+// Domain allowlist — only accounts from these tenants may access the CRM.
+// Add additional domains (e.g. a trusted contractor tenant) here as needed.
+const ALLOWED_EMAIL_DOMAINS = ['greenkey-usa.com'];
+
 async function _onMSALSuccess(account) {
   const email = (account.username || '').toLowerCase();
   const displayName = account.name || account.username;
   const parts = displayName.split(' ').filter(Boolean);
   const initials = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2) || 'GK';
 
+  // Enforce domain allowlist. If the signed-in account isn't from an approved
+  // domain, sign it out and reject the login. This is defense-in-depth on top
+  // of Azure AD tenant restrictions.
+  const domain = email.split('@')[1] || '';
+  if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+    toast(`Sign-in rejected: ${email} is not an authorized GreenKey account.`, 'error');
+    try { await _msal.logoutPopup({ account }); } catch(_){}
+    return;
+  }
+
+  // Admin determination by email match. Update this list as your team grows.
   let role = 'tech';
   if (email.includes('jonathan') || email.includes('j.allen')) role = 'admin';
-  if (email.includes('sherri') || email.includes('s.allen')) role = 'admin';
+  if (email.includes('sherri')   || email.includes('s.allen')) role = 'admin';
 
-  const user = { id: account.homeAccountId, username: email, name: displayName, initials, role, active: true };
+  // Preserve the existing user IDs for Jonathan and Sherri so legacy tasks,
+  // quotes, and leads that reference 'u-jon' / 'u-she' keep working.
+  let stableId = account.homeAccountId;
+  if (email.includes('jonathan') || email.includes('j.allen')) stableId = 'u-jon';
+  else if (email.includes('sherri') || email.includes('s.allen')) stableId = 'u-she';
+
+  const user = { id: stableId, username: email, name: displayName, initials, role, active: true };
+
+  // Upsert into the user registry so task assignment, mentions, and
+  // "Users & Access" keep working. No password is ever stored.
+  try {
+    const users = getUsers();
+    const idx = users.findIndex(u => u.id === stableId || u.username === email);
+    if (idx >= 0) users[idx] = { ...users[idx], ...user };
+    else users.push(user);
+    saveUsers(users);
+  } catch(e) { console.warn('[GK] Could not upsert user record:', e); }
 
   _syncStatusShow('Connecting to SharePoint…');
   try {
@@ -8013,10 +7939,7 @@ function archiveOldLeads() {
 async function init() {
   archiveOldLeads();
   seedImportData();
-  document.getElementById('lpw').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
-  document.getElementById('luser').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('lpw').focus(); });
-  const bio=JSON.parse(localStorage.getItem(BK)||'{}');
-  if (Object.keys(bio).length>0) document.getElementById('biosec').style.display='block';
+  // Login is now Microsoft 365 only — no password inputs to wire up.
 
   // Try MSAL auto-login first (resumes existing Microsoft session)
   try {
