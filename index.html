@@ -685,9 +685,13 @@
         <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Message</div>
         <textarea id="em-body" style="width:100%;min-height:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55;white-space:pre"></textarea>
       </div>
-      <div style="margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        <span>Attachment: <strong id="em-attach-name"></strong></span>
+      <div style="margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          <strong>Attachments</strong>
+          <span id="em-attach-count" style="margin-left:auto;color:var(--text-muted);font-size:11px"></span>
+        </div>
+        <div id="em-attach-list" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
     </div>
     <div class="mact" style="flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:8px">
@@ -2766,7 +2770,13 @@ function renderQuoteBuilder(qid){
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3L5 8l5 5"/></svg>
         Back to Lead
       </button>`:''}
-      <div style="font-size:17px;font-weight:600;letter-spacing:-0.4px;flex:1">${q.id}</div>
+      <div style="font-size:17px;font-weight:600;letter-spacing:-0.4px;display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+        <span style="flex-shrink:0">${q.id}</span>
+        <input type="text" id="qb-label" placeholder="Optional label — e.g. Option A: Level 2 in garage"
+          value="${(q.label||'').replace(/"/g,'&quot;')}"
+          onchange="updateQuoteLabel('${q.id}', this.value)"
+          style="flex:1;min-width:0;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-family:var(--font);font-size:12.5px;font-weight:500;color:var(--text-primary);outline:none" />
+      </div>
       <span style="font-size:13px;color:var(--text-muted)">${custName}</span>
       ${lead?`<span class="chip chip-blue" style="font-size:11px">${lead.id}</span>`:''}
       ${quoteStatusChip(q.status)}
@@ -2781,6 +2791,12 @@ function renderQuoteBuilder(qid){
         <div id="qb-form"></div>
       </div>
       <div id="qb-sidebar">
+        <div class="card" style="padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Source</div>
+          <select id="qb-source" onchange="changeQuoteSource('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+            ${(['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
         ${renderTotalsBox(q,totals,isAdmin,isQmerit)}
         ${isAdmin?renderMarginBox(q,totals,isQmerit):''}
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -2795,6 +2811,10 @@ function renderQuoteBuilder(qid){
           <button id="qb-email-btn" class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
             Email Quote to Customer
+          </button>
+          <button class="btn btn-g btn-full" onclick="duplicateQuote('${q.id}')" title="Create another option for this lead starting from a copy of this quote">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="10" height="10" rx="1"/><path d="M2 10V3a1 1 0 0 1 1-1h7"/></svg>
+            Duplicate as New Option
           </button>
           ${isDirect?`<button class="btn btn-g btn-full" onclick="generateInvoice('${q.id}')">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 6h6M5 9h4"/></svg>
@@ -3320,12 +3340,6 @@ async function emailQuote(qid){
     return;
   }
 
-  // Generate PDF as data URL
-  const pdfResult=generateQuotePDF(q,cust,lead,true);
-  if(!pdfResult){toast('Could not generate PDF','error');return;}
-  const pdfBase64=pdfResult.dataUrl.split(',')[1];
-  const pdfFilename=pdfResult.filename;
-
   // Determine charger recommendations based on plug type
   const plugType = lead?.chargerInfo?.plugType || '';
   const isNACS    = plugType === 'NACS';
@@ -3334,24 +3348,132 @@ async function emailQuote(qid){
 
   let chargerRecs = '';
   if (isNACS || isBoth) {
-    chargerRecs += `FOR TESLA VEHICLES (NACS connector):
+    chargerRecs += `FOR NACS CONNECTOR (Tesla, and Ford/GM/Rivian/Hyundai/Kia and most new 2025+ EVs):
   • Tesla Wall Connector (Hardwired)
     https://shop.tesla.com/product/wall-connector\n\n`;
   }
   if (isJ1772 || isBoth) {
-    chargerRecs += `FOR ALL OTHER EVs (J1772 connector):
+    chargerRecs += `FOR J1772 CONNECTOR (most EVs sold before 2025):
   • ChargePoint Home Flex (Hardwired, 50-amp)
     https://www.chargepoint.com/drivers/home/chargepoint-home-flex/
   • Emporia Classic (Hardwired, 48-amp)
     https://www.emporiaenergy.com/\n\n`;
   }
   chargerRecs += `FOR HOUSEHOLDS WITH MULTIPLE EVs (or want future-proofing):
-  • Tesla Universal Wall Connector — works with ALL EVs (NACS + J1772)
+  • Tesla Universal Wall Connector — works with both NACS and J1772 vehicles
     https://shop.tesla.com/product/universal-wall-connector\n\n`;
+  chargerRecs += `Not sure which connector your vehicle uses? Just reply to this email with your EV's year, make, and model and we'll confirm.\n\n`;
   chargerRecs += `⚠ IMPORTANT: When ordering, please select the HARDWIRED version of whichever charger you choose — that is what our installation and permit are designed for.`;
 
-  const subject = `Your GreenKey Quote — ${q.id}`;
-  const body = `Hi ${custFirst},
+  // Platform-lead path: Qmerit / Electrum / Treehouse customers get a courtesy
+  // email with NO quote PDF attached — the platform handles delivering the
+  // quote (or there isn't a customer-facing quote at all in Treehouse's case).
+  // Each platform has its own flow, so the body copy differs.
+  const PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse'];
+  const isPlatform = PLATFORM_SOURCES.includes(q.source);
+
+  let subject, body;
+  if (q.source === 'Qmerit') {
+    subject = `Update on your GreenKey installation via Qmerit — ${q.id}`;
+    body = `Hi ${custFirst},
+
+I wanted to personally let you know that we've prepared the quote for your EV charger installation and uploaded it to Qmerit. Qmerit will send the quote to you through their platform shortly.
+
+Property: ${addr}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's what to expect from here:
+
+  1. QMERIT WILL SEND YOU THE QUOTE
+     All pricing, approval, payment, and paperwork for the installation itself goes through Qmerit's platform. Please follow their instructions to review and accept the quote.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  3. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from approval to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about pricing, approval, or the Qmerit process, Qmerit's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
+
+Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+  } else if (q.source === 'Electrum') {
+    subject = `Update on your GreenKey installation via Electrum — ${q.id}`;
+    body = `Hi ${custFirst},
+
+I wanted to let you know that we've completed our pricing for your EV charger installation directly on the Electrum platform. Electrum will present the quote to you through their system.
+
+Property: ${addr}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's what to expect from here:
+
+  1. REVIEW YOUR QUOTE ON ELECTRUM
+     All pricing, approval, and payment for the installation is handled through Electrum's platform. Please follow their instructions to review and accept the quote.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  3. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from approval to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about pricing or approval, Electrum's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
+
+Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+  } else if (q.source === 'Treehouse') {
+    subject = `Confirming your GreenKey EV charger installation via Treehouse — ${q.id}`;
+    body = `Hi ${custFirst},
+
+I wanted to let you know that we've accepted your EV charger installation job through Treehouse and are ready to get started. All pricing and paperwork for the installation are handled through Treehouse directly.
+
+Property: ${addr}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. WE APPLY FOR YOUR PERMIT
+     We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  2. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from here to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about the installation work itself, please reach out to me directly — I'm always happy to help. Anything related to Treehouse's end of the process is best directed to their support team.
+
+Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+  } else {
+    subject = `Your GreenKey Quote — ${q.id}`;
+    body = `Hi ${custFirst},
 
 Thank you for choosing GreenKey! Please find your quote attached to this email.
 
@@ -3404,15 +3526,14 @@ Cofounder & President | GreenKey
 Class A Electrical Contractor | Licensed & Insured
 (804) 770-2210 | (804) 310-5368
 jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+  }
 
   // Stash the payload and open the preview/edit modal
   _pendingEmail = {
     qid,
+    leadId: q.leadId,
+    customerId: q.customerId,
     toEmail,
-    subject,
-    body,
-    pdfFilename,
-    pdfBase64,
     hasGraph: !!_gToken
   };
 
@@ -3420,7 +3541,40 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   document.getElementById('em-to').value       = toEmail;
   document.getElementById('em-subject').value  = subject;
   document.getElementById('em-body').value     = body;
-  document.getElementById('em-attach-name').textContent = pdfFilename;
+
+  // Build the attachment checklist — all quotes for this lead, most-recent first.
+  // Default: only the current quote is checked — UNLESS this is a platform lead,
+  // in which case the platform itself delivers the quote to the customer and we
+  // shouldn't attach a PDF. User can still check one manually if they want to.
+  const allForLead = getQuotes()
+    .filter(x => x.leadId === q.leadId)
+    .sort((a,b) => (b.updatedAt||b.createdAt||'').localeCompare(a.updatedAt||a.createdAt||''));
+  const listEl = document.getElementById('em-attach-list');
+  if (listEl) {
+    const platformNote = isPlatform
+      ? `<div style="padding:6px 0 8px;color:var(--amber);font-size:11px;line-height:1.4">
+           ⓘ ${q.source} delivers the quote to the customer — no PDF needed.
+           Attaching one will send it anyway (only check a box if you really want to).
+         </div>`
+      : '';
+    listEl.innerHTML = platformNote + (allForLead.map(x => {
+      const checked = (!isPlatform && x.id === qid) ? 'checked' : '';
+      const labelTxt = x.label ? x.label : `Quote ${x.id}`;
+      const when = (x.updatedAt||x.createdAt||'').slice(0,10);
+      const amt = fmt$(x.quoteTotal||0);
+      const isPrimary = x.id === qid ? ' <span style="color:var(--green);font-weight:600;margin-left:4px">(primary)</span>' : '';
+      return `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;color:var(--text-primary)">
+        <input type="checkbox" class="em-attach-cb" data-qid="${x.id}" ${checked} onchange="updateEmailAttachCount()" style="margin:0">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          <strong>${labelTxt}</strong>${isPrimary}
+          <span style="color:var(--text-muted);margin-left:6px">${x.id} · ${when} · ${amt}</span>
+        </span>
+      </label>`;
+    }).join('') || '<div style="color:var(--text-muted);font-size:11px">No saved quotes found for this lead.</div>');
+  }
+  // Stash platform flag on pendingEmail for the send handler to read.
+  _pendingEmail.isPlatform = isPlatform;
+  updateEmailAttachCount();
   const fromEl = document.getElementById('em-from');
   let fromEmail = '';
   try {
@@ -3440,17 +3594,59 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   document.getElementById('email-modal').classList.add('show');
 }
 
+// Live-updates the "N attachment(s)" indicator in the email modal.
+function updateEmailAttachCount(){
+  const cbs = document.querySelectorAll('.em-attach-cb');
+  const checked = Array.from(cbs).filter(c => c.checked).length;
+  const el = document.getElementById('em-attach-count');
+  if (el) el.textContent = checked === 0 ? 'none selected' : (checked + ' selected');
+}
+
 async function sendQuoteEmail(){
   if (!_pendingEmail) return;
   const toEmail  = document.getElementById('em-to').value.trim();
   const subject  = document.getElementById('em-subject').value;
   const body     = document.getElementById('em-body').value;
-  const { pdfFilename, pdfBase64 } = _pendingEmail;
 
   if (!toEmail) { toast('Please enter a recipient email', 'warning'); return; }
 
+  // Collect checked quote IDs and build the attachments array.
+  const checkedIds = Array.from(document.querySelectorAll('.em-attach-cb'))
+    .filter(c => c.checked)
+    .map(c => c.dataset.qid);
+  // Platform leads (Qmerit/Electrum/Treehouse) send a courtesy email with no
+  // PDF — the platform delivers the quote. Zero attachments is fine there.
+  const isPlatformSend = !!(_pendingEmail && _pendingEmail.isPlatform);
+  if (checkedIds.length === 0 && !isPlatformSend) {
+    toast('Pick at least one quote to attach','warning'); return;
+  }
+
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+
+  // Generate a PDF for each checked quote.
+  const attachments = [];
+  let firstFilename = '';
+  for (const cid of checkedIds) {
+    const cq = getQuote(cid); if (!cq) continue;
+    const clead = getLead(cq.leadId);
+    const ccust = getCustomer(cq.customerId) || (clead ? getCustomer(clead.customerId) : null);
+    const res = generateQuotePDF(cq, ccust, clead, true);
+    if (!res) continue;
+    const b64 = res.dataUrl.split(',')[1];
+    attachments.push({
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: res.filename,
+      contentType: 'application/pdf',
+      contentBytes: b64
+    });
+    if (!firstFilename) firstFilename = res.filename;
+  }
+  if (attachments.length === 0 && !isPlatformSend) {
+    toast('Could not generate any PDFs','error');
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
+    return;
+  }
 
   // Always re-acquire a Graph token at send time so we pick up the latest
   // scopes (e.g. Mail.Send added after the user was already signed in).
@@ -3486,17 +3682,15 @@ async function sendQuoteEmail(){
             subject,
             body: { contentType: 'Text', content: body },
             toRecipients: [{ emailAddress: { address: toEmail } }],
-            attachments: [{
-              '@odata.type': '#microsoft.graph.fileAttachment',
-              name: pdfFilename,
-              contentType: 'application/pdf',
-              contentBytes: pdfBase64
-            }]
+            attachments
           },
           saveToSentItems: true
         })
       });
-      toast('✅ Email sent with PDF attached!', 'success');
+      toast(attachments.length === 0
+        ? '✅ Courtesy email sent (no PDF attached)'
+        : `✅ Email sent with ${attachments.length} PDF${attachments.length>1?'s':''} attached!`,
+        'success');
       document.getElementById('email-modal').classList.remove('show');
       const stayQid = _pendingEmail && _pendingEmail.qid;
       _pendingEmail = null;
@@ -3504,22 +3698,69 @@ async function sendQuoteEmail(){
     } catch(e) {
       console.error('[GK] Graph sendMail failed:', e);
       alert('Graph email failed — falling back to Outlook draft.\n\nError details:\n' + e.message);
-      if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
+      // Download every selected quote so the user can attach them manually in Outlook.
+      checkedIds.forEach(cid => previewQuotePDF(cid));
       const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       window.location.href = mailto;
       if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
     }
   } else {
-    // Not signed in via Microsoft — fall back to mailto, download PDF
-    if (_pendingEmail) previewQuotePDF(_pendingEmail.qid);
+    // Not signed in via Microsoft — fall back to mailto, download each selected PDF
+    checkedIds.forEach(cid => previewQuotePDF(cid));
     const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
-    toast('📎 Attach the PDF from your Downloads folder, then hit Send!', 'success');
+    toast(checkedIds.length === 0
+      ? '✉ Outlook opened — no PDFs to attach for this platform courtesy email.'
+      : `📎 Attach ${checkedIds.length} PDF${checkedIds.length>1?'s':''} from your Downloads folder, then hit Send!`,
+      'success');
     document.getElementById('email-modal').classList.remove('show');
     _pendingEmail = null;
   }
 }
 function switchQuoteType(qid,t){const q=getQuote(qid);if(!q)return;upsertQuote({...q,type:t});renderQuoteBuilder(qid);}
+function updateQuoteLabel(qid,label){
+  const q=getQuote(qid); if(!q) return;
+  const clean=(label||'').trim().slice(0,80);
+  upsertQuote({...q,label:clean});
+  // Light-touch save — don't re-render the whole builder or the user loses focus
+}
+// Switch a quote's source (e.g. Qmerit → Direct for a service-upgrade split).
+// Recalculates qmeritFee via the appropriate form handler, then re-renders.
+function changeQuoteSource(qid,newSource){
+  const q=getQuote(qid); if(!q) return;
+  upsertQuote({...q, source:newSource});
+  // Force fee recalc — the quick/detailed handlers read q.source and recompute qmeritFee.
+  try {
+    if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
+    else { if (typeof onQQChange === 'function') onQQChange(qid); }
+  } catch(_){}
+  renderQuoteBuilder(qid);
+  toast(`Source set to ${newSource}`, 'success');
+}
+// Clone a quote as a new option for the same lead. Preserves scope, line items,
+// totals, and plug-type choices — just resets identity, status, timestamps, and
+// any pending-revision state, then opens the builder on the copy.
+function duplicateQuote(qid){
+  const src=getQuote(qid); if(!src){toast('Quote not found','error');return;}
+  const srcLabel=(src.label||'').trim();
+  const suggested = srcLabel ? (srcLabel + ' (copy)') : 'Option B';
+  const newLabel = prompt('Label for the new quote option:', suggested);
+  if (newLabel === null) return; // user cancelled
+  const copy = {
+    ...src,
+    id: 'qt-'+Date.now(),
+    label: (newLabel||'').trim().slice(0,80),
+    status: 'draft',
+    pendingRevision: false,
+    revisionNote: '',
+    revisionApproved: undefined,
+    createdAt: undefined,
+    updatedAt: undefined,
+  };
+  upsertQuote(copy);
+  toast('Quote duplicated — edit this copy to differentiate it','success');
+  openQuoteBuilder(copy.id);
+}
 
 // ── FIELD REVISION WORKFLOW ──
 function flagRevision(qid,note,isStandard){
@@ -4318,8 +4559,8 @@ function renderJobDetail(id) {
       </div>
       <div class="jd-f" style="margin-top:10px"><div class="jd-fl">Plug Type</div>
         <select class="jd-fsel" id="ch-plug">
-          <option value="J1772"${(charger.plugType||'J1772')==='J1772'?' selected':''}>J1772</option>
-          <option value="NACS"${charger.plugType==='NACS'?' selected':''}>NACS (Tesla)</option>
+          <option value="J1772"${(charger.plugType||'J1772')==='J1772'?' selected':''}>J1772 (most pre-2025 EVs)</option>
+          <option value="NACS"${charger.plugType==='NACS'?' selected':''}>NACS (Tesla & most 2025+ EVs)</option>
           <option value="Both"${charger.plugType==='Both'?' selected':''}>Both J1772 and NACS</option>
           <option value="Other"${charger.plugType==='Other'?' selected':''}>Other</option>
         </select>
@@ -7471,9 +7712,15 @@ async function _graphFetch(path, opts = {}) {
     ...opts,
     headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json', ...(opts.headers||{}) }
   });
-  if (resp.status === 204) return null;
+  if (resp.status === 204 || resp.status === 202) return null;
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Graph ${resp.status}: ${t.slice(0,300)}`); }
-  return resp.json();
+  // Some endpoints (e.g. sendMail) return 2xx with an empty body.
+  // Only parse JSON if the response actually has JSON content.
+  const ct = resp.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) return null;
+  const txt = await resp.text();
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch { return null; }
 }
 
 // ── SHAREPOINT INIT ──
