@@ -691,6 +691,21 @@
         </div>
         <div id="em-attach-list" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
+      <!-- Custom email file upload (shown only when opening via openCustomEmailModal) -->
+      <div id="em-file-upload" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--blue-dim);border:1px solid var(--blue);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          <strong>File Attachments</strong>
+          <span id="em-file-size" style="margin-left:auto;color:var(--text-muted);font-size:11px">0 files</span>
+        </div>
+        <input type="file" id="em-file-input" multiple style="display:none" onchange="addCustomEmailFiles(this.files)">
+        <button type="button" class="btn btn-g" style="padding:6px 12px;font-size:12px;margin-bottom:8px" onclick="document.getElementById('em-file-input').click()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:middle"><path d="M12 5v14M5 12h14"/></svg>
+          Add Files
+        </button>
+        <div id="em-file-list" style="display:flex;flex-direction:column;gap:4px"></div>
+        <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Max combined size ~30 MB (Microsoft Graph limit).</div>
+      </div>
     </div>
     <div class="mact" style="flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:8px">
       <button class="btn btn-g" onclick="document.getElementById('email-modal').classList.remove('show')">Cancel</button>
@@ -1525,6 +1540,9 @@ const SECS = {
     <div class="srow"><div><div class="srl">Materials buffer</div><div class="srd">Auto-applied to all material subtotals</div></div><input class="sinput" value="10%"></div>
     <div class="srow"><div><div class="srl">Military veteran discount</div><div class="srd">Applied when toggled on a quote — off Labor &amp; Materials</div></div><input class="sinput" value="10%"></div>
     <div class="srow"><div><div class="srl">Quote validity period</div></div><input class="sinput" value="30 days"></div>
+    <div style="margin:18px 0 6px 0;padding-top:14px;border-top:1px solid var(--border);font-size:12px;font-weight:600;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">Payment Processing</div>
+    <div class="srow"><div><div class="srl">Payment processing buffer (%)</div><div class="srd">Added to every new quote as a separate line so card payments break even. <strong>Direct jobs only</strong> — not applied to Qmerit, Electrum, or Treehouse (those platforms pay us directly). Existing quotes keep their current value.</div></div><input class="sinput" id="set-payment-buffer" type="number" step="0.1" min="0" max="10" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().paymentBuffer==='number') ? getPrefs().paymentBuffer : 3}"></div>
+    <div class="srow"><div><div class="srl">Non-card discount (%)</div><div class="srd">Shown on direct-job quote PDFs as the ACH / check / Zelle savings vs the card price.</div></div><input class="sinput" id="set-noncard-discount" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().nonCardDiscount==='number') ? getPrefs().nonCardDiscount : 2}"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Jurisdictions':`<div class="stitle">Special Jurisdictions</div><div class="sdesc">Jobs here auto-get adjusted permit fee and in-person inspection flag.</div>
@@ -1595,7 +1613,21 @@ function renderUsers() {
 // account (see ALLOWED_EMAIL_DOMAINS in _onMSALSuccess). Password changes are
 // handled at https://myaccount.microsoft.com — there is no local password.
 
-function saveSets() { toast('Settings saved','success'); }
+function saveSets() {
+  const p = getPrefs();
+  const pb = document.getElementById('set-payment-buffer');
+  const nd = document.getElementById('set-noncard-discount');
+  if (pb) {
+    const v = parseFloat(pb.value);
+    if (!isNaN(v) && v >= 0 && v <= 10) p.paymentBuffer = v;
+  }
+  if (nd) {
+    const v = parseFloat(nd.value);
+    if (!isNaN(v) && v >= 0 && v <= 5) p.nonCardDiscount = v;
+  }
+  savePrefs(p);
+  toast('Settings saved','success');
+}
 
 // ── PHOTOS ──
 function selTab(el, cat) {
@@ -1913,18 +1945,20 @@ function renderCustomersPage() {
   wrap.innerHTML = `<div class="cust-grid">${custs.map(c=>{
     const jc = leads.filter(l=>l.customerId===c.id).length;
     const addr = [c.street,c.city,c.state].filter(Boolean).join(', ')||'No address';
+    const isCom = c.propertyType==='commercial';
+    const biz = isCom && c.businessName ? c.businessName : '';
     return `<div class="cust-card" onclick="openCustomerDetail('${c.id}')">
       <div class="cust-card-top">
         <div class="cav">${custInitials(c)}</div>
-        <div>
-          <div class="cust-name">${custFullName(c)}</div>
-          <div class="cust-meta">${c.email||c.phone||'No contact info'}</div>
+        <div style="min-width:0;flex:1">
+          <div class="cust-name">${biz || custFullName(c)}</div>
+          <div class="cust-meta">${biz ? custFullName(c) : (c.email||c.phone||'No contact info')}</div>
         </div>
       </div>
       <div class="cust-addr">${addr}</div>
       <div class="cust-foot">
         <span style="font-size:11px;color:var(--text-muted)">${jc} job${jc!==1?'s':''}</span>
-        <span style="font-size:11px;color:var(--text-muted)">${c.propertyType||'Residential'}</span>
+        <span style="font-size:11px;color:${isCom?'var(--blue)':'var(--text-muted)'};font-weight:${isCom?'500':'400'}">${isCom?'Commercial':'Residential'}</span>
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -1950,6 +1984,11 @@ function renderCustomerDetail(custId) {
   const leads = getLeads().filter(l=>l.customerId===custId);
   leads.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   const addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')||'—';
+  const isCom = c.propertyType==='commercial';
+  const biz = isCom && c.businessName ? c.businessName : '';
+  const personName = custFullName(c);
+  const headName = biz || personName || '—';
+  const subName = biz && personName ? personName : '';
   const wrap = document.getElementById('cust-detail-view');
   wrap.innerHTML = `
     <div class="det-hdr">
@@ -1957,15 +1996,23 @@ function renderCustomerDetail(custId) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3L5 8l5 5"/></svg>
         Customers
       </button>
-      <div class="det-name">${custFullName(c)}</div>
+      <div style="min-width:0;flex:1">
+        <div class="det-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span>${headName}</span>
+          ${isCom ? `<span style="font-size:11px;font-weight:500;color:var(--blue);background:var(--blue-dim);padding:2px 8px;border-radius:10px;letter-spacing:0.3px">COMMERCIAL</span>` : ''}
+        </div>
+        ${subName ? `<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">Contact: ${subName}</div>` : ''}
+      </div>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="openEditCustomer('${c.id}')">Edit</button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewLeadForCustomer('${c.id}')">+ New Job</button>
     </div>
     <div class="info-grid">
+      ${isCom && biz ? `<div class="info-card"><div class="info-lbl">Business Name</div><div class="info-val">${biz}</div></div>` : ''}
+      ${isCom && personName ? `<div class="info-card"><div class="info-lbl">Contact Name</div><div class="info-val">${personName}</div></div>` : ''}
       <div class="info-card"><div class="info-lbl">Email</div><div class="info-val">${c.email||'—'}</div></div>
       <div class="info-card"><div class="info-lbl">Phone</div><div class="info-val">${c.phone||'—'}</div></div>
       <div class="info-card" style="grid-column:1/-1"><div class="info-lbl">Address</div><div class="info-val">${addr}</div></div>
-      <div class="info-card"><div class="info-lbl">Property Type</div><div class="info-val">${c.propertyType||'Residential'}</div></div>
+      <div class="info-card"><div class="info-lbl">Property Type</div><div class="info-val">${isCom ? 'Commercial' : 'Residential'}</div></div>
       <div class="info-card"><div class="info-lbl">Notes</div><div class="info-val" style="white-space:pre-wrap;font-size:13px">${c.notes||'—'}</div></div>
     </div>
     <div class="card" style="margin-top:4px">
@@ -2376,10 +2423,14 @@ function showCustomerForm(c) {
     <div class="fsec">
       <div class="fsec-title">Details</div>
       <div class="fg"><div class="fl">Property Type</div>
-        <select class="fsel" id="cf-proptype">
+        <select class="fsel" id="cf-proptype" onchange="_toggleCommercialFields()">
           <option value="residential"${(c?.propertyType||'residential')==='residential'?' selected':''}>Residential</option>
           <option value="commercial"${c?.propertyType==='commercial'?' selected':''}>Commercial</option>
         </select>
+      </div>
+      <div class="fg" id="cf-biz-wrap" style="${c?.propertyType==='commercial'?'':'display:none'}">
+        <div class="fl">Business Name</div>
+        <input class="fi" id="cf-biz" value="${(c?.businessName||'').replace(/"/g,'&quot;')}" placeholder="e.g. Seay Construction LLC">
       </div>
       <div class="fg"><div class="fl">Notes</div><textarea class="fta" id="cf-notes" placeholder="Any notes about this customer...">${c?.notes||''}</textarea></div>
     </div>
@@ -2392,10 +2443,24 @@ function showCustomerForm(c) {
   setupAddrAutocomplete('cf-street','cf-city','cf-state','cf-zip');
 }
 
+function _toggleCommercialFields(){
+  const sel = document.getElementById('cf-proptype');
+  const wrap = document.getElementById('cf-biz-wrap');
+  if (!sel || !wrap) return;
+  wrap.style.display = sel.value === 'commercial' ? '' : 'none';
+}
+
 function saveCustomer() {
   const fn = document.getElementById('cf-fn').value.trim();
   const ln = document.getElementById('cf-ln').value.trim();
-  if (!fn && !ln) { toast('Please enter a name','error'); return; }
+  const biz = (document.getElementById('cf-biz')?.value||'').trim();
+  const propType = document.getElementById('cf-proptype').value;
+  // Allow commercial customers to be saved with a business name even if no
+  // personal contact name is provided (e.g. the only contact is "Accounts
+  // Payable" and we don't know a real person yet).
+  if (!fn && !ln && !(propType==='commercial' && biz)) {
+    toast('Please enter a contact name or business name','error'); return;
+  }
   const id = document.getElementById('cf-id').value || ('cust-'+Date.now());
   upsertCustomer({
     id, firstName:fn, lastName:ln,
@@ -2405,7 +2470,8 @@ function saveCustomer() {
     city: document.getElementById('cf-city').value,
     state: document.getElementById('cf-state').value||'VA',
     zip: document.getElementById('cf-zip').value,
-    propertyType: document.getElementById('cf-proptype').value,
+    propertyType: propType,
+    businessName: propType==='commercial' ? biz : '',
     notes: document.getElementById('cf-notes').value
   });
   closeDrawer();
@@ -2421,33 +2487,49 @@ function doGlobalSearch(q) {
   const ql = q.toLowerCase();
   const custs = getCustomers().filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
+    (c.businessName||'').toLowerCase().includes(ql)||
     (c.email||'').toLowerCase().includes(ql)||
     (c.phone||'').toLowerCase().includes(ql)
   ).slice(0,4);
-  const leads = getLeads().filter(l=>
-    l.id.toLowerCase().includes(ql)||
-    (l.siteStreet||'').toLowerCase().includes(ql)||
-    (l.siteCity||'').toLowerCase().includes(ql)||
-    (l.customerName||'').toLowerCase().includes(ql)||
-    (l.description||'').toLowerCase().includes(ql)
-  ).slice(0,4);
+  const leadCusts = getCustomers();
+  const leads = getLeads().filter(l=>{
+    const lc = leadCusts.find(x=>x.id===l.customerId);
+    const bn = lc && lc.propertyType==='commercial' ? (lc.businessName||'') : '';
+    return (
+      l.id.toLowerCase().includes(ql)||
+      (l.siteStreet||'').toLowerCase().includes(ql)||
+      (l.siteCity||'').toLowerCase().includes(ql)||
+      (l.customerName||'').toLowerCase().includes(ql)||
+      bn.toLowerCase().includes(ql)||
+      (l.description||'').toLowerCase().includes(ql)
+    );
+  }).slice(0,4);
 
   let html = '';
   if (custs.length) {
-    html += `<div class="sdrop-sec">Customers</div>` + custs.map(c=>
-      `<div class="sdrop-item" onclick="gotoCustomer('${c.id}')">
+    html += `<div class="sdrop-sec">Customers</div>` + custs.map(c=>{
+      const isCom = c.propertyType==='commercial';
+      const biz = isCom && c.businessName ? c.businessName : '';
+      const pn = custFullName(c);
+      const lbl = biz ? `${biz}${isCom?' <span style="font-size:10px;color:var(--blue);font-weight:500;margin-left:4px">• Commercial</span>':''}` : pn;
+      const sub = biz && pn ? `${pn} • ${c.phone||c.email||'No contact'}` : (c.phone||c.email||'No contact');
+      return `<div class="sdrop-item" onclick="gotoCustomer('${c.id}')">
         <div class="sdrop-ico"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg></div>
-        <div><div class="sdrop-lbl">${custFullName(c)}</div><div class="sdrop-sub">${c.phone||c.email||'No contact'}</div></div>
-      </div>`).join('');
+        <div><div class="sdrop-lbl">${lbl}</div><div class="sdrop-sub">${sub}</div></div>
+      </div>`;
+    }).join('');
   }
   if (leads.length) {
     const lCusts = getCustomers();
     html += `<div class="sdrop-sec">Jobs / Leads</div>` + leads.map(l=>{
       const c = lCusts.find(x=>x.id===l.customerId);
+      const isCom = c && c.propertyType==='commercial';
+      const biz = isCom && c.businessName ? c.businessName : '';
+      const who = biz || (c?custFullName(c):(l.customerName||'Unknown'));
       return `<div class="sdrop-item" onclick="gotoLead('${l.id}')">
         <div class="sdrop-ico"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v10H2z"/><path d="M5 4V3h6v1"/></svg></div>
         <div>
-          <div class="sdrop-lbl">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')}</div>
+          <div class="sdrop-lbl">${l.id} — ${who}${isCom?' <span style="font-size:10px;color:var(--blue);font-weight:500;margin-left:4px">• Commercial</span>':''}</div>
           <div class="sdrop-sub">${l.siteCity||''} ${stageChip(l.stage)}</div>
         </div>
       </div>`;
@@ -2648,6 +2730,9 @@ function startQuoteBuilder(){
   const qtype=document.querySelector('input[name="qt-type"]:checked')?.value||'quick';
   closeDrawer();
   const lead=getLead(leadId);
+  const _prefs = getPrefs();
+  const _isPlatformNew = ['Qmerit','Electrum','Treehouse'].includes(lead.source);
+  const _defaultBuffer = _isPlatformNew ? 0 : ((typeof _prefs.paymentBuffer === 'number') ? _prefs.paymentBuffer : 3);
   const nq={
     id:'qt-'+Date.now(), leadId, customerId:lead.customerId, source:lead.source, jobType:lead.jobType,
     type:qtype, status:'draft', permitFee: lead.permitFee || (lead.source==='Qmerit' ? 250 : 200),
@@ -2655,6 +2740,7 @@ function startQuoteBuilder(){
     qq:{panelLocation:'garage',addlDist:0,routingType:'surface',machineFt:50,mountType:'wall',tandemBreakers:0,difficultyFee:0,travelFee:0,travelFeeType:'baked',extras:[]},
     lines:[], laborHours:0, laborRate:160, rentals:[],
     scope:'', inclusions:'', exclusions:'', notes:'', quoteTotal:0,
+    paymentBuffer:_defaultBuffer,
   };
   upsertQuote(nq);
   openQuoteBuilder(nq.id);
@@ -2790,8 +2876,8 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Panel Location</div>
       <div class="fg"><div class="fl">Panel Location</div>
         <select class="fsel" id="qq-panel" onchange="onQQChange('${q.id}')">
-          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 10 ft) — $450</option>
-          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 10 ft) — $700</option>
+          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 10 ft) — $500</option>
+          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 10 ft) — $750</option>
         </select>
       </div>
     </div>
@@ -2894,6 +2980,13 @@ function renderQuickQuoteForm(q){
         <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
         <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
       </label>
+      ${['Qmerit','Electrum','Treehouse'].includes(q.source) ? '' : `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
+          <input class="fi" type="number" step="0.1" min="0" max="10" id="qq-buffer" style="width:120px" value="${(typeof q.paymentBuffer==='number')?q.paymentBuffer:3}" oninput="onQQBufferChange('${q.id}')">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Shown as a separate line on the customer quote. Set to 0 to disable for this job.</div>
+        </div>
+      </div>`}
     </div>
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
@@ -2960,7 +3053,11 @@ function onQQChange(qid){
   const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const quoteTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const _isPlatformQ = ['Qmerit','Electrum','Treehouse'].includes(q.source);
+  const paymentBuffer = _isPlatformQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
+  const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
     qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
@@ -2969,6 +3066,9 @@ function onQQChange(qid){
     laborAndMaterials:lm,
     veteranDiscount,
     qmeritFee,
+    preProcessingTotal,
+    paymentBuffer,
+    paymentProcessingFee,
     quoteTotal
   };
   upsertQuote(updated);
@@ -3037,6 +3137,14 @@ function addQQExtra(qid,eid,name,price){const q=getQuote(qid);if(!q)return;const
 function removeQQExtra(qid,idx){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras.splice(idx,1);upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function updateQQExtra(qid,idx,v){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras[idx]={...extras[idx],price:parseFloat(v)||0};upsertQuote({...q,qq:{...(q.qq||{}),extras}});onQQChange(qid);}
 function onQQScopeChange(qid){const v=document.getElementById('qq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
+function onQQBufferChange(qid){
+  const q=getQuote(qid); if(!q) return;
+  const el=document.getElementById('qq-buffer');
+  const raw=el?parseFloat(el.value):NaN;
+  const v=(!isNaN(raw) && raw>=0 && raw<=10) ? raw : 0;
+  upsertQuote({...q,paymentBuffer:v});
+  onQQChange(qid);
+}
 function pullLeadScope(qid){
   const q=getQuote(qid); if(!q) return;
   const lead=getLead(q.leadId); if(!lead?.scopeOfWork) return;
@@ -3152,6 +3260,13 @@ function renderDetailedQuoteForm(q){
         <input type="checkbox" id="dq-veteran" ${q.isVeteran?'checked':''} onchange="onDQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
         <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
       </label>
+      ${['Qmerit','Electrum','Treehouse'].includes(q.source) ? '' : `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
+          <input class="fi" type="number" step="0.1" min="0" max="10" id="dq-buffer" style="width:120px" value="${(typeof q.paymentBuffer==='number')?q.paymentBuffer:3}" oninput="onDQBufferChange('${q.id}')">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Shown as a separate line on the customer quote. Set to 0 to disable for this job.</div>
+        </div>
+      </div>`}
     </div>
     ${isQmerit?`<div class="qq-section">
       <div class="qq-title">Travel Fee <span style="font-size:11px;color:var(--text-muted);font-weight:400">(Qmerit only)</span></div>
@@ -3220,18 +3335,49 @@ function onDQChange(qid){
   const lmAfterDiscount=lm-veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const quoteTotal=lmAfterDiscount+qmeritFee+permitFee;
-  upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,quoteTotal});
+  const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const _isPlatformQ = ['Qmerit','Electrum','Treehouse'].includes(q.source);
+  const paymentBuffer = _isPlatformQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
+  const quoteTotal=preProcessingTotal+paymentProcessingFee;
+  upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
 }
 function onDQScopeChange(qid){const v=document.getElementById('dq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
+function onDQBufferChange(qid){
+  const q=getQuote(qid); if(!q) return;
+  const el=document.getElementById('dq-buffer');
+  const raw=el?parseFloat(el.value):NaN;
+  const v=(!isNaN(raw) && raw>=0 && raw<=10) ? raw : 0;
+  upsertQuote({...q,paymentBuffer:v});
+  onDQChange(qid);
+}
 function onDQIncChange(qid){const v=document.getElementById('dq-inc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,inclusions:v});}
 function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,exclusions:v});}
 
 // ── TOTALS & MARGIN ──
 function calcQuoteTotals(q){
   if(!q) return {};
-  return {matSubtotal:q.matSubtotal||0,matAllowance:q.matAllowance||0,matTotal:q.matTotal||0,laborTotal:q.laborTotal||0,rentalTotal:q.rentalTotal||0,laborAndMaterials:q.laborAndMaterials||0,veteranDiscount:q.veteranDiscount||0,qmeritFee:q.qmeritFee||0,permitFee:q.permitFee||0,quoteTotal:q.quoteTotal||0};
+  const buffer = (typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0;
+  const lmAfterDiscount = (q.laborAndMaterials||0) - (q.veteranDiscount||0);
+  const preProcessingTotal = lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0);
+  const paymentProcessingFee = Math.round(preProcessingTotal * buffer / 100 * 100) / 100;
+  const finalTotal = preProcessingTotal + paymentProcessingFee;
+  return {
+    matSubtotal:q.matSubtotal||0,
+    matAllowance:q.matAllowance||0,
+    matTotal:q.matTotal||0,
+    laborTotal:q.laborTotal||0,
+    rentalTotal:q.rentalTotal||0,
+    laborAndMaterials:q.laborAndMaterials||0,
+    veteranDiscount:q.veteranDiscount||0,
+    qmeritFee:q.qmeritFee||0,
+    permitFee:q.permitFee||0,
+    preProcessingTotal,
+    paymentBuffer: buffer,
+    paymentProcessingFee,
+    quoteTotal: finalTotal
+  };
 }
 function renderTotalsBox(q,totals,isAdmin,isQmerit){
   const rows=[];
@@ -3254,8 +3400,31 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     rows.push(`<div class="tot-row" style="color:var(--green)"><span>− Military Veteran Discount</span><span class="tot-num">−${fmt$(totals.veteranDiscount)}</span></div>`);
   }
   rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
+  if((totals.paymentProcessingFee||0) > 0){
+    rows.push(`<div class="tot-row"><span>Payment Processing (${totals.paymentBuffer}%)</span><span class="tot-num">${fmt$(totals.paymentProcessingFee)}</span></div>`);
+  }
   rows.push(`<div class="tot-row total"><span>Quote Total</span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
-  return `<div class="tot-box">${rows.join('')}</div>`;
+  // Payment options: non-card discount (from settings, default 2%)
+  // Only show when a payment buffer is in effect — otherwise we'd give away margin we didn't bake in.
+  const _qtBox = totals.quoteTotal||0;
+  const _prefsBox = (typeof getPrefs === 'function') ? getPrefs() : {};
+  const _ncPctBox = (typeof _prefsBox.nonCardDiscount === 'number') ? _prefsBox.nonCardDiscount : 2;
+  const _discAmtBox = Math.round(_qtBox * (_ncPctBox/100) * 100) / 100;
+  const _discTotalBox = _qtBox - _discAmtBox;
+  let payHtml = '';
+  if(_qtBox > 0 && _ncPctBox > 0 && (totals.paymentBuffer||0) > 0){
+    payHtml = `<div style="margin-top:10px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:6px">
+      <div style="font-size:10.5px;font-weight:600;letter-spacing:0.4px;color:var(--green);text-transform:uppercase;margin-bottom:6px">Payment Options</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--text-primary);padding:2px 0">
+        <span>By credit card</span><span style="font-family:var(--mono)">${fmt$(_qtBox)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;color:var(--green);padding:2px 0">
+        <span>By ACH, check, or Zelle</span><span style="font-family:var(--mono)">${fmt$(_discTotalBox)}</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Save ${fmt$(_discAmtBox)} (${_ncPctBox}%) by paying via ACH, check, or Zelle</div>
+    </div>`;
+  }
+  return `<div class="tot-box">${rows.join('')}${payHtml}</div>`;
 }
 function renderMarginBox(q,totals,isQmerit){
   const net=(totals.laborAndMaterials||0)-(isQmerit?totals.qmeritFee||0:0);
@@ -3539,6 +3708,13 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   document.getElementById('em-subject').value  = subject;
   document.getElementById('em-body').value     = body;
 
+  // Quote-email flow uses the quote-checkbox widget, not the raw-file uploader.
+  // Hide the file-upload widget and clear any stale selections from a prior
+  // custom-email session.
+  _customEmailFiles = [];
+  const fuEl0 = document.getElementById('em-file-upload');
+  if (fuEl0) fuEl0.style.display = 'none';
+
   // Build the attachment checklist — all quotes for this lead, most-recent first.
   // Default: only the current quote is checked — UNLESS this is a platform lead,
   // in which case the platform itself delivers the quote to the customer and we
@@ -3643,6 +3819,21 @@ async function sendQuoteEmail(){
     });
     if (!firstFilename) firstFilename = res.filename;
   }
+  // Append any user-selected files from the custom-email uploader. These are
+  // already base64-encoded up front (see addCustomEmailFiles) so we can ship
+  // them straight to Graph.
+  if (isCustomSend && _customEmailFiles && _customEmailFiles.length) {
+    for (const f of _customEmailFiles) {
+      if (!f.b64) continue;
+      attachments.push({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: f.name,
+        contentType: f.type || 'application/octet-stream',
+        contentBytes: f.b64
+      });
+      if (!firstFilename) firstFilename = f.name;
+    }
+  }
   if (attachments.length === 0 && attachmentsRequired) {
     toast('Could not generate any PDFs','error');
     if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
@@ -3722,15 +3913,95 @@ async function sendQuoteEmail(){
     checkedIds.forEach(cid => previewQuotePDF(cid));
     const mailto = `mailto:${encodeURIComponent(toEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
-    toast(checkedIds.length === 0
-      ? '✉ Outlook opened — no PDFs to attach for this platform courtesy email.'
-      : `📎 Attach ${checkedIds.length} PDF${checkedIds.length>1?'s':''} from your Downloads folder, then hit Send!`,
-      'success');
+    let fbMsg;
+    if (isCustomSend) {
+      const n = _customEmailFiles ? _customEmailFiles.length : 0;
+      fbMsg = n
+        ? `✉ Outlook opened — drag your ${n} file${n>1?'s':''} into the draft before sending (mailto can't carry attachments).`
+        : '✉ Outlook opened — fill in and send.';
+    } else {
+      fbMsg = checkedIds.length === 0
+        ? '✉ Outlook opened — no PDFs to attach for this platform courtesy email.'
+        : `📎 Attach ${checkedIds.length} PDF${checkedIds.length>1?'s':''} from your Downloads folder, then hit Send!`;
+    }
+    toast(fbMsg, 'success');
     document.getElementById('email-modal').classList.remove('show');
     _pendingEmail = null;
     returnToLead();
   }
 }
+// ── CUSTOM (AD-HOC) EMAIL ATTACHMENTS ──
+// Tracks files the user has picked for the custom email modal. Each entry is
+// {name, size, type, b64} — b64 is the base64-encoded file contents, read
+// once up front so the send path stays synchronous and fast.
+let _customEmailFiles = [];
+// 30 MB total (Graph sendMail caps around 35 MB per message after base64 and
+// envelope overhead — 30 MB gives a safety margin).
+const _MAX_CUSTOM_EMAIL_BYTES = 30 * 1024 * 1024;
+
+function _fmtFileSize(bytes){
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/(1024*1024)).toFixed(1) + ' MB';
+}
+
+function addCustomEmailFiles(fileList){
+  if (!fileList || !fileList.length) return;
+  const current = _customEmailFiles.reduce((s,f) => s + (f.size||0), 0);
+  let running = current;
+  const toRead = [];
+  for (const f of fileList) {
+    if (running + f.size > _MAX_CUSTOM_EMAIL_BYTES) {
+      toast(`"${f.name}" would exceed the 30 MB total limit — skipped`, 'warning');
+      continue;
+    }
+    running += f.size;
+    toRead.push(f);
+  }
+  if (!toRead.length) return;
+  // Read each file as base64; push once complete. Render progressively.
+  toRead.forEach(f => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // reader.result looks like "data:<mime>;base64,AAAA..."
+      const b64 = (reader.result||'').toString().split(',')[1] || '';
+      _customEmailFiles.push({name:f.name, size:f.size, type:f.type||'application/octet-stream', b64});
+      renderCustomEmailFiles();
+    };
+    reader.onerror = () => toast(`Could not read "${f.name}"`,'error');
+    reader.readAsDataURL(f);
+  });
+  // Reset the file input so picking the same file twice re-fires onchange.
+  const fi = document.getElementById('em-file-input');
+  if (fi) fi.value = '';
+}
+
+function removeCustomEmailFile(idx){
+  _customEmailFiles.splice(idx, 1);
+  renderCustomEmailFiles();
+}
+
+function renderCustomEmailFiles(){
+  const listEl = document.getElementById('em-file-list');
+  const sizeEl = document.getElementById('em-file-size');
+  if (!listEl) return;
+  const total = _customEmailFiles.reduce((s,f) => s + (f.size||0), 0);
+  if (sizeEl) sizeEl.textContent = _customEmailFiles.length
+    ? `${_customEmailFiles.length} file${_customEmailFiles.length>1?'s':''} · ${_fmtFileSize(total)}`
+    : '0 files';
+  if (!_customEmailFiles.length) {
+    listEl.innerHTML = `<div style="color:var(--text-muted);font-size:11px;padding:4px 0">No files attached yet.</div>`;
+    return;
+  }
+  listEl.innerHTML = _customEmailFiles.map((f,i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:var(--text-primary)">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name.replace(/</g,'&lt;')}</span>
+      <span style="color:var(--text-muted);font-size:11px;flex-shrink:0">${_fmtFileSize(f.size)}</span>
+      <button type="button" onclick="removeCustomEmailFile(${i})" style="background:transparent;border:0;color:var(--text-muted);cursor:pointer;padding:2px 6px;font-size:14px;line-height:1" title="Remove">×</button>
+    </div>`).join('');
+}
+
 // ── CUSTOM (AD-HOC) EMAIL FROM THE CUSTOMER PAGE ──
 // Opens the existing email modal pre-filled with the customer's address, a
 // generic subject ("Message from GreenKey"), and just the signature in the
@@ -3771,17 +4042,23 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   document.getElementById('em-subject').value = subject;
   document.getElementById('em-body').value    = body;
 
-  // Custom emails don't need a PDF. Replace the attachment list with a short
-  // note so the UI doesn't look broken. User can still manually attach via
-  // their mail client if they really need to.
+  // Custom emails don't auto-attach a quote PDF. Show a short note in the
+  // quote-attachment widget and reveal the file-upload widget below it.
   const listEl = document.getElementById('em-attach-list');
   if (listEl) {
     listEl.innerHTML = `<div style="color:var(--text-muted);font-size:11.5px;line-height:1.45">
-      Ad-hoc email — no quote attached. If you need to attach something, send the
-      email first and then forward with an attachment from your Outlook Sent folder.
+      Ad-hoc email — no quote auto-attached. Use the "File Attachments" box below
+      to attach any photos, PDFs, or docs you'd like to send.
     </div>`;
   }
   updateEmailAttachCount();
+  // Reset and reveal the file-upload widget. Clear any files from a prior send.
+  _customEmailFiles = [];
+  const fuEl = document.getElementById('em-file-upload');
+  if (fuEl) fuEl.style.display = '';
+  const fiEl = document.getElementById('em-file-input');
+  if (fiEl) fiEl.value = '';
+  renderCustomEmailFiles();
 
   const fromEl = document.getElementById('em-from');
   let fromEmail = '';
@@ -3920,7 +4197,18 @@ function pdfCustomerBlock(doc,cust,lead,y){
   const DARK=[15,17,23],GRAY=[100,110,130];
   doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('QUOTE FOR:',36,y);y+=13;
   if(cust){
-    doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(custFullName(cust),36,y);y+=14;
+    const _isCom=cust.propertyType==='commercial';
+    const _biz=_isCom && cust.businessName ? cust.businessName : '';
+    const _person=custFullName(cust);
+    if(_biz){
+      doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_biz,36,y);y+=14;
+      if(_person){
+        doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
+        doc.text('Attn: '+_person,36,y);y+=12;
+      }
+    } else if(_person){
+      doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_person,36,y);y+=14;
+    }
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
     if(cust.phone){doc.text(cust.phone,36,y);y+=12;}
     if(cust.email){doc.text(cust.email,36,y);y+=12;}
@@ -3972,13 +4260,42 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
   doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('QUOTE SUMMARY',36,y);y+=12;
+  const _totalsPDF = calcQuoteTotals(q);
   const _isQmeritPDF = q.source==='Qmerit';
-  const _lmPDF = _isQmeritPDF ? (q.laborAndMaterials||0)+(q.qmeritFee||0) : (q.laborAndMaterials||0);
+  const _lmPDF = _isQmeritPDF ? (_totalsPDF.laborAndMaterials||0)+(_totalsPDF.qmeritFee||0) : (_totalsPDF.laborAndMaterials||0);
   const _lmLabel = _isQmeritPDF ? 'Total Installation Services' : 'Labor & Materials';
   const _pdfRows = [{desc:_lmLabel,amt:_lmPDF}];
-  if((q.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(q.veteranDiscount||0)});
-  _pdfRows.push({desc:'Permitting',amt:q.permitFee||0});
-  y=pdfTable(doc,y,W,_pdfRows,'TOTAL',q.quoteTotal||0);
+  if((_totalsPDF.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(_totalsPDF.veteranDiscount||0)});
+  _pdfRows.push({desc:'Permitting',amt:_totalsPDF.permitFee||0});
+  if((_totalsPDF.paymentProcessingFee||0) > 0){
+    _pdfRows.push({desc:`Payment Processing (${_totalsPDF.paymentBuffer}%)`,amt:_totalsPDF.paymentProcessingFee});
+  }
+  y=pdfTable(doc,y,W,_pdfRows,'TOTAL',_totalsPDF.quoteTotal||0);
+  // Payment options block — show ACH/Check/Zelle discounted price
+  // Only shown when a buffer is baked in, otherwise we'd give away margin.
+  const _qt = _totalsPDF.quoteTotal||0;
+  const _prefsPDF = (typeof getPrefs === 'function') ? getPrefs() : {};
+  const _ncPctPDF = (typeof _prefsPDF.nonCardDiscount === 'number') ? _prefsPDF.nonCardDiscount : 2;
+  const _discAmt = Math.round(_qt * (_ncPctPDF/100) * 100) / 100;
+  const _discTotal = _qt - _discAmt;
+  if(_qt > 0 && _ncPctPDF > 0 && (_totalsPDF.paymentBuffer||0) > 0){
+    const _boxH = 62;
+    doc.setFillColor(235,250,225);
+    doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
+    doc.setDrawColor(...GREEN);doc.setLineWidth(0.75);
+    doc.roundedRect(36,y,W-72,_boxH,4,4,'S');
+    doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);
+    doc.text('PAYMENT OPTIONS',46,y+14);
+    doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(...DARK);
+    doc.text('By credit card',46,y+30);
+    doc.text(fmt$(_qt),W-46,y+30,{align:'right'});
+    doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(...GREEN);
+    doc.text('By ACH, check, or Zelle',46,y+45);
+    doc.text(fmt$(_discTotal),W-46,y+45,{align:'right'});
+    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
+    doc.text(`Save ${fmt$(_discAmt)} (${_ncPctPDF}%) by paying via ACH, check, or Zelle`,46,y+57);
+    y += _boxH + 10;
+  }
   // inclusions/exclusions
   if(q.inclusions||q.exclusions){
     const col=(W-88)/2;
@@ -4039,10 +4356,14 @@ function generateInvoicePDF(q,cust,lead,invNum){
     doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
   doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SERVICES PROVIDED',36,y);y+=12;
-  const _invRows=[{desc:'Labor & Materials',amt:q.laborAndMaterials||0}];
-  if((q.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(q.veteranDiscount||0)});
-  _invRows.push({desc:'Permitting',amt:q.permitFee||0});
-  y=pdfTable(doc,y,W,_invRows,'TOTAL DUE',q.quoteTotal||0);
+  const _totalsInv = calcQuoteTotals(q);
+  const _invRows=[{desc:'Labor & Materials',amt:_totalsInv.laborAndMaterials||0}];
+  if((_totalsInv.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(_totalsInv.veteranDiscount||0)});
+  _invRows.push({desc:'Permitting',amt:_totalsInv.permitFee||0});
+  if((_totalsInv.paymentProcessingFee||0) > 0){
+    _invRows.push({desc:`Payment Processing (${_totalsInv.paymentBuffer}%)`,amt:_totalsInv.paymentProcessingFee});
+  }
+  y=pdfTable(doc,y,W,_invRows,'TOTAL DUE',_totalsInv.quoteTotal||0);
   if(q.notes){
     doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('NOTES',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
@@ -4501,14 +4822,22 @@ function renderJobDetail(id) {
   </div>`;
 
   // ── Customer & Site ──
+  const _custIsCom = cust && cust.propertyType === 'commercial';
+  const _custBiz = _custIsCom && cust.businessName ? cust.businessName : '';
+  const _custHeaderLabel = _custBiz ? 'Business' : 'Customer';
+  const _custHeaderValue = _custBiz || custName;
   const custSec = `<div class="jd-sec">
-    <div class="jd-sh"><div class="jd-st">Customer & Site</div></div>
+    <div class="jd-sh">
+      <div class="jd-st">Customer & Site</div>
+      ${_custIsCom ? `<span style="font-size:10px;font-weight:500;color:var(--blue);background:var(--blue-dim);padding:2px 8px;border-radius:10px;letter-spacing:0.4px">COMMERCIAL</span>` : ''}
+    </div>
     <div class="jd-sb">
       <div class="jd-fg">
-        <div class="jd-f"><div class="jd-fl">Customer</div><div class="jd-fv" style="font-weight:500">${custName}</div></div>
-        <div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>
+        <div class="jd-f"><div class="jd-fl">${_custHeaderLabel}</div><div class="jd-fv" style="font-weight:500">${_custHeaderValue}</div></div>
+        ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv">${custName}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
         <div class="jd-f"><div class="jd-fl">Phone</div><div class="jd-fv">${cust?.phone||lead.customerPhone||'—'}</div></div>
         <div class="jd-f"><div class="jd-fl">Email</div><div class="jd-fv">${cust?.email||lead.customerEmail||'—'}</div></div>
+        ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
       </div>
       <div class="jd-f" style="margin-top:6px"><div class="jd-fl">Site Address</div><div class="jd-fv">${addr}</div></div>
       ${lead.specialJurisdiction?`<div style="margin-top:8px"><span class="chip chip-flag">⚠ ${lead.jurisdiction} — $500 permit / In-person inspection required</span></div>`:''}
