@@ -16,8 +16,25 @@
     --red:#e74c3c;--red-dim:rgba(231,76,60,0.12);
     --blue:#3498db;--blue-dim:rgba(52,152,219,0.12);
     --purple:#9b59b6;--purple-dim:rgba(155,89,182,0.12);
+    --btn-label:#0f1117;
+    --shadow-drop:0 8px 24px rgba(0,0,0,0.4);
     --sw:220px;--hh:56px;--r:8px;--rl:12px;
     --font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--t:0.15s ease;
+  }
+  /* Light theme — flips only the neutral palette + slightly darkens accent
+     colors for contrast on white. Green buttons keep a dark label so the
+     brand green stays legible in both themes. */
+  html[data-theme="light"] {
+    --bg-base:#f4f6fa;--bg-surface:#ffffff;--bg-elevated:#f9fafc;--bg-hover:#eef1f6;
+    --border:#dfe4ec;--border-light:#c9d0db;
+    --green:#27ae60;--green-dark:#1f8a4d;--green-dim:rgba(39,174,96,0.10);
+    --text-primary:#1a1f2a;--text-secondary:#4e5a6e;--text-muted:#8892a4;
+    --amber:#b6770a;--amber-dim:rgba(182,119,10,0.10);
+    --red:#c0392b;--red-dim:rgba(192,57,43,0.10);
+    --blue:#2672b0;--blue-dim:rgba(38,114,176,0.10);
+    --purple:#7d449b;--purple-dim:rgba(125,68,155,0.10);
+    --btn-label:#ffffff;
+    --shadow-drop:0 4px 14px rgba(15,20,35,0.10);
   }
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:var(--font);background:var(--bg-base);color:var(--text-primary);min-height:100vh;display:flex;overflow:hidden}
@@ -1463,8 +1480,10 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Fees & Permits':`<div class="stitle">Fees & Permits</div><div class="sdesc">Default fees applied to quotes. Editable per job.</div>
-    <div class="srow"><div><div class="srl">Standard permit fee</div><div class="srd">Applied to all jobs by default</div></div><input class="sinput" value="$250"></div>
+    <div class="srow"><div><div class="srl">Standard permit fee (Direct / Electrum / Treehouse)</div><div class="srd">Applied to all non-Qmerit jobs by default</div></div><input class="sinput" value="$200"></div>
+    <div class="srow"><div><div class="srl">Qmerit permit fee</div><div class="srd">Applied to Qmerit jobs</div></div><input class="sinput" value="$250"></div>
     <div class="srow"><div><div class="srl">Materials buffer</div><div class="srd">Auto-applied to all material subtotals</div></div><input class="sinput" value="10%"></div>
+    <div class="srow"><div><div class="srl">Military veteran discount</div><div class="srd">Applied when toggled on a quote — off Labor &amp; Materials</div></div><input class="sinput" value="10%"></div>
     <div class="srow"><div><div class="srl">Quote validity period</div></div><input class="sinput" value="30 days"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
@@ -2209,7 +2228,7 @@ function saveLead() {
   const j = checkJurisdiction(city);
   const specialJurisdiction = !!j;
   const jurisdiction = j ? j.name : '';
-  const permitFee = j ? 500 : 250;
+  const permitFee = j ? 500 : (source==='Qmerit' ? 250 : 200);
   const inspectionRequired = !!j;
 
   // Qmerit fields
@@ -2443,7 +2462,7 @@ function toast(msg, type='success') {
 const QK='gk_quotes', MK='gk_materials';
 
 function getQQPricing(){
-  return {garage:450,interior:700,addl10Surface:150,handDig10:200,machineTrenchBase:650,machineTrench10:150,tandemBreaker:40,post:150,standardPermit:250,specialPermit:500,materialsBuffer:0.10,qmeritFlat:199,qmeritPct:0.12,nema1450Inside:50,nema1450Outside:100,travelPerBlock:80,travelFreeMin:30};
+  return {garage:500,interior:750,addl10Surface:150,handDig10:200,machineTrenchBase:650,machineTrench10:150,tandemBreaker:40,post:150,standardPermit:200,qmeritPermit:250,specialPermit:500,materialsBuffer:0.10,qmeritFlat:199,qmeritPct:0.12,nema1450Inside:50,nema1450Outside:100,travelPerBlock:80,travelFreeMin:30,veteranDiscountPct:0.10};
 }
 
 function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
@@ -2591,7 +2610,7 @@ function startQuoteBuilder(){
   const lead=getLead(leadId);
   const nq={
     id:'qt-'+Date.now(), leadId, customerId:lead.customerId, source:lead.source, jobType:lead.jobType,
-    type:qtype, status:'draft', permitFee:lead.permitFee||250,
+    type:qtype, status:'draft', permitFee: lead.permitFee || (lead.source==='Qmerit' ? 250 : 200),
     specialJurisdiction:lead.specialJurisdiction||false, jurisdiction:lead.jurisdiction||'',
     qq:{panelLocation:'garage',addlDist:0,routingType:'surface',machineFt:50,mountType:'wall',tandemBreakers:0,difficultyFee:0,travelFee:0,travelFeeType:'baked',extras:[]},
     lines:[], laborHours:0, laborRate:160, rentals:[],
@@ -2812,13 +2831,29 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Permit</div>
       <div class="frow2">
         <div class="fg"><div class="fl">Permit Fee ($)</div>
-          <input class="fi" type="number" id="qq-permit" value="${q.permitFee||250}" oninput="onQQChange('${q.id}')">
+          <input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
         </div>
         <div class="fg"><div class="fl">Jurisdiction</div>
           <input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7">
         </div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Overrides &amp; Discounts</div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px">Use these when you've agreed to a number verbally. Leave blank for computed values.</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Override Base Install ($)</div>
+          <input class="fi" type="number" id="qq-install-override" placeholder="auto" value="${q.qq?.installOverride!=null?q.qq.installOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">Override L&amp;M Subtotal ($)</div>
+          <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+      </label>
     </div>
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
@@ -2853,9 +2888,18 @@ function onQQChange(qid){
   // Update travel calc display
   const tCalcEl=document.getElementById('qq-travel-calc');
   if(tCalcEl) tCalcEl.textContent='$'+travelAdder;
-  const permitFee=parseFloat(document.getElementById('qq-permit')?.value)||(q.specialJurisdiction?500:250);
+  const permitFee=parseFloat(document.getElementById('qq-permit')?.value)||(q.specialJurisdiction?500:(q.source==='Qmerit'?250:200));
+  // Editable overrides (empty string = use computed value)
+  const installOverrideRaw = document.getElementById('qq-install-override')?.value;
+  const installOverride    = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
+  const lmOverrideRaw      = document.getElementById('qq-lm-override')?.value;
+  const lmOverride         = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
+  const isVeteran          = !!document.getElementById('qq-veteran')?.checked;
   const runSegs=q.qq?.runSegs||[];
-  let lm=panelLoc==='garage'?p.garage:p.interior;
+  const baseInstall = installOverride!=null && !isNaN(installOverride)
+    ? installOverride
+    : (panelLoc==='garage'?p.garage:p.interior);
+  let lm = baseInstall;
   runSegs.forEach(seg=>{
     const ft=Math.max(parseInt(seg.ft)||0,0);
     if(seg.type==='surface') lm+=(ft/10)*p.addl10Surface;
@@ -2869,10 +2913,24 @@ function onQQChange(qid){
   lm+=travelAdder;
   (q.qq?.extras||[]).forEach(ex=>{lm+=parseFloat(ex.price)||0;});
   if(travelFeeType==='baked'&&travelFee>0) lm+=travelFee;
+  // If a manual L&M total override is present, it replaces the computed lm.
+  if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
+  // Veteran discount is a negative adjustment shown on the quote PDF.
+  const veteranDiscount = isVeteran ? Math.round(lm * (p.veteranDiscountPct||0.10) * 100) / 100 : 0;
+  const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
-  const quoteTotal=lm+qmeritFee+permitFee;
-  const updated={...q,qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[]},permitFee,laborAndMaterials:lm,qmeritFee,quoteTotal};
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
+  const quoteTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const updated={
+    ...q,
+    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
+    permitFee,
+    baseInstall,
+    laborAndMaterials:lm,
+    veteranDiscount,
+    qmeritFee,
+    quoteTotal
+  };
   upsertQuote(updated);
   refreshQBSidebar(qid);
 }
@@ -3043,10 +3101,17 @@ function renderDetailedQuoteForm(q){
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${q.permitFee||250}" oninput="onDQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onDQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Discount</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="dq-veteran" ${q.isVeteran?'checked':''} onchange="onDQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+      </label>
     </div>
     ${isQmerit?`<div class="qq-section">
       <div class="qq-title">Travel Fee <span style="font-size:11px;color:var(--text-muted);font-weight:400">(Qmerit only)</span></div>
@@ -3099,9 +3164,10 @@ function onDQChange(qid){
   const p=getQQPricing();
   const laborHours=parseFloat(document.getElementById('dq-hours')?.value)||q.laborHours||0;
   const laborRate=parseFloat(document.getElementById('dq-rate')?.value)||q.laborRate||160;
-  const permitFee=parseFloat(document.getElementById('dq-permit')?.value)||q.permitFee||250;
+  const permitFee=parseFloat(document.getElementById('dq-permit')?.value)||q.permitFee||(q.source==='Qmerit'?250:200);
   const travelFee=parseFloat(document.getElementById('dq-travel')?.value)||q.travelFee||0;
   const travelFeeType=document.getElementById('dq-travtype')?.value||q.travelFeeType||'baked';
+  const isVeteran=!!document.getElementById('dq-veteran')?.checked;
   const lines=q.lines||[], rentals=q.rentals||[];
   const matSub=lines.reduce((s,ln)=>s+calcLine(ln),0);
   const matAllowance=matSub*p.materialsBuffer;
@@ -3110,10 +3176,12 @@ function onDQChange(qid){
   const rentalTotal=rentals.reduce((s,r)=>s+(parseFloat(r.cost)||0),0);
   const travelBaked=travelFeeType==='baked'?travelFee:0;
   const lm=laborTotal+matTotal+rentalTotal+travelBaked;
+  const veteranDiscount=isVeteran?Math.round(lm*(p.veteranDiscountPct||0.10)*100)/100:0;
+  const lmAfterDiscount=lm-veteranDiscount;
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
-  const quoteTotal=lm+qmeritFee+permitFee;
-  upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,qmeritFee,quoteTotal});
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
+  const quoteTotal=lmAfterDiscount+qmeritFee+permitFee;
+  upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,quoteTotal});
   refreshQBSidebar(qid);
 }
 function onDQScopeChange(qid){const v=document.getElementById('dq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
@@ -3123,7 +3191,7 @@ function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||''
 // ── TOTALS & MARGIN ──
 function calcQuoteTotals(q){
   if(!q) return {};
-  return {matSubtotal:q.matSubtotal||0,matAllowance:q.matAllowance||0,matTotal:q.matTotal||0,laborTotal:q.laborTotal||0,rentalTotal:q.rentalTotal||0,laborAndMaterials:q.laborAndMaterials||0,qmeritFee:q.qmeritFee||0,permitFee:q.permitFee||0,quoteTotal:q.quoteTotal||0};
+  return {matSubtotal:q.matSubtotal||0,matAllowance:q.matAllowance||0,matTotal:q.matTotal||0,laborTotal:q.laborTotal||0,rentalTotal:q.rentalTotal||0,laborAndMaterials:q.laborAndMaterials||0,veteranDiscount:q.veteranDiscount||0,qmeritFee:q.qmeritFee||0,permitFee:q.permitFee||0,quoteTotal:q.quoteTotal||0};
 }
 function renderTotalsBox(q,totals,isAdmin,isQmerit){
   const rows=[];
@@ -3141,6 +3209,9 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     if(isAdmin) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ Qmerit Admin Fee <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.qmeritFee)}</span></div>`);
   } else {
     rows.push(`<div class="tot-row"><span>Labor &amp; Materials</span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
+  }
+  if((totals.veteranDiscount||0)>0){
+    rows.push(`<div class="tot-row" style="color:var(--green)"><span>− Military Veteran Discount</span><span class="tot-num">−${fmt$(totals.veteranDiscount)}</span></div>`);
   }
   rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
   rows.push(`<div class="tot-row total"><span>Quote Total</span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
@@ -3503,7 +3574,11 @@ async function sendQuoteEmail(){
   // Platform leads (Qmerit/Electrum/Treehouse) send a courtesy email with no
   // PDF — the platform delivers the quote. Zero attachments is fine there.
   const isPlatformSend = !!(_pendingEmail && _pendingEmail.isPlatform);
-  if (checkedIds.length === 0 && !isPlatformSend) {
+  const isCustomSend   = !!(_pendingEmail && _pendingEmail.isCustomEmail);
+  // Custom ad-hoc emails from the customer page don't require attachments —
+  // the user is free to attach one if desired, but an empty-handed send is fine.
+  const attachmentsRequired = !isPlatformSend && !isCustomSend;
+  if (checkedIds.length === 0 && attachmentsRequired) {
     toast('Pick at least one quote to attach','warning'); return;
   }
 
@@ -3528,7 +3603,7 @@ async function sendQuoteEmail(){
     });
     if (!firstFilename) firstFilename = res.filename;
   }
-  if (attachments.length === 0 && !isPlatformSend) {
+  if (attachments.length === 0 && attachmentsRequired) {
     toast('Could not generate any PDFs','error');
     if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
     return;
@@ -3616,6 +3691,84 @@ async function sendQuoteEmail(){
     returnToLead();
   }
 }
+// ── CUSTOM (AD-HOC) EMAIL FROM THE CUSTOMER PAGE ──
+// Opens the existing email modal pre-filled with the customer's address, a
+// generic subject ("Message from GreenKey"), and just the signature in the
+// body — Jonathan fills in the rest. No PDF attachment is required.
+function openCustomEmailModal(leadId){
+  const lead = getLead(leadId);
+  if(!lead){ toast('Lead not found','error'); return; }
+  const cust = getCustomer(lead.customerId);
+  const toEmail = (cust && cust.email) || lead.customerEmail || '';
+  if(!toEmail){
+    toast('No email address on file for this customer — add one in their profile first','warning');
+    return;
+  }
+  const custFirst = (cust ? cust.firstName : lead.customerName?.split(' ')[0]) || 'there';
+
+  const subject = 'Message from GreenKey';
+  const body = `Hi ${custFirst},
+
+
+
+Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+
+  _pendingEmail = {
+    qid: null,
+    leadId: lead.id,
+    customerId: lead.customerId,
+    toEmail,
+    hasGraph: !!_gToken,
+    isCustomEmail: true
+  };
+
+  document.getElementById('em-to').value      = toEmail;
+  document.getElementById('em-subject').value = subject;
+  document.getElementById('em-body').value    = body;
+
+  // Custom emails don't need a PDF. Replace the attachment list with a short
+  // note so the UI doesn't look broken. User can still manually attach via
+  // their mail client if they really need to.
+  const listEl = document.getElementById('em-attach-list');
+  if (listEl) {
+    listEl.innerHTML = `<div style="color:var(--text-muted);font-size:11.5px;line-height:1.45">
+      Ad-hoc email — no quote attached. If you need to attach something, send the
+      email first and then forward with an attachment from your Outlook Sent folder.
+    </div>`;
+  }
+  updateEmailAttachCount();
+
+  const fromEl = document.getElementById('em-from');
+  let fromEmail = '';
+  try {
+    if (_gToken && typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts[0]) fromEmail = accts[0].username || '';
+    }
+  } catch(_){}
+  if (fromEl) fromEl.textContent = _gToken ? (fromEmail || 'your Microsoft account') : 'Outlook (not signed in — will open draft)';
+
+  const sendBtn = document.getElementById('em-send-btn');
+  if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
+
+  document.getElementById('email-modal').classList.add('show');
+  // Drop the cursor into the body so the user can start typing immediately,
+  // positioned between the greeting and the signature.
+  setTimeout(() => {
+    const ta = document.getElementById('em-body');
+    if (ta) {
+      const pos = ta.value.indexOf('\n\n\n');
+      ta.focus();
+      if (pos >= 0) ta.setSelectionRange(pos+2, pos+2);
+    }
+  }, 50);
+}
+
 function switchQuoteType(qid,t){const q=getQuote(qid);if(!q)return;upsertQuote({...q,type:t});renderQuoteBuilder(qid);}
 function updateQuoteLabel(qid,label){
   const q=getQuote(qid); if(!q) return;
@@ -3782,7 +3935,10 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const _isQmeritPDF = q.source==='Qmerit';
   const _lmPDF = _isQmeritPDF ? (q.laborAndMaterials||0)+(q.qmeritFee||0) : (q.laborAndMaterials||0);
   const _lmLabel = _isQmeritPDF ? 'Total Installation Services' : 'Labor & Materials';
-  y=pdfTable(doc,y,W,[{desc:_lmLabel,amt:_lmPDF},{desc:'Permitting',amt:q.permitFee||0}],'TOTAL',q.quoteTotal||0);
+  const _pdfRows = [{desc:_lmLabel,amt:_lmPDF}];
+  if((q.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(q.veteranDiscount||0)});
+  _pdfRows.push({desc:'Permitting',amt:q.permitFee||0});
+  y=pdfTable(doc,y,W,_pdfRows,'TOTAL',q.quoteTotal||0);
   // inclusions/exclusions
   if(q.inclusions||q.exclusions){
     const col=(W-88)/2;
@@ -3843,7 +3999,10 @@ function generateInvoicePDF(q,cust,lead,invNum){
     doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
   doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SERVICES PROVIDED',36,y);y+=12;
-  y=pdfTable(doc,y,W,[{desc:'Labor & Materials',amt:q.laborAndMaterials||0},{desc:'Permitting',amt:q.permitFee||0}],'TOTAL DUE',q.quoteTotal||0);
+  const _invRows=[{desc:'Labor & Materials',amt:q.laborAndMaterials||0}];
+  if((q.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(q.veteranDiscount||0)});
+  _invRows.push({desc:'Permitting',amt:q.permitFee||0});
+  y=pdfTable(doc,y,W,_invRows,'TOTAL DUE',q.quoteTotal||0);
   if(q.notes){
     doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('NOTES',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
@@ -4293,6 +4452,10 @@ function renderJobDetail(id) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
         Send Text
       </button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#3498db;color:#3498db" onclick="openCustomEmailModal('${id}')">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
+        Send Email
+      </button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
   </div>`;
@@ -4334,7 +4497,7 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">Job Type</div><div class="jd-fv">${typeChip(lead.jobType)}</div></div>
         <div class="jd-f"><div class="jd-fl">Lead Source</div><div class="jd-fv">${sourceChip(lead.source)}</div></div>
         <div class="jd-f"><div class="jd-fl">Date Received</div><div class="jd-fv" style="font-size:12px">${lead.createdAt?.slice(0,10)||'—'}</div></div>
-        <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(lead.permitFee||250)}</div></div>
+        <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(lead.permitFee || (lead.source==='Qmerit'?250:200))}</div></div>
         <div class="jd-f"><div class="jd-fl">Info Complete</div><div class="jd-fv">${lead.infoComplete?`<span class="chip chip-ok">✓ Yes</span>`:`<span class="chip chip-warn">Pending</span>`}</div></div>
       </div>
       ${lead.description?`<div class="jd-f" style="margin-top:8px"><div class="jd-fl">Description</div><div class="jd-fv" style="font-size:12.5px;white-space:pre-wrap;color:var(--text-secondary)">${lead.description}</div></div>`:''}
@@ -4593,7 +4756,7 @@ function renderJobDetail(id) {
   }
 
   msHtml += msGrp('Permitting');
-  msHtml += msRow('permitApplied',`Permit applied — ${lead.jurisdiction||'Standard'} (${fmt$(lead.permitFee||250)})`,{date:true,text:true,textKey:'number',textPlaceholder:'Permit #'});
+  msHtml += msRow('permitApplied',`Permit applied — ${lead.jurisdiction||'Standard'} (${fmt$(lead.permitFee || (lead.source==='Qmerit'?250:200))})`,{date:true,text:true,textKey:'number',textPlaceholder:'Permit #'});
   msHtml += msRow('permitReceived','Permit received',{date:true});
 
   msHtml += msGrp('Scheduling Prerequisites');
