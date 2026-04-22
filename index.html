@@ -8368,11 +8368,11 @@ document.addEventListener('visibilitychange', () => {
 
 // Worker deployment URL — paste once after `wrangler deploy`.
 // Example: 'https://greenkey-sms.your-subdomain.workers.dev'
-const SMS_WORKER_URL  = '';
+const SMS_WORKER_URL  = 'https://greenkey-sms.greenkey-usa.workers.dev';
 
 // MSAL scope for the SMS Relay API.  Format: api://<api-app-client-id>/SMS.Send
 // Example: 'api://00000000-0000-0000-0000-000000000000/SMS.Send'
-const SMS_SCOPE_URL   = '';
+const SMS_SCOPE_URL   = 'api://f4704bd1-8316-4740-8f59-540901153810/SMS.send';
 const SMS_SCOPES      = SMS_SCOPE_URL ? [SMS_SCOPE_URL] : [];
 
 const SMS_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink'];
