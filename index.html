@@ -240,6 +240,11 @@
   #toast.success{border-color:var(--green)}
   #toast.error{border-color:var(--red)}
   #toast.warning{border-color:var(--amber)}
+  #critBanner{position:fixed;top:0;left:0;right:0;background:#b91c1c;color:#fff;padding:12px 24px;font-size:14px;font-weight:500;z-index:10000;display:none;align-items:flex-start;gap:12px;box-shadow:0 2px 12px rgba(0,0,0,.25);line-height:1.4}
+  #critBanner.show{display:flex}
+  #critBanner strong{display:block;font-weight:600;margin-bottom:2px}
+  #critBanner button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.4);color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;flex-shrink:0;margin-left:auto}
+  #critBanner button:hover{background:rgba(255,255,255,.25)}
 
   #camera-modal video{width:100%;border-radius:var(--r);background:#000;display:block}
   #camera-modal canvas{display:none}
@@ -1245,6 +1250,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="critBanner"><div><strong>SharePoint sync issue</strong><span id="critBannerMsg"></span></div><button onclick="document.getElementById('critBanner').classList.remove('show')">Dismiss</button></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
@@ -2982,6 +2988,19 @@ function toast(msg, type='success') {
   t.className='show '+type;
   clearTimeout(window._tt);
   window._tt=setTimeout(()=>t.classList.remove('show'),3200);
+}
+
+// Persistent top banner for critical sync/data-integrity issues.
+// Unlike toast(), this stays visible until the user clicks Dismiss.
+function criticalBanner(msg) {
+  const el = document.getElementById('critBanner');
+  if (!el) { console.error('[GK CRITICAL]', msg); return; }
+  const msgEl = document.getElementById('critBannerMsg');
+  // Don't re-show the same message if it's already visible (prevents spam on repeated syncs)
+  if (el.classList.contains('show') && msgEl.textContent === msg) return;
+  msgEl.textContent = msg;
+  el.classList.add('show');
+  console.error('[GK CRITICAL]', msg);
 }
 
 // ── MODULE 4: QUOTES ──
@@ -9263,16 +9282,24 @@ async function _spInit() {
 async function _spEnsureList() {
   const res = await _graphFetch(`/sites/${_spSite}/lists?$filter=displayName eq '${SP_LIST_NAME}'&$select=id`);
   if (res.value.length > 0) return res.value[0].id;
-  const created = await _graphFetch(`/sites/${_spSite}/lists`, {
-    method: 'POST',
-    body: JSON.stringify({
-      displayName: SP_LIST_NAME,
-      columns: [{ name: 'DataValue', text: { allowMultipleLines: true, linesForEditing: 6 } }],
-      list: { template: 'genericList' }
-    })
-  });
-  console.log('[GK] Created SharePoint list:', SP_LIST_NAME);
-  return created.id;
+  // List doesn't exist — try to create it. This requires Sites.Manage permission;
+  // tenants sometimes block list creation via Graph API for non-admins (returns 403).
+  try {
+    const created = await _graphFetch(`/sites/${_spSite}/lists`, {
+      method: 'POST',
+      body: JSON.stringify({
+        displayName: SP_LIST_NAME,
+        columns: [{ name: 'DataValue', text: { allowMultipleLines: true, linesForEditing: 6 } }],
+        list: { template: 'genericList' }
+      })
+    });
+    console.log('[GK] Created SharePoint list:', SP_LIST_NAME);
+    return created.id;
+  } catch(e) {
+    console.error('[GK] Failed to create SharePoint list:', e);
+    criticalBanner(`SharePoint list "${SP_LIST_NAME}" is missing and auto-creation failed. Data sync is DISABLED until the list is created manually. In SharePoint, go to Site contents → New → List → name it "${SP_LIST_NAME}" → add a "Multiple lines of text" column named "DataValue".`);
+    return null;
+  }
 }
 
 async function _spEnsureDrive() {
@@ -9285,19 +9312,31 @@ async function _spEnsureDrive() {
 
 // ── SYNC FROM SHAREPOINT → localStorage ──
 async function _syncFromSP() {
-  if (!_spSite || !_spList) return;
+  if (!_spSite) {
+    criticalBanner('SharePoint site not initialized. Try reloading the page. If this persists, check your Microsoft sign-in.');
+    return;
+  }
+  if (!_spList) {
+    criticalBanner(`SharePoint list "${SP_LIST_NAME}" is missing. Data sync is DISABLED until it is created. See SharePoint Site contents.`);
+    return;
+  }
   let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$top=200`;
   let count = 0;
-  while (nextLink) {
-    const res = await _graphFetch(nextLink);
-    for (const item of (res.value || [])) {
-      const key = item.fields?.Title;
-      const val = item.fields?.DataValue;
-      if (key && val) { localStorage.setItem(key, val); count++; }
+  try {
+    while (nextLink) {
+      const res = await _graphFetch(nextLink);
+      for (const item of (res.value || [])) {
+        const key = item.fields?.Title;
+        const val = item.fields?.DataValue;
+        if (key && val) { localStorage.setItem(key, val); count++; }
+      }
+      nextLink = res['@odata.nextLink'] || null;
     }
-    nextLink = res['@odata.nextLink'] || null;
+    console.log('[GK] Synced from SharePoint:', count, 'keys');
+  } catch(e) {
+    criticalBanner('Failed to read from SharePoint: ' + (e.message || e) + '. Your local data is unchanged — do not edit anything until this is resolved.');
+    throw e;
   }
-  console.log('[GK] Synced from SharePoint:', count, 'keys');
 }
 
 // ── SYNC localStorage → SHAREPOINT (debounced 3s) ──
@@ -9308,17 +9347,53 @@ function queueSPSync() {
 }
 
 async function _syncToSP() {
-  if (_syncing || !_spSite || !_spList) return;
+  if (_syncing) return;
+  if (!_spSite || !_spList) {
+    criticalBanner('Push to SharePoint skipped: site or list not initialized. Your edits are saved locally but NOT synced. Reload the page and resolve any errors before editing further.');
+    return;
+  }
   _syncing = true;
   try {
-    // Fetch existing item map (Title → itemId)
+    // Fetch existing item map (Title → itemId) AND current DataValue for the safety check.
+    // NOTE: previously used `$select=id,fields/Title` which Graph API now rejects with 400.
+    // Full $expand=fields is fine — we need the DataValue for the comparison anyway.
     let existMap = {};
-    let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$select=id,fields/Title&$top=200`;
+    let existData = {};
+    let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$top=200`;
     while (nextLink) {
       const res = await _graphFetch(nextLink);
-      for (const item of (res.value||[])) if (item.fields?.Title) existMap[item.fields.Title] = item.id;
+      for (const item of (res.value||[])) {
+        if (item.fields?.Title) {
+          existMap[item.fields.Title] = item.id;
+          if (item.fields.DataValue) existData[item.fields.Title] = item.fields.DataValue;
+        }
+      }
       nextLink = res['@odata.nextLink'] || null;
     }
+
+    // SAFETY GUARD: before pushing, compare local vs SharePoint counts for critical arrays.
+    // If the local copy has dramatically fewer entries than SharePoint, it likely means
+    // this tab started with empty/bad localStorage (e.g. fresh session, interrupted sync)
+    // and pushing it would WIPE the good data in SharePoint. Abort with a loud banner.
+    const criticalKeys = ['gk_leads', 'gk_customers'];
+    for (const key of criticalKeys) {
+      const spVal = existData[key];
+      if (!spVal) continue; // nothing in SP yet — first write, safe to push
+      let spArr, localArr;
+      try { spArr = JSON.parse(spVal); } catch { continue; }
+      try { localArr = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localArr = []; }
+      if (!Array.isArray(spArr) || !Array.isArray(localArr)) continue;
+      const spN = spArr.length, localN = localArr.length;
+      // Only guard when SP has a meaningful amount of data (>=10 items).
+      // Block if local has less than 50% of what SP has.
+      if (spN >= 10 && localN < spN * 0.5) {
+        criticalBanner(`Push ABORTED to protect your data: this tab's ${key} has ${localN} items but SharePoint has ${spN}. Pushing would wipe real data. Reload the page to pull a fresh copy from SharePoint, then try again. If you intended this change, contact support.`);
+        console.error(`[GK] Push aborted: ${key} local=${localN} vs SP=${spN}`);
+        _syncing = false;
+        return;
+      }
+    }
+
     const yr = new Date().getFullYear();
     const keys = [...SYNC_KEYS, `gk_seq_${yr}`];
     for (const key of keys) {
@@ -9337,6 +9412,7 @@ async function _syncToSP() {
     console.log('[GK] Synced to SharePoint:', keys.length, 'keys');
   } catch(e) {
     console.warn('[GK] Sync to SharePoint failed:', e);
+    criticalBanner('Push to SharePoint failed: ' + (e.message || e) + '. Your edits are saved locally but NOT synced. Try reloading; if error persists, contact support.');
   } finally {
     _syncing = false;
   }
