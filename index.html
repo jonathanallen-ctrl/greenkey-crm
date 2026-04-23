@@ -1628,6 +1628,74 @@ function getUsers() {
 }
 function saveUsers(u) { localStorage.setItem(UK, JSON.stringify(u)); }
 
+// Normalize phone to E.164 US format (+1XXXXXXXXXX). Returns '' if it can't.
+function toE164US(raw) {
+  if (!raw) return '';
+  const d = String(raw).replace(/\D/g,'');
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d.startsWith('1')) return '+' + d;
+  if (String(raw).startsWith('+') && d.length >= 10) return '+' + d;
+  return '';
+}
+
+function getMyMobile() {
+  if (!S.user) return '';
+  const u = getUsers().find(x => x.id === S.user.id);
+  return u?.mobile || '';
+}
+
+function saveMyMobile(raw) {
+  if (!S.user) return;
+  const e164 = toE164US(raw);
+  if (raw && !e164) { toast('Enter a valid US mobile (e.g. 804-555-1234)', 'error'); return; }
+  const arr = getUsers();
+  const idx = arr.findIndex(x => x.id === S.user.id);
+  if (idx < 0) return;
+  if (e164) arr[idx].mobile = e164; else delete arr[idx].mobile;
+  saveUsers(arr);
+  S.user.mobile = arr[idx].mobile || '';
+  toast(e164 ? 'Mobile saved — you\u2019ll get a text when @mention tasks are completed' : 'Mobile cleared', 'success');
+}
+
+// ── @MENTION SUPPORT ──
+// Parse @firstname tokens out of free text. Match is case-insensitive against
+// the first token of each user's display name. Returns matched user objects,
+// de-duplicated. The @author is never notified of their own mention.
+function parseMentions(text) {
+  if (!text) return [];
+  const hits = new Set();
+  const re = /(^|[^a-zA-Z0-9_])@([A-Za-z][A-Za-z0-9_.-]{0,30})\b/g;
+  let m;
+  while ((m = re.exec(text)) !== null) hits.add(m[2].toLowerCase());
+  if (!hits.size) return [];
+  const users = getUsers();
+  const out = [];
+  for (const first of hits) {
+    const u = users.find(x => {
+      const f = (x.name || '').trim().split(/\s+/)[0] || '';
+      return f.toLowerCase() === first;
+    });
+    if (u && !out.some(o => o.id === u.id)) out.push(u);
+  }
+  return out;
+}
+
+// Render @mentions inline as a styled chip span; everything else is escaped.
+function renderNoteBody(text) {
+  if (!text) return '';
+  const parts = [];
+  const re = /(^|[^a-zA-Z0-9_])@([A-Za-z][A-Za-z0-9_.-]{0,30})\b/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    const before = text.slice(last, m.index) + m[1];
+    parts.push(escHtml(before));
+    parts.push(`<span style="color:var(--blue);background:var(--blue-dim);padding:0 5px;border-radius:4px;font-weight:500">@${escHtml(m[2])}</span>`);
+    last = m.index + m[0].length;
+  }
+  parts.push(escHtml(text.slice(last)));
+  return parts.join('');
+}
+
 // ── STATE ──
 const S = { user:null, page:'dashboard', tab:'site', photos:{site:[],panel:[],install:[],inspection:[]}, stream:null, pipeMode:'kanban', custView:null, drawerMode:null, drawerData:null };
 
@@ -1882,6 +1950,12 @@ const SECS = {
     <div class="srow"><div><div class="srl">Signed in as</div><div class="srd" id="acct-email">${(S.user&&S.user.username)||'—'}</div></div></div>
     <div class="srow"><div><div class="srl">Display name</div><div class="srd">${(S.user&&S.user.name)||'—'}</div></div></div>
     <div class="srow"><div><div class="srl">Role</div><div class="srd">${(S.user&&S.user.role)||'—'}</div></div></div>
+    <div class="srow"><div><div class="srl">Mobile</div><div class="srd">Used for SMS pings when your @mention tasks are completed. US format — e.g. 804-555-1234.</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="sinput" id="acct-mobile" style="width:170px" type="tel" placeholder="804-555-1234" value="${(getMyMobile()||'').replace('+1','')}">
+        <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="saveMyMobile(document.getElementById('acct-mobile').value)">Save</button>
+      </div>
+    </div>
     <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
       To change your password or manage two-factor authentication, go to your Microsoft account at <a href="https://myaccount.microsoft.com" target="_blank" rel="noopener">myaccount.microsoft.com</a>.
     </div>
@@ -4867,17 +4941,23 @@ function addJobNote(leadId) {
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
   if (!Array.isArray(arr[idx].jobNotes)) arr[idx].jobNotes = [];
+  // Parse @mentions BEFORE saving so we can record them on the note for later auditing.
+  const mentioned = parseMentions(text).filter(u => u.id !== S.user?.id);
   const note = {
     id: 'note-' + Date.now(),
     text,
     author: S.user?.id || 'unknown',
     authorName: S.user?.name || 'Unknown',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    mentions: mentioned.map(u => u.id)
   };
   arr[idx].jobNotes.push(note);
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
   ta.value = '';
+
+  // Fire-and-forget: create a task + send an email for each mentioned teammate.
+  if (mentioned.length) processNoteMentions(arr[idx], note, mentioned);
   // Re-render notes list without full page reload
   const notesSorted = arr[idx].jobNotes.slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
   const isAdmin = S.user?.role === 'admin';
@@ -4893,11 +4973,71 @@ function addJobNote(leadId) {
           <span class="note-ts">${dateStr} · ${timeStr}</span>
           ${isAdmin?`<button class="note-del" onclick="deleteJobNote('${leadId}','${n.id}')" title="Delete note">✕</button>`:''}
         </div>
-        <div class="note-text">${escHtml(n.text)}</div>
+        <div class="note-text">${renderNoteBody(n.text)}</div>
       </div>`;
     }).join('');
   }
   toast('Note added', 'success');
+}
+
+// ── NOTE @MENTION PROCESSING ──
+// For each mentioned teammate:
+//   1) Create an actionable task on their to-do list linked to this job + note.
+//   2) Email them the ask so they see it even if they aren't in the CRM.
+// Failures are logged but non-fatal — the note itself has already been saved.
+async function processNoteMentions(lead, note, mentions) {
+  const cust = getCustomer(lead.customerId);
+  const custName = cust ? custFullName(cust) : (lead.customerName || 'Unknown');
+  const jobLabel = `${lead.id} — ${custName}`;
+  const authorName = note.authorName || 'A teammate';
+  const authorId   = note.author;
+
+  for (const u of mentions) {
+    // ── 1. Task ──
+    try {
+      upsertTask({
+        id:          'task-mention-' + note.id + '-' + u.id,
+        title:       `From ${authorName}: ${note.text.length > 80 ? note.text.slice(0,77) + '…' : note.text}`,
+        description: note.text,
+        assignedTo:  u.id,
+        jobId:       lead.id,
+        priority:    'normal',
+        status:      'open',
+        source:      'note-mention',
+        noteId:      note.id,
+        noteAuthorId: authorId,
+        createdBy:   authorId
+      });
+    } catch (e) { console.warn('[GK] Mention task creation failed:', e); }
+
+    // ── 2. Email ──
+    if (!u.username) { console.warn('[GK] No email for mentioned user', u); continue; }
+    const jobUrl = location.origin + location.pathname + '#job-' + encodeURIComponent(lead.id);
+    const subject = `[GreenKey CRM] ${authorName} mentioned you on ${jobLabel}`;
+    const html = `
+      <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+        <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml((u.name||'').split(' ')[0] || 'there')},</p>
+        <p style="font-size:14px;margin:0 0 12px"><strong>${escHtml(authorName)}</strong> tagged you in a note on job <strong>${escHtml(jobLabel)}</strong>:</p>
+        <blockquote style="margin:0 0 16px;padding:10px 14px;border-left:3px solid #2ecc71;background:#f6fff9;font-size:14px;white-space:pre-wrap">${escHtml(note.text)}</blockquote>
+        <p style="font-size:13px;margin:0 0 12px">This has also been added to your task list in the CRM. When you mark it complete, ${escHtml(authorName.split(' ')[0])} will be notified automatically.</p>
+        <p style="font-size:13px;margin:0 0 18px"><a href="${jobUrl}" style="color:#2ecc71;text-decoration:none;font-weight:500">Open the job in the CRM →</a></p>
+        <p style="font-size:11px;color:#888;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey CRM · automated mention notification</p>
+      </div>`;
+    try {
+      await _graphFetch('/me/sendMail', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: {
+            subject,
+            body: { contentType: 'HTML', content: html },
+            toRecipients: [{ emailAddress: { address: u.username } }]
+          },
+          saveToSentItems: true
+        })
+      });
+    } catch (e) { console.warn('[GK] Mention email failed for ' + u.username + ':', e); }
+  }
+  toast(`Tagged ${mentions.length === 1 ? mentions[0].name.split(' ')[0] : mentions.length + ' teammates'} — task + email sent`, 'success');
 }
 
 function deleteJobNote(leadId, noteId) {
@@ -5280,7 +5420,7 @@ function renderJobDetail(id) {
         <span class="note-ts">${dateStr} · ${timeStr}</span>
         ${isAdmin?`<button class="note-del" onclick="deleteJobNote('${id}','${n.id}')" title="Delete note">✕</button>`:''}
       </div>
-      <div class="note-text">${escHtml(n.text)}</div>
+      <div class="note-text">${renderNoteBody(n.text)}</div>
     </div>`;
   }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">No notes yet. Add the first one above.</div>`;
 
@@ -5288,8 +5428,9 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Job Notes</div></div>
     <div class="jd-sb">
       <div class="notes-input-wrap">
-        <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — visible to everyone, logged with your name and timestamp…"></textarea>
-        <div style="display:flex;justify-content:flex-end">
+        <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — tag a teammate with @Sherri, @Chase, or @Jon and they'll get a task + email…"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="font-size:11px;color:var(--text-muted)">Tip: <code style="background:var(--bg-elevated);padding:1px 4px;border-radius:3px">@firstname</code> creates a task + emails them; they mark it done and you get pinged.</div>
           <button class="btn btn-p" style="padding:5px 14px;font-size:12.5px" onclick="addJobNote('${id}')">Add Note</button>
         </div>
       </div>
@@ -5496,10 +5637,7 @@ function renderJobDetail(id) {
   msHtml += msRow('missUtilityCalled','Miss Utility called',{date:true,date2:true,date2Key:'clearDate',date2Label:'Clear'});
   msHtml += msRow('specialMaterialsOrdered','Special materials ordered',{date:true,date2:true,date2Key:'arrivedDate',date2Label:'Arrived'});
 
-  msHtml += msGrp('Installation');
-  msHtml += msRow('intInspScheduled','Intermediate inspection scheduled (if needed)',{date:true,text:true,textKey:'type',textPlaceholder:'Type e.g. Trench'});
-  msHtml += msRow('intInspPassed','Intermediate inspection passed',{date:true});
-
+  msHtml += msGrp('Scheduling');
   // ── Add-to-Scheduler override (for jobs blocked by permit/charger gates) ──
   if (!ms.installScheduled?.done) {
     const _blk = scheduleBlockReason(lead);
@@ -5520,8 +5658,11 @@ function renderJobDetail(id) {
       </div>`;
     }
   }
-
   msHtml += msRow('installScheduled','Install scheduled',{date:true});
+
+  msHtml += msGrp('Installation');
+  msHtml += msRow('intInspScheduled','Intermediate inspection scheduled (if needed)',{date:true,text:true,textKey:'type',textPlaceholder:'Type e.g. Trench'});
+  msHtml += msRow('intInspPassed','Intermediate inspection passed',{date:true});
   msHtml += msRow('installCompleted','Installation completed',{date:true,num:true,numKey:'actualHours',numLabel:'Actual hrs'});
   msHtml += msRow('reviewCardGiven','Review card given to customer');
 
@@ -6265,6 +6406,75 @@ function completeTask(id, note) {
   saveTasks(arr);
   updateTaskBadge();
   toast('Task marked complete ✓', 'success');
+  // If this was a @mention task, ping the note author (SMS → email fallback).
+  if (arr[idx].source === 'note-mention' && arr[idx].noteAuthorId) {
+    notifyMentionCompletion(arr[idx]);
+  }
+}
+
+// Notify the original note author that their @mention task is done.
+// Preferred channel: SMS to their cell (via the existing Twilio Worker).
+// Fallback: email via Graph. Author's contact info is looked up fresh so any
+// updates to their mobile take effect immediately.
+async function notifyMentionCompletion(task) {
+  const author = getUsers().find(u => u.id === task.noteAuthorId);
+  if (!author) { console.warn('[GK] Mention completion: author not found', task.noteAuthorId); return; }
+  const doerName = (S.user?.name || 'A teammate').split(' ')[0];
+  const lead = getLead(task.jobId);
+  const cust = lead ? getCustomer(lead.customerId) : null;
+  const jobLabel = lead ? `${lead.id}${cust ? ' — ' + custFullName(cust) : ''}` : (task.jobId || 'job');
+  const excerpt  = (task.description || task.title || '').replace(/\s+/g,' ').trim();
+  const excerptShort = excerpt.length > 120 ? excerpt.slice(0,117) + '…' : excerpt;
+  const completionNote = task.completionNote ? ` — ${task.completionNote}` : '';
+
+  // ── Try SMS first (only if author has a mobile on file + Worker configured) ──
+  if (author.mobile && _smsConfigured()) {
+    const smsBody = `GreenKey CRM: ${doerName} completed your task on ${jobLabel}.${completionNote} Msg:"${excerptShort}"`;
+    try {
+      const token = await _acquireSMSToken();
+      const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/send', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer ' + token },
+        body: JSON.stringify({
+          leadId:      task.jobId || 'internal',
+          to:          author.mobile,
+          message:     smsBody,
+          templateKey: 'mention-complete'
+        })
+      });
+      if (resp.ok) return; // delivered via SMS, we're done
+      console.warn('[GK] Mention completion SMS failed:', resp.status, await resp.text().catch(()=>''));
+    } catch (e) {
+      console.warn('[GK] Mention completion SMS threw:', e);
+    }
+  }
+
+  // ── Fallback: email the author ──
+  if (!author.username) return;
+  const subject = `[GreenKey CRM] ${doerName} completed your task on ${jobLabel}`;
+  const jobUrl  = location.origin + location.pathname + '#job-' + encodeURIComponent(task.jobId || '');
+  const html = `
+    <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+      <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml((author.name||'').split(' ')[0] || 'there')},</p>
+      <p style="font-size:14px;margin:0 0 12px"><strong>${escHtml(doerName)}</strong> marked your @mention task complete on <strong>${escHtml(jobLabel)}</strong>.</p>
+      <blockquote style="margin:0 0 12px;padding:10px 14px;border-left:3px solid #2ecc71;background:#f6fff9;font-size:14px;white-space:pre-wrap">${escHtml(excerpt)}</blockquote>
+      ${task.completionNote ? `<p style="font-size:13px;margin:0 0 12px"><strong>Completion note:</strong> ${escHtml(task.completionNote)}</p>` : ''}
+      <p style="font-size:13px;margin:0 0 18px"><a href="${jobUrl}" style="color:#2ecc71;text-decoration:none;font-weight:500">Open the job in the CRM →</a></p>
+      <p style="font-size:11px;color:#888;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey CRM · @mention completion${author.mobile ? '' : ' (no mobile on file — add one in Account settings to receive SMS instead)'}</p>
+    </div>`;
+  try {
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: author.username } }]
+        },
+        saveToSentItems: true
+      })
+    });
+  } catch (e) { console.warn('[GK] Mention completion email failed:', e); }
 }
 
 // ── NOTIFICATION CRUD ──
@@ -8567,13 +8777,23 @@ async function _onMSALSuccess(account) {
   const user = { id: stableId, username: email, name: displayName, initials, role, active: true };
 
   // Upsert into the user registry so task assignment, mentions, and
-  // "Users & Access" keep working. No password is ever stored.
+  // "Users & Access" keep working. No password is ever stored. `mobile` is
+  // preserved across logins and can be edited by the user in Account settings.
   try {
     const users = getUsers();
     const idx = users.findIndex(u => u.id === stableId || u.username === email);
-    if (idx >= 0) users[idx] = { ...users[idx], ...user };
-    else users.push(user);
+    if (idx >= 0) {
+      // Preserve existing mobile; user changes persist across sign-ins.
+      users[idx] = { ...users[idx], ...user, mobile: users[idx].mobile || '' };
+    } else {
+      // First-time sign-in — bootstrap Jon's known cell from handoff; others can self-set.
+      const bootstrapMobile = (stableId === 'u-jon') ? '+18043105368' : '';
+      users.push({ ...user, mobile: bootstrapMobile });
+    }
     saveUsers(users);
+    // Mirror the mobile onto the in-memory S.user so @mention SMS has it immediately.
+    const final = users.find(u2 => u2.id === stableId);
+    if (final && final.mobile) user.mobile = final.mobile;
   } catch(e) { console.warn('[GK] Could not upsert user record:', e); }
 
   _syncStatusShow('Connecting to SharePoint…');
