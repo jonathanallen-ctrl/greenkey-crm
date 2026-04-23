@@ -75,6 +75,10 @@
   .mdesc{font-size:13.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:20px}
   .mact{display:flex;gap:10px;justify-content:flex-end}
 
+  /* CONSENT MODAL TABS */
+  .consent-tab.active{color:var(--green)!important;border-bottom-color:var(--green)!important;font-weight:600}
+  .consent-tab:hover:not(.active){color:var(--text-primary)}
+
   /* ADDRESS AUTOCOMPLETE */
   .addr-wrap{position:relative}
   .addr-drop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--bg-elevated);border:1px solid var(--border-light);border-radius:var(--r);z-index:500;box-shadow:var(--shadow-drop);max-height:220px;overflow-y:auto;display:none}
@@ -662,6 +666,172 @@
   </div>
 </div>
 
+<!-- CAPTURE CONSENT MODAL -->
+<div class="moverlay" id="consent-modal">
+  <div class="modal" style="max-width:620px;max-height:92vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      Capture SMS Consent
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+      Required by TCPA and A2P 10DLC rules before texting this customer. Log the channel through which consent was obtained.
+    </div>
+    <div id="consent-cust-display" style="font-size:13px;color:var(--text-primary);padding:8px 10px;background:var(--bg-elevated);border-radius:var(--r);margin-bottom:10px"></div>
+
+    <!-- Tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <button type="button" class="consent-tab" data-tab="partner_intake" onclick="switchConsentTab('partner_intake')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Partner intake</button>
+      <button type="button" class="consent-tab" data-tab="web_form" onclick="switchConsentTab('web_form')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Web form</button>
+      <button type="button" class="consent-tab" data-tab="verbal_phone" onclick="switchConsentTab('verbal_phone')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Verbal (phone)</button>
+      <button type="button" class="consent-tab" data-tab="email_reply" onclick="switchConsentTab('email_reply')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Email reply</button>
+    </div>
+
+    <div style="overflow-y:auto;flex:1;padding-right:4px">
+      <!-- Partner intake pane -->
+      <div class="consent-pane" id="consent-pane-partner_intake" style="display:none">
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">
+          Lead came from a partner's intake form where the customer agreed to be contacted by the partner's installer network (Qmerit, Electrum, GM, Tesla, etc.). Their consent carries to us as the assigned installer.
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Partner</div>
+          <select id="consent-partner-sel" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+            <option value="Qmerit">Qmerit</option>
+            <option value="Electrum">Electrum</option>
+            <option value="GM EV Live">GM EV Live</option>
+            <option value="Ford Charge Station Pro">Ford Charge Station Pro</option>
+            <option value="Tesla">Tesla</option>
+            <option value="Rivian">Rivian</option>
+            <option value="ChargePoint">ChargePoint</option>
+            <option value="Other">Other (specify in notes)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Partner reference / job ID (optional)</div>
+          <input id="consent-partner-ref" type="text" placeholder="e.g. Qmerit job #12345" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        </div>
+      </div>
+
+      <!-- Web form pane -->
+      <div class="consent-pane" id="consent-pane-web_form" style="display:none">
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">
+          Customer submitted a form on greenkey-usa.com (or a rebuilt intake form) that included an SMS consent checkbox.
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Form name</div>
+          <input id="consent-form-name" type="text" placeholder="e.g. greenkey-usa.com Contact form" value="greenkey-usa.com Contact form" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Form submission ID (optional)</div>
+          <input id="consent-form-id" type="text" placeholder="Reference ID from form submission email" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        </div>
+      </div>
+
+      <!-- Verbal phone pane -->
+      <div class="consent-pane" id="consent-pane-verbal_phone" style="display:none">
+        <div style="padding:10px 12px;background:#3a2e14;border:1px solid #f39c12;border-radius:var(--r);font-size:12px;color:#f4c48a;margin-bottom:10px;display:flex;align-items:flex-start;gap:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f39c12" stroke-width="2" style="flex-shrink:0;margin-top:2px"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div><strong style="color:#f39c12">Read this script VERBATIM</strong> to the customer on the phone. Do not paraphrase. Do not skip the STOP/HELP language. Check the box below only after the customer gives a clear "yes."</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-size:13px;color:var(--text-primary);line-height:1.65;white-space:pre-wrap;margin-bottom:12px" id="consent-verbal-script"></div>
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;margin-bottom:10px">
+          <input type="checkbox" id="consent-verbal-read" style="margin-top:2px;accent-color:var(--green);flex-shrink:0">
+          <span style="font-size:12.5px;color:var(--text-primary)">I read the script above to the customer VERBATIM, and they clearly said "yes" to receiving text messages from GreenKey.</span>
+        </label>
+      </div>
+
+      <!-- Email reply pane -->
+      <div class="consent-pane" id="consent-pane-email_reply" style="display:none">
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">
+          Customer replied "yes" (or similar affirmative) to an email you sent asking for SMS consent. Paste the key portion of their reply as evidence.
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Email subject</div>
+          <input id="consent-email-subject" type="text" placeholder="Subject line of the email exchange" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Paste customer's reply (required)</div>
+          <textarea id="consent-email-body" placeholder="Paste the affirmative portion of the customer's email reply here — this is your evidence of consent." style="width:100%;min-height:120px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
+        </div>
+      </div>
+
+      <!-- Shared notes field -->
+      <div style="margin-bottom:10px;margin-top:4px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Notes (optional)</div>
+        <textarea id="consent-notes" placeholder="Anything else worth recording about how consent was obtained…" style="width:100%;min-height:60px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
+      </div>
+
+      <!-- Current consent status (if any) -->
+      <div id="consent-current-wrap" style="display:none;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-size:12px;color:var(--text-muted);margin-bottom:10px">
+        <strong style="color:var(--text-secondary)">Current status:</strong> <span id="consent-current-text"></span>
+        <button type="button" class="btn btn-g" style="margin-left:10px;padding:2px 10px;font-size:11px;border-color:#e74c3c;color:#e74c3c" onclick="revokeConsent()">Revoke (mark opted-out)</button>
+      </div>
+    </div>
+
+    <div class="mact" style="flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:8px">
+      <button class="btn btn-g" onclick="document.getElementById('consent-modal').classList.remove('show')">Cancel</button>
+      <button class="btn btn-p" id="consent-save-btn" onclick="saveConsent()">Save Consent</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONSENT EMAIL PREVIEW MODAL -->
+<div class="moverlay" id="consent-email-modal">
+  <div class="modal" style="max-width:780px;max-height:92vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      Send Intro &amp; SMS Consent Email
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+      Sent to the customer with <strong>Yes</strong> / <strong>No</strong> buttons. One-click capture of TCPA-compliant SMS consent — record is written automatically when they click.
+    </div>
+
+    <div style="overflow-y:auto;flex:1;padding-right:4px">
+      <!-- Status / error panel -->
+      <div id="ce-status" style="display:none;margin-bottom:10px;padding:10px 12px;border-radius:var(--r);font-size:12.5px;line-height:1.5"></div>
+
+      <!-- To / Subject -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">To</div>
+          <input id="ce-to" type="email" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">From</div>
+          <input id="ce-from" type="text" readonly style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-muted);outline:none" />
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Subject</div>
+        <input id="ce-subject" type="text" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
+      </div>
+
+      <!-- Phone (required for SMS consent) -->
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Mobile number (will receive the texts)</div>
+        <input id="ce-phone" type="tel" placeholder="(804) 555-1234" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">The customer's "Yes" click only covers this exact number. Edit here first if the number on file is wrong.</div>
+      </div>
+
+      <!-- Live preview (rendered HTML) -->
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Preview</div>
+      <div style="border:1px solid var(--border);border-radius:var(--r);background:#ffffff;overflow:hidden;margin-bottom:8px">
+        <iframe id="ce-preview" style="width:100%;height:520px;border:none;background:#ffffff" sandbox="allow-same-origin"></iframe>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">
+        The Yes / No buttons link to a GreenKey-branded confirmation page that records the customer's choice in the audit log. Token expires in 14&nbsp;days.
+      </div>
+    </div>
+
+    <div class="mact" style="flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:8px">
+      <button class="btn btn-g" onclick="document.getElementById('consent-email-modal').classList.remove('show')">Cancel</button>
+      <button class="btn btn-p" id="ce-send-btn" onclick="sendConsentEmail()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Send Consent Email
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- EMAIL PREVIEW MODAL -->
 <div class="moverlay" id="email-modal">
   <div class="modal" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
@@ -1221,6 +1391,135 @@ function upsertCustomer(data) {
   else { arr.push({...data, id:data.id||'cust-'+Date.now(), createdAt:now, updatedAt:now}); }
   saveCustomers(arr);
   return data.id || arr[arr.length-1].id;
+}
+
+// ── CONSENT (TCPA / A2P 10DLC COMPLIANCE) ──
+// Consent lives on the customer record (tied to phone/email, follows the person across jobs).
+// Shape: customer.consentSms = { status, source, capturedAt, capturedBy, notes, evidence: {...} }
+
+const CONSENT_STATUSES = {
+  NONE: 'none',
+  PARTNER_INTAKE: 'partner_intake',   // Qmerit, Electrum, GM, Tesla, etc.
+  WEB_FORM: 'web_form',               // greenkey-usa.com form with checkbox
+  VERBAL_PHONE: 'verbal_phone',       // live phone call using verbal script below
+  EMAIL_REPLY: 'email_reply',         // customer replied "yes" to an opt-in email
+  OPTED_OUT: 'opted_out'              // STOP/UNSUBSCRIBE received
+};
+
+// Display labels shown in the UI (matches CONSENT_STATUSES keys)
+const CONSENT_LABELS = {
+  none:            'No consent on file',
+  partner_intake:  'Partner intake form',
+  web_form:        'Website form',
+  verbal_phone:    'Verbal (phone call)',
+  email_reply:     'Email reply',
+  opted_out:       'OPTED OUT — do not contact'
+};
+
+// STOP keywords per CTIA guidelines (case-insensitive, trimmed)
+const STOP_KEYWORDS = ['STOP','UNSUBSCRIBE','QUIT','CANCEL','END','STOPALL'];
+const HELP_KEYWORDS = ['HELP','INFO'];
+const START_KEYWORDS = ['START','UNSTOP','YES'];
+
+// Verbal consent script — must be read VERBATIM to customer before logging consent.
+// This text is shown in the Capture Consent modal's "Verbal (phone)" tab.
+function getVerbalConsentScript(phone) {
+  const p = phone || '[customer phone]';
+  return `Before we finish up, I need your consent to text you about your project.
+
+GreenKey would like to send text messages to ${p} regarding scheduling, quotes, project updates, and service for your EV charger installation.
+
+Message and data rates may apply. Message frequency varies — typically 1 to 10 messages per project.
+
+You can reply STOP at any time to unsubscribe, or HELP for help.
+
+Our privacy policy is available at jonathanallen-ctrl.github.io/greenkey-crm/privacy.html.
+
+Do you agree to receive these text messages?`;
+}
+
+// Read consent record for a customer (returns shape with safe defaults).
+function getConsentSms(customerId) {
+  const cust = getCustomer(customerId);
+  if (!cust) return null;
+  const c = cust.consentSms;
+  if (!c || !c.status) return { status: CONSENT_STATUSES.NONE };
+  return c;
+}
+function getConsentEmail(customerId) {
+  const cust = getCustomer(customerId);
+  if (!cust) return null;
+  const c = cust.consentEmail;
+  if (!c || !c.status) return { status: CONSENT_STATUSES.NONE };
+  return c;
+}
+
+// Save a consent record with full audit trail (who, when).
+function setConsentSms(customerId, record) {
+  const arr = getCustomers();
+  const idx = arr.findIndex(c=>c.id===customerId);
+  if (idx<0) return false;
+  const now = new Date().toISOString();
+  const user = (S && S.user) ? (S.user.email || S.user.name || 'unknown') : 'unknown';
+  arr[idx].consentSms = {
+    status:     record.status,
+    source:     record.source || '',
+    capturedAt: now,
+    capturedBy: user,
+    notes:      record.notes || '',
+    evidence:   record.evidence || {},
+    phoneAtCapture: arr[idx].phone || ''
+  };
+  arr[idx].updatedAt = now;
+  saveCustomers(arr);
+  return true;
+}
+function setConsentEmail(customerId, record) {
+  const arr = getCustomers();
+  const idx = arr.findIndex(c=>c.id===customerId);
+  if (idx<0) return false;
+  const now = new Date().toISOString();
+  const user = (S && S.user) ? (S.user.email || S.user.name || 'unknown') : 'unknown';
+  arr[idx].consentEmail = {
+    status:     record.status,
+    source:     record.source || '',
+    capturedAt: now,
+    capturedBy: user,
+    notes:      record.notes || '',
+    evidence:   record.evidence || {},
+    emailAtCapture: arr[idx].email || ''
+  };
+  arr[idx].updatedAt = now;
+  saveCustomers(arr);
+  return true;
+}
+
+// Quick check: can we legally text this customer right now?
+function canSendSms(customerId) {
+  const c = getConsentSms(customerId);
+  if (!c) return false;
+  if (c.status === CONSENT_STATUSES.NONE) return false;
+  if (c.status === CONSENT_STATUSES.OPTED_OUT) return false;
+  return true;
+}
+function canSendEmail(customerId) {
+  // Note: email consent is NOT required by law for one-to-one transactional email
+  // (CAN-SPAM only requires opt-out mechanism on marketing email). We track it for
+  // marketing purposes only. Transactional email (quotes, scheduling) is always OK.
+  const c = getConsentEmail(customerId);
+  if (!c) return true; // default allow for transactional
+  if (c.status === CONSENT_STATUSES.OPTED_OUT) return false;
+  return true;
+}
+
+// Format a consent record for display (date + who + source).
+function formatConsentMeta(c) {
+  if (!c || !c.capturedAt) return '';
+  const dt = new Date(c.capturedAt);
+  const dateStr = dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const who = (c.capturedBy || '').split('@')[0] || 'unknown';
+  const src = c.source ? ` · ${c.source}` : '';
+  return `${dateStr}${src} · by ${who}`;
 }
 
 // ── LEADS CRUD ──
@@ -4889,15 +5188,79 @@ function renderJobDetail(id) {
   </div>`;
 
   // ── SMS Thread (running text with this customer) ──
+  // Consent banner: reads customer.consentSms and renders green/amber/red state.
+  // Customer may be null if lead isn't linked — banner still renders with neutral state.
+  const smsConsent = cust ? getConsentSms(cust.id) : null;
+  const smsStatus = smsConsent ? smsConsent.status : CONSENT_STATUSES.NONE;
+  // Kick off a non-blocking fetch of the server-side consent record. If the
+  // customer has replied Yes/No from the email button or sent STOP via SMS,
+  // this will mirror that in and trigger a banner re-render.
+  if (cust && typeof hydrateConsentFromServer === 'function') {
+    try { hydrateConsentFromServer(cust.id); } catch(_) {}
+  }
+  // Detect an outstanding consent email: most-recent request for this
+  // customer that hasn't expired yet. Used to change the amber banner copy
+  // from "capture consent before texting" to "awaiting customer response".
+  let pendingConsentReq = null;
+  if (cust && smsStatus === CONSENT_STATUSES.NONE && Array.isArray(cust.consentEmailRequests) && cust.consentEmailRequests.length) {
+    const now = Date.now();
+    const candidates = cust.consentEmailRequests
+      .filter(r => r && r.expiresAt && new Date(r.expiresAt).getTime() > now)
+      .sort((a,b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
+    pendingConsentReq = candidates[0] || null;
+  }
+  let consentBannerHtml = '';
+  if (!cust) {
+    consentBannerHtml = `<div style="margin-bottom:8px;padding:8px 10px;background:#2a2d33;border:1px solid #555;border-radius:var(--r);font-size:12px;color:var(--text-muted)">
+      No customer record linked to this lead — link a customer to track SMS consent.
+    </div>`;
+  } else if (smsStatus === CONSENT_STATUSES.OPTED_OUT) {
+    consentBannerHtml = `<div style="margin-bottom:8px;padding:8px 10px;background:#3a1a1a;border:1px solid #e74c3c;border-radius:var(--r);font-size:12px;color:#ffb3b3;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e74c3c" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      <strong style="color:#e74c3c">OPTED OUT</strong> — This customer has unsubscribed from SMS. Do not text. ${formatConsentMeta(smsConsent)}
+    </div>`;
+  } else if (smsStatus === CONSENT_STATUSES.NONE && pendingConsentReq) {
+    const sentWhen = new Date(pendingConsentReq.sentAt);
+    const sentStr = sentWhen.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' · ' + sentWhen.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    consentBannerHtml = `<div style="margin-bottom:8px;padding:8px 10px;background:#1a2a3a;border:1px solid #3498db;border-radius:var(--r);font-size:12px;color:#a9d6f5;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3498db" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <strong style="color:#3498db">Awaiting consent reply</strong> — consent email sent ${sentStr}. Customer hasn't clicked Yes or No yet.
+      <button class="btn btn-g" style="margin-left:auto;padding:3px 10px;font-size:11.5px;border-color:#3498db;color:#3498db" onclick="openConsentEmailModal('${id}')" title="Send another consent email">Resend email</button>
+      <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px;border-color:var(--border);color:var(--text-muted)" onclick="openConsentModal('${cust.id}','sms')" title="Capture consent manually (partner form, verbal, etc.)">Capture manually</button>
+    </div>`;
+  } else if (smsStatus === CONSENT_STATUSES.NONE) {
+    consentBannerHtml = `<div style="margin-bottom:8px;padding:8px 10px;background:#3a2e14;border:1px solid #f39c12;border-radius:var(--r);font-size:12px;color:#f4c48a;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f39c12" stroke-width="2" style="flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <strong style="color:#f39c12">No SMS consent on file</strong> — capture consent before texting.
+      <button class="btn btn-p" style="margin-left:auto;padding:3px 10px;font-size:11.5px" onclick="openConsentEmailModal('${id}')" title="Send an intro email with Yes/No buttons — easiest for most leads">Send Consent Email</button>
+      <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px;border-color:#f39c12;color:#f39c12" onclick="openConsentModal('${cust.id}','sms')" title="Capture consent manually — partner form, verbal, web form">Capture manually</button>
+    </div>`;
+  } else {
+    consentBannerHtml = `<div style="margin-bottom:8px;padding:8px 10px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" style="flex-shrink:0"><polyline points="20 6 9 17 4 12"/></svg>
+      <strong style="color:var(--green)">SMS consent:</strong> ${CONSENT_LABELS[smsStatus]||smsStatus} · ${formatConsentMeta(smsConsent)}
+      <button class="btn btn-g" style="margin-left:auto;padding:2px 8px;font-size:11px;color:var(--text-muted);border-color:var(--border)" onclick="openConsentModal('${cust.id}','sms')" title="View or update consent">Edit</button>
+    </div>`;
+  }
+
+  const newTextBtnDisabled = (smsStatus === CONSENT_STATUSES.OPTED_OUT);
+  const newTextBtnHtml = newTextBtnDisabled
+    ? `<button class="btn" style="padding:4px 10px;font-size:12px;border:1px solid #555;color:#888;background:transparent;cursor:not-allowed" disabled title="Customer has opted out of SMS">
+         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-1px;margin-right:2px"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+         New Text
+       </button>`
+    : `<button class="btn btn-g" style="padding:4px 10px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="openSMSModal('${id}')">
+         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-1px;margin-right:2px"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
+         New Text
+       </button>`;
+
   const smsSec = `<div class="jd-sec">
     <div class="jd-sh">
       <div class="jd-st">Text Messages</div>
-      <button class="btn btn-g" style="padding:4px 10px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="openSMSModal('${id}')">
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-1px;margin-right:2px"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg>
-        New Text
-      </button>
+      ${newTextBtnHtml}
     </div>
     <div class="jd-sb">
+      ${consentBannerHtml}
       <div id="sms-thread-${id}" style="max-height:340px;overflow-y:auto;padding:4px 2px">
         <div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>
       </div>
@@ -8382,6 +8745,10 @@ const SMS_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','Tesla','ChargePoi
 // User overrides are persisted to localStorage['gk_sms_templates'] and
 // merged over these defaults.
 const SMS_TEMPLATES_DEFAULT = {
+  custom: {
+    label: 'Custom (blank)',
+    body:  ''
+  },
   intro: {
     label: 'Intro',
     body:  "Hey {firstName}! 👋 This is {repName} over at GreenKey — we're the local electrical team{sourceSuffix}. Just wanted to reach out personally and let you know we received your info and we're already working on your quote. Feel free to reply here with any questions — talk soon! 😊"
@@ -8463,6 +8830,664 @@ async function _acquireSMSToken() {
 
 function _smsConfigured() { return !!SMS_WORKER_URL && !!SMS_SCOPE_URL; }
 
+// ── CAPTURE CONSENT MODAL ──
+// Holds the customer ID + channel ('sms'|'email') across the open->save cycle.
+let _consentCurrentCustId = null;
+let _consentCurrentChannel = 'sms';
+
+function openConsentModal(customerId, channel) {
+  const cust = getCustomer(customerId);
+  if (!cust) { toast('Customer not found', 'error'); return; }
+  _consentCurrentCustId = customerId;
+  _consentCurrentChannel = channel || 'sms';
+
+  // Header: show customer name + phone
+  const name = custFullName(cust);
+  const phone = cust.phone || '(no phone on file)';
+  document.getElementById('consent-cust-display').innerHTML =
+    `<strong>${escHtml(name)}</strong> · ${escHtml(phone)}`;
+
+  // Populate verbal script with customer's phone number
+  document.getElementById('consent-verbal-script').textContent = getVerbalConsentScript(phone);
+
+  // Reset field values so stale data from a prior capture doesn't leak in
+  document.getElementById('consent-partner-ref').value = '';
+  document.getElementById('consent-form-name').value = 'greenkey-usa.com Contact form';
+  document.getElementById('consent-form-id').value = '';
+  document.getElementById('consent-verbal-read').checked = false;
+  document.getElementById('consent-email-subject').value = '';
+  document.getElementById('consent-email-body').value = '';
+  document.getElementById('consent-notes').value = '';
+
+  // Show "current status" panel if consent is already on file
+  const current = getConsentSms(customerId);
+  const wrap = document.getElementById('consent-current-wrap');
+  if (current && current.status && current.status !== CONSENT_STATUSES.NONE) {
+    document.getElementById('consent-current-text').textContent =
+      (CONSENT_LABELS[current.status] || current.status) + ' · ' + formatConsentMeta(current);
+    wrap.style.display = 'block';
+  } else {
+    wrap.style.display = 'none';
+  }
+
+  // Default to the verbal tab (most common capture channel for Jonathan)
+  switchConsentTab('verbal_phone');
+  document.getElementById('consent-modal').classList.add('show');
+}
+
+function switchConsentTab(tabId) {
+  // Highlight active tab
+  document.querySelectorAll('.consent-tab').forEach(btn => {
+    if (btn.dataset.tab === tabId) btn.classList.add('active');
+    else btn.classList.remove('active');
+  });
+  // Show matching pane
+  document.querySelectorAll('.consent-pane').forEach(p => p.style.display = 'none');
+  const pane = document.getElementById('consent-pane-' + tabId);
+  if (pane) pane.style.display = 'block';
+  // Stash the currently active channel source on the button panel (for saveConsent to read)
+  document.getElementById('consent-save-btn').dataset.activeTab = tabId;
+}
+
+function saveConsent() {
+  const custId = _consentCurrentCustId;
+  if (!custId) return;
+  const activeTab = document.getElementById('consent-save-btn').dataset.activeTab || 'verbal_phone';
+  const notes = document.getElementById('consent-notes').value.trim();
+
+  let record = null;
+  if (activeTab === 'partner_intake') {
+    const partner = document.getElementById('consent-partner-sel').value;
+    const ref = document.getElementById('consent-partner-ref').value.trim();
+    record = {
+      status: CONSENT_STATUSES.PARTNER_INTAKE,
+      source: partner,
+      notes,
+      evidence: { partnerReference: ref }
+    };
+  } else if (activeTab === 'web_form') {
+    const formName = document.getElementById('consent-form-name').value.trim();
+    const formId = document.getElementById('consent-form-id').value.trim();
+    if (!formName) { toast('Form name is required', 'warning'); return; }
+    record = {
+      status: CONSENT_STATUSES.WEB_FORM,
+      source: formName,
+      notes,
+      evidence: { formSubmissionId: formId }
+    };
+  } else if (activeTab === 'verbal_phone') {
+    const scriptRead = document.getElementById('consent-verbal-read').checked;
+    if (!scriptRead) {
+      toast('You must read the script verbatim and check the box before saving', 'warning');
+      return;
+    }
+    record = {
+      status: CONSENT_STATUSES.VERBAL_PHONE,
+      source: 'Verbal consent on phone call',
+      notes,
+      evidence: { scriptRead: true }
+    };
+  } else if (activeTab === 'email_reply') {
+    const subj = document.getElementById('consent-email-subject').value.trim();
+    const body = document.getElementById('consent-email-body').value.trim();
+    if (!body) { toast('Paste the customer\'s affirmative reply as evidence', 'warning'); return; }
+    record = {
+      status: CONSENT_STATUSES.EMAIL_REPLY,
+      source: 'Email reply',
+      notes,
+      evidence: { emailSubject: subj, emailBody: body }
+    };
+  }
+
+  if (!record) { toast('Pick a consent source tab', 'warning'); return; }
+
+  const ok = setConsentSms(custId, record);
+  if (!ok) { toast('Failed to save consent', 'error'); return; }
+
+  document.getElementById('consent-modal').classList.remove('show');
+  toast('SMS consent saved', 'success');
+
+  // Re-render the currently open job detail so the banner updates
+  if (typeof S !== 'undefined' && S.jobDetailId && typeof renderJobDetail === 'function') {
+    try { renderJobDetail(S.jobDetailId); } catch(_) {}
+  }
+}
+
+function revokeConsent() {
+  if (!_consentCurrentCustId) return;
+  if (!confirm('Mark this customer as OPTED OUT of SMS? They will be blocked from receiving texts until re-captured.')) return;
+  const ok = setConsentSms(_consentCurrentCustId, {
+    status: CONSENT_STATUSES.OPTED_OUT,
+    source: 'Manual revocation in CRM',
+    notes: document.getElementById('consent-notes').value.trim(),
+    evidence: { revokedInCrm: true }
+  });
+  if (!ok) { toast('Failed to update consent', 'error'); return; }
+  document.getElementById('consent-modal').classList.remove('show');
+  toast('Customer marked as opted-out', 'success');
+  if (typeof S !== 'undefined' && S.jobDetailId && typeof renderJobDetail === 'function') {
+    try { renderJobDetail(S.jobDetailId); } catch(_) {}
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// INTRO + SMS CONSENT EMAIL (Yes/No button flow)
+// ─────────────────────────────────────────────────────────────
+// Flow:
+//  1. openConsentEmailModal(leadId) resolves lead→customer, opens modal.
+//  2. User hits "Send" → sendConsentEmail() calls Worker POST /consent/token,
+//     receives {viewUrl, declineUrl}, composes HTML, sends via Graph /me/sendMail.
+//  3. Customer clicks Yes/No in the email → lands on the Worker's confirmation
+//     page → on Confirm, Worker writes consent_records server-side.
+//  4. CRM picks up the server record next time hydrateConsentFromServer runs
+//     (on jobDetail open / banner render).
+
+// Transient state for the consent-email modal
+let _consentEmail = null; // { leadId, customerId, toEmail, phone, name }
+
+function _consentEmailBrandBlock() {
+  // Generic brand header — a green rounded "G" mark next to the company name.
+  // No website URL, since greenkey-usa.com is scheduled for a rebuild and we
+  // don't want to bake the old URL into outgoing customer-facing templates.
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
+      <tr>
+        <td align="left" style="padding:24px 28px 18px 28px;border-bottom:1px solid #e6e8eb">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">
+            <tr>
+              <td style="vertical-align:middle">
+                <div style="display:inline-block;width:36px;height:36px;background:#3aaa35;border-radius:8px;color:#ffffff;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:700;font-size:20px;line-height:36px;text-align:center">G</div>
+              </td>
+              <td style="vertical-align:middle;padding-left:12px">
+                <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:17px;color:#0f1115;letter-spacing:-0.01em">GreenKey</div>
+                <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:500;font-size:11px;color:#5a6270;letter-spacing:0.04em;text-transform:uppercase;margin-top:1px">EV Charger Installation</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>`;
+}
+
+// Build the full consent email HTML. viewUrl / declineUrl come from the
+// Cloudflare Worker's POST /consent/token response.
+function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl }) {
+  const safeFirst = escHtml(customerFirst || 'there');
+  const safePhone = escHtml(phone || 'your mobile number');
+  // Buttons are bulletproof-ish with padding via <a> + rounded corners. We
+  // also add a tiny "Button not working?" plain-text fallback linking to the
+  // same URL, so clients that strip <a> styling still work.
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Welcome to GreenKey</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#0f1115">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;padding:24px 12px">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(15,17,21,0.06)">
+          <tr><td>${_consentEmailBrandBlock()}</td></tr>
+          <tr>
+            <td style="padding:24px 28px 8px 28px">
+              <div style="font-size:15px;line-height:1.55;color:#0f1115">
+                <p style="margin:0 0 14px 0">Hi ${safeFirst},</p>
+                <p style="margin:0 0 14px 0">Thanks for reaching out to GreenKey about your EV charger project. We've received your inquiry and will be in touch soon with next steps.</p>
+                <p style="margin:0 0 14px 0"><strong>Quick question</strong> — for most projects, we send short text updates (appointment reminders, ETA on the day of install, permit or inspection updates, and a final handoff). It's the fastest way to keep you in the loop.</p>
+                <p style="margin:0 0 18px 0">Is it okay to text you at <strong>${safePhone}</strong>?</p>
+              </div>
+
+              <!-- Yes / No button row -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:6px auto 20px auto;border-collapse:collapse">
+                <tr>
+                  <td style="padding:0 8px 0 0">
+                    <a href="${viewUrl}" style="display:inline-block;padding:12px 28px;background:#3aaa35;color:#ffffff;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:15px;text-decoration:none;border-radius:8px;border:1px solid #2f8f2b">Yes, text me</a>
+                  </td>
+                  <td style="padding:0 0 0 8px">
+                    <a href="${declineUrl}" style="display:inline-block;padding:12px 28px;background:#ffffff;color:#5a6270;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:15px;text-decoration:none;border-radius:8px;border:1px solid #c8ccd2">No thanks, email only</a>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="font-size:12px;color:#5a6270;line-height:1.55;margin:0 0 14px 0">
+                Button not loading? You can also click this link: <a href="${viewUrl}" style="color:#3aaa35;text-decoration:underline">${viewUrl}</a>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Disclosure block (TCR-compliant) -->
+          <tr>
+            <td style="padding:8px 28px 22px 28px">
+              <div style="border-top:1px solid #e6e8eb;padding-top:14px;font-size:11.5px;color:#5a6270;line-height:1.55">
+                <div style="font-weight:600;color:#0f1115;font-size:12px;margin-bottom:6px">What you're agreeing to, if you click "Yes"</div>
+                <div style="margin-bottom:6px">GreenKey will send you text messages related to your EV charger project — scheduling, install-day ETAs, permit/inspection updates, and project handoff. You can expect roughly 1&ndash;10 messages per project.</div>
+                <div style="margin-bottom:6px">Message and data rates may apply. Consent is not a condition of purchase. Reply <strong>STOP</strong> at any time to unsubscribe. Reply <strong>HELP</strong> for help, or call <a href="tel:+18043105368" style="color:#3aaa35;text-decoration:underline">(804) 310-5368</a>.</div>
+                <div style="margin-bottom:0">Our <a href="https://greenkey-usa.com/privacy" style="color:#3aaa35;text-decoration:underline">Privacy Policy</a> and <a href="https://greenkey-usa.com/sms-terms" style="color:#3aaa35;text-decoration:underline">SMS Terms</a> describe how we use your information. We do not sell or share mobile opt-in data with third parties for marketing.</div>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 28px 24px 28px">
+              <div style="font-size:14px;line-height:1.55;color:#0f1115">
+                <p style="margin:0 0 8px 0">Looking forward to working with you,</p>
+                <p style="margin:0;font-weight:600">The GreenKey Team</p>
+                <p style="margin:2px 0 0 0;color:#5a6270;font-size:12px">Class A Electrical Contractor &middot; Richmond, VA &middot; Licensed &amp; Insured</p>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:14px 28px;background:#f8f9fb;border-top:1px solid #e6e8eb">
+              <div style="font-size:11px;color:#8a919c;line-height:1.5;text-align:center">
+                This message was sent to you because you contacted GreenKey Richmond VA LLC about an EV charger project. If this wasn't you, just ignore this email.
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+async function openConsentEmailModal(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) { toast('Lead not found', 'error'); return; }
+  const cust = getCustomer(lead.customerId);
+  if (!cust) {
+    toast('Link a customer to this lead before sending a consent email', 'warning');
+    return;
+  }
+  if (!_smsConfigured()) {
+    toast('SMS not yet configured — set SMS_WORKER_URL and SMS_SCOPE_URL in index.html', 'warning');
+    return;
+  }
+  const toEmail = cust.email || lead.customerEmail || '';
+  if (!toEmail) {
+    toast('No email address on file for this customer — add one in their profile first', 'warning');
+    return;
+  }
+  const phone = cust.phone || lead.customerPhone || '';
+  if (!phone) {
+    toast('No phone number on file — add one first (the consent covers this number)', 'warning');
+    return;
+  }
+  const nameFull = custFullName(cust) || lead.customerName || 'Customer';
+  const first = cust.firstName || (lead.customerName || '').split(' ')[0] || 'there';
+
+  _consentEmail = {
+    leadId: lead.id,
+    customerId: cust.id,
+    customerName: nameFull,
+    toEmail,
+    phone,
+    first,
+    tokenBundle: null  // will be populated on send
+  };
+
+  // Populate form
+  document.getElementById('ce-to').value      = toEmail;
+  document.getElementById('ce-phone').value   = phone;
+  document.getElementById('ce-subject').value = "We've got your EV charger inquiry — and a quick question";
+
+  // "From" indicator
+  let fromDisp = 'Outlook (not signed in — will open draft)';
+  try {
+    if (_gToken && typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts[0]) fromDisp = accts[0].username || 'your Microsoft account';
+    }
+  } catch(_){}
+  document.getElementById('ce-from').value = fromDisp;
+
+  // Render preview with dummy (local) placeholder URLs — real tokens are
+  // minted at send time so a cancelled preview doesn't leave orphaned tokens
+  // on the Worker.
+  const previewHtml = buildConsentEmailHtml({
+    customerFirst: first,
+    phone,
+    viewUrl: '#preview',
+    declineUrl: '#preview'
+  });
+  _renderConsentEmailPreview(previewHtml);
+
+  // Reset status panel + send button
+  const statusEl = document.getElementById('ce-status');
+  if (statusEl) { statusEl.style.display = 'none'; statusEl.innerHTML = ''; }
+  const sendBtn = document.getElementById('ce-send-btn');
+  if (sendBtn) {
+    sendBtn.disabled = false;
+    sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Consent Email';
+  }
+
+  document.getElementById('consent-email-modal').classList.add('show');
+
+  // Re-render preview whenever To/Phone/Subject are edited
+  const rePreview = () => {
+    if (!_consentEmail) return;
+    const ph = (document.getElementById('ce-phone').value || '').trim() || phone;
+    _consentEmail.phone = ph;
+    _consentEmail.toEmail = (document.getElementById('ce-to').value || '').trim() || toEmail;
+    const html = buildConsentEmailHtml({
+      customerFirst: _consentEmail.first,
+      phone: ph,
+      viewUrl: '#preview',
+      declineUrl: '#preview'
+    });
+    _renderConsentEmailPreview(html);
+  };
+  document.getElementById('ce-phone').oninput = rePreview;
+  document.getElementById('ce-to').oninput    = () => { if (_consentEmail) _consentEmail.toEmail = (document.getElementById('ce-to').value || '').trim(); };
+}
+
+function _renderConsentEmailPreview(html) {
+  const ifr = document.getElementById('ce-preview');
+  if (!ifr) return;
+  // Use srcdoc so we don't fight browser caching or same-origin rules
+  ifr.srcdoc = html;
+}
+
+function _showConsentEmailStatus(kind, html) {
+  const el = document.getElementById('ce-status');
+  if (!el) return;
+  const palette = {
+    info:    { bg:'#1a2a3a', border:'#3498db', color:'#a9d6f5' },
+    success: { bg:'#1a3a1f', border:'#2ecc71', color:'#bff0d0' },
+    warning: { bg:'#3a2e14', border:'#f39c12', color:'#f4c48a' },
+    error:   { bg:'#3a1a1a', border:'#e74c3c', color:'#ffb3b3' }
+  };
+  const p = palette[kind] || palette.info;
+  el.style.background = p.bg;
+  el.style.border = '1px solid ' + p.border;
+  el.style.color = p.color;
+  el.style.display = '';
+  el.innerHTML = html;
+}
+
+async function sendConsentEmail() {
+  if (!_consentEmail) return;
+  const ce = _consentEmail;
+
+  // Pull latest form values (user may have edited To/Phone/Subject)
+  ce.toEmail = (document.getElementById('ce-to').value || '').trim();
+  ce.phone   = (document.getElementById('ce-phone').value || '').trim();
+  const subject = (document.getElementById('ce-subject').value || '').trim() || "We've got your EV charger inquiry — and a quick question";
+
+  if (!ce.toEmail) { toast('Please enter a recipient email', 'warning'); return; }
+  if (!ce.phone)   { toast('Please enter a mobile number (covered by the consent)', 'warning'); return; }
+
+  const sendBtn = document.getElementById('ce-send-btn');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Requesting token…'; }
+  _showConsentEmailStatus('info', 'Minting one-time consent token on the server…');
+
+  // Step 1: request a consent token from the Worker
+  let tokenBundle;
+  try {
+    const bearer = await _acquireSMSToken();
+    const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/consent/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + bearer
+      },
+      body: JSON.stringify({
+        customerId: ce.customerId,
+        customerName: ce.customerName,
+        phone: ce.phone,
+        email: ce.toEmail,
+        leadId: ce.leadId
+      })
+    });
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      throw new Error(`Worker returned ${resp.status}: ${txt || resp.statusText}`);
+    }
+    tokenBundle = await resp.json();
+    if (!tokenBundle || !tokenBundle.viewUrl || !tokenBundle.declineUrl) {
+      throw new Error('Worker response missing viewUrl / declineUrl');
+    }
+  } catch (e) {
+    console.error('[GK] consent token request failed:', e);
+    _showConsentEmailStatus('error',
+      '<strong>Could not create consent token.</strong><br>' +
+      escHtml(e.message || String(e)) +
+      '<br><span style="color:var(--text-muted);font-size:11.5px">Check that the Worker is deployed and you have the <code>SMS.send</code> scope.</span>'
+    );
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Consent Email';
+    }
+    return;
+  }
+
+  ce.tokenBundle = tokenBundle;
+
+  // Step 2: build the final HTML with the live URLs
+  const htmlBody = buildConsentEmailHtml({
+    customerFirst: ce.first,
+    phone: ce.phone,
+    viewUrl: tokenBundle.viewUrl,
+    declineUrl: tokenBundle.declineUrl
+  });
+  // Also build a plain-text fallback for email clients that strip HTML.
+  const textBody =
+`Hi ${ce.first},
+
+Thanks for reaching out to GreenKey about your EV charger project. We've received your inquiry and will be in touch soon with next steps.
+
+Quick question: for most projects, we send short text updates (appointment reminders, ETA on the day of install, permit/inspection updates, and a final handoff). Is it okay to text you at ${ce.phone}?
+
+Yes, text me:    ${tokenBundle.viewUrl}
+No thanks:       ${tokenBundle.declineUrl}
+
+What you're agreeing to if you click "Yes":
+GreenKey will send you text messages related to your EV charger project — scheduling, install-day ETAs, permit/inspection updates, and project handoff. Roughly 1–10 messages per project. Message and data rates may apply. Consent is not a condition of purchase. Reply STOP at any time to unsubscribe. Reply HELP for help, or call (804) 310-5368.
+
+Privacy Policy: https://greenkey-usa.com/privacy
+SMS Terms:     https://greenkey-usa.com/sms-terms
+
+Looking forward to working with you,
+The GreenKey Team
+Class A Electrical Contractor · Richmond, VA · Licensed & Insured`;
+
+  // Step 3: send via Graph. Always re-acquire token for latest Mail.Send scope.
+  if (sendBtn) sendBtn.textContent = 'Sending email…';
+  _showConsentEmailStatus('info', 'Token minted. Sending email via Microsoft Graph…');
+
+  let canGraph = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        try {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+          _gToken = tr.accessToken;
+        } catch (silentErr) {
+          console.warn('[GK] silent token failed, trying popup:', silentErr);
+          const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+          _gToken = tr2.accessToken;
+        }
+        canGraph = !!_gToken;
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] Could not acquire Graph token:', e);
+    canGraph = false;
+  }
+
+  if (canGraph) {
+    try {
+      await _graphFetch('/me/sendMail', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: {
+            subject,
+            body: { contentType: 'HTML', content: htmlBody },
+            toRecipients: [{ emailAddress: { address: ce.toEmail } }]
+          },
+          saveToSentItems: true
+        })
+      });
+
+      // Record on the customer object so the banner can show "consent email sent, awaiting response"
+      const cust = getCustomer(ce.customerId);
+      if (cust) {
+        cust.consentEmailRequests = cust.consentEmailRequests || [];
+        cust.consentEmailRequests.push({
+          token: tokenBundle.token,
+          expiresAt: tokenBundle.expiresAt,
+          sentAt: new Date().toISOString(),
+          sentBy: (typeof S !== 'undefined' && S.user && (S.user.upn || S.user.email)) || '',
+          to: ce.toEmail,
+          phone: ce.phone,
+          leadId: ce.leadId
+        });
+        upsertCustomer(cust);
+      }
+
+      _showConsentEmailStatus('success',
+        '<strong>Consent email sent.</strong> The record will update automatically when the customer clicks Yes or No.'
+      );
+      toast('✅ Consent email sent', 'success');
+      setTimeout(() => {
+        document.getElementById('consent-email-modal').classList.remove('show');
+        _consentEmail = null;
+        if (typeof S !== 'undefined' && S.jobDetailId && typeof renderJobDetail === 'function') {
+          try { renderJobDetail(S.jobDetailId); } catch(_) {}
+        }
+      }, 1200);
+    } catch (e) {
+      console.error('[GK] Graph sendMail failed:', e);
+      _showConsentEmailStatus('error',
+        '<strong>Graph sendMail failed.</strong><br>' + escHtml(e.message || String(e)) +
+        '<br><span style="color:var(--text-muted);font-size:11.5px">Token is still valid — you can retry. Or fall back to a manual email with the links below.</span>' +
+        '<div style="margin-top:8px;font-size:11.5px;color:var(--text-muted)">' +
+        'Yes link: <code style="word-break:break-all">' + escHtml(tokenBundle.viewUrl) + '</code><br>' +
+        'No link: <code style="word-break:break-all">' + escHtml(tokenBundle.declineUrl) + '</code>' +
+        '</div>'
+      );
+      if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Retry Send';
+      }
+    }
+  } else {
+    // No Graph token — fall back to mailto with the plain-text version
+    const mailto = 'mailto:' + encodeURIComponent(ce.toEmail) +
+      '?subject=' + encodeURIComponent(subject) +
+      '&body=' + encodeURIComponent(textBody);
+    window.location.href = mailto;
+    _showConsentEmailStatus('warning',
+      '<strong>Not signed in to Microsoft.</strong> Outlook has been opened with the plain-text version. ' +
+      'For the real Yes/No buttons, sign in to Microsoft and try again.'
+    );
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Consent Email';
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Hydrate consent from the Worker (catches STOP events, email clicks, etc.)
+// ─────────────────────────────────────────────────────────────
+// Calls GET /consent/status?customerId=... and mirrors server records into
+// local state when the server has newer authoritative data (e.g. STOP sent
+// via SMS after we last rendered the banner). Called on banner render.
+async function hydrateConsentFromServer(customerId) {
+  if (!customerId) return;
+  if (!_smsConfigured()) return;
+  try {
+    const bearer = await _acquireSMSToken();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/consent/status?customerId=' + encodeURIComponent(customerId),
+      { headers: { 'Authorization': 'Bearer ' + bearer } }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data) return;
+
+    const cust = getCustomer(customerId);
+    if (!cust) return;
+
+    let changed = false;
+
+    // SMS channel
+    if (data.sms && data.sms.status) {
+      const local = getConsentSms(customerId);
+      const serverTs = data.sms.capturedAt ? new Date(data.sms.capturedAt).getTime() : 0;
+      const localTs  = local && local.capturedAt ? new Date(local.capturedAt).getTime() : 0;
+      // Server wins if (a) we have nothing locally, (b) server record is
+      // newer, or (c) server says opted_out — STOP events always propagate.
+      if ((!local || local.status === CONSENT_STATUSES.NONE) ||
+          serverTs > localTs ||
+          data.sms.status === 'opted_out') {
+        let localStatus;
+        if (data.sms.status === 'opted_out') {
+          localStatus = CONSENT_STATUSES.OPTED_OUT;
+        } else {
+          // Map server sources to our local buckets
+          const src = data.sms.source || '';
+          if (src === 'email_button_accept')      localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+          else if (src === 'sms_start')            localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+          else if (src.startsWith('crm_manual_')) {
+            if (src === 'crm_manual_verbal')       localStatus = CONSENT_STATUSES.VERBAL_PHONE;
+            else if (src === 'crm_manual_partner') localStatus = CONSENT_STATUSES.PARTNER_INTAKE;
+            else if (src === 'crm_manual_web_form')localStatus = CONSENT_STATUSES.WEB_FORM;
+            else if (src === 'crm_manual_email_reply') localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+            else localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+          } else {
+            localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+          }
+        }
+        if (!local || local.status !== localStatus || localTs !== serverTs) {
+          cust.consentSms = {
+            status: localStatus,
+            source: data.sms.source || 'server_sync',
+            capturedAt: data.sms.capturedAt || new Date().toISOString(),
+            capturedBy: data.sms.capturedBy || 'server',
+            notes: data.sms.notes || '',
+            evidence: { serverId: data.sms.id }
+          };
+          changed = true;
+        }
+      }
+    }
+
+    // Email channel (optional — we track decline events here)
+    if (data.email && data.email.status) {
+      const local = getConsentEmail(customerId);
+      const serverTs = data.email.capturedAt ? new Date(data.email.capturedAt).getTime() : 0;
+      const localTs  = local && local.capturedAt ? new Date(local.capturedAt).getTime() : 0;
+      if ((!local || local.status === CONSENT_STATUSES.NONE) || serverTs > localTs) {
+        cust.consentEmail = {
+          status: data.email.status === 'opted_out' ? CONSENT_STATUSES.OPTED_OUT : CONSENT_STATUSES.EMAIL_REPLY,
+          source: data.email.source || 'server_sync',
+          capturedAt: data.email.capturedAt || new Date().toISOString(),
+          capturedBy: data.email.capturedBy || 'server',
+          notes: data.email.notes || '',
+          evidence: { serverId: data.email.id }
+        };
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      upsertCustomer(cust);
+      // Re-render the job detail if currently open so the banner picks up the change
+      if (typeof S !== 'undefined' && S.jobDetailId && typeof renderJobDetail === 'function') {
+        try { renderJobDetail(S.jobDetailId); } catch(_) {}
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] hydrateConsentFromServer failed (non-fatal):', e);
+  }
+}
+
 function openSMSModal(leadId) {
   const lead = getLead(leadId);
   if (!lead) return;
@@ -8475,6 +9500,25 @@ function openSMSModal(leadId) {
   }
   if (!_smsConfigured()) {
     toast('SMS not yet configured — set SMS_WORKER_URL and SMS_SCOPE_URL in index.html', 'warning');
+    return;
+  }
+
+  // ── TCPA / A2P CONSENT GATE ──
+  // Block sending unless we have valid SMS consent on the customer record.
+  if (cust) {
+    const cs = getConsentSms(cust.id);
+    if (!cs || cs.status === CONSENT_STATUSES.NONE) {
+      toast('No SMS consent on file — capture consent first', 'warning');
+      openConsentModal(cust.id, 'sms');
+      return;
+    }
+    if (cs.status === CONSENT_STATUSES.OPTED_OUT) {
+      toast('Customer has opted out of SMS — cannot send', 'error');
+      return;
+    }
+  } else {
+    // No linked customer record — refuse rather than text an un-tracked number.
+    toast('No customer record linked to this lead — link a customer before texting', 'warning');
     return;
   }
 
