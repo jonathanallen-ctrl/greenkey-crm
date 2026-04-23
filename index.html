@@ -1178,6 +1178,9 @@
       <!-- SCHEDULER -->
       <div class="page" id="page-scheduler"></div>
 
+      <!-- TECH MODE — mobile-first job view for field work -->
+      <div class="page" id="page-tech"></div>
+
       <!-- REPORTS — Module 8 -->
       <div class="page" id="page-reports">
         <!-- Top bar: period selector + export -->
@@ -1718,7 +1721,7 @@ function doLogout() {
   // Sign out of Microsoft session if applicable
   if (_msal) {
     const accounts = _msal.getAllAccounts();
-    if (accounts.length > 0) { _msal.logoutPopup({ account: accounts[0] }).catch(()=>{}); }
+    if (accounts.length > 0) { _logoutInteractive({ account: accounts[0] }).catch(()=>{}); }
   }
   _gToken = null; _spSite = null; _spList = null; _spDrive = null;
   S.user = null;
@@ -1788,7 +1791,26 @@ function buildApp(user) {
   buildSettingsNav(user);
   // Prime task badges and dashboard widget after login
   setTimeout(()=>{ updateTaskBadge(); updateDashboardWidget(); }, 50);
+  // Honor any deep-link hash (e.g. from a calendar event URL: #tech=LEAD-123)
+  _handleDeepLinkHash();
 }
+
+// Parse location.hash for supported deep-links and route to the target page.
+// Supported: #tech=LEAD_ID → Tech Mode; #job-LEAD_ID → job detail (legacy).
+function _handleDeepLinkHash() {
+  const h = (location.hash || '').replace(/^#/,'');
+  if (!h) return;
+  const techMatch = h.match(/^tech=(.+)$/);
+  if (techMatch) { openTechMode(decodeURIComponent(techMatch[1])); return; }
+  const jobMatch = h.match(/^job-(.+)$/);
+  if (jobMatch) {
+    const id = decodeURIComponent(jobMatch[1]);
+    navigate('jobs');
+    setTimeout(() => { if (typeof openJobDetail === 'function') openJobDetail(id); }, 80);
+  }
+}
+// React to hash changes while the app is open (e.g. user taps another calendar link).
+window.addEventListener('hashchange', () => { if (S.user) _handleDeepLinkHash(); });
 
 // ── NAVIGATION ──
 function navEl(el) {
@@ -1803,7 +1825,7 @@ function navigate(page) {
   if (el) navEl(el); else showPage(page);
 }
 
-const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',reports:'Reports',settings:'Settings'};
+const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
 
 function showPage(page) {
   S.page = page;
@@ -1832,6 +1854,15 @@ function showPage(page) {
   else if (page==='permitting') renderPermittingPage();
   else if (page==='scheduler') renderSchedulerPage();
   else if (page==='reports') renderReportsPage();
+  else if (page==='tech') renderTechPage(S.techLeadId);
+}
+
+// Open Tech Mode for a specific lead. Exported so calendar deep-links and the
+// "Today's Jobs" dashboard card can call it.
+function openTechMode(leadId) {
+  S.techLeadId = leadId;
+  location.hash = 'tech=' + encodeURIComponent(leadId);
+  showPage('tech');
 }
 
 function toggleSidebar() {
@@ -4225,9 +4256,10 @@ async function sendQuoteEmail(){
           const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
           _gToken = tr.accessToken;
         } catch(silentErr) {
-          // Silent failed — scope needs interactive consent (first time Mail.Send)
-          console.warn('[GK] silent token failed, trying popup:', silentErr);
-          const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+          // Silent failed — scope needs interactive consent (first time Mail.Send).
+          // On iOS/PWA this will redirect away; caller will not resume.
+          console.warn('[GK] silent token failed, trying interactive:', silentErr);
+          const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
           _gToken = tr2.accessToken;
         }
         canGraph = !!_gToken;
@@ -5080,6 +5112,10 @@ function saveJobSnapshot(leadId, silent=false) {
   if (idx < 0) return;
   const panelBrand = document.getElementById('snap-panel-brand')?.value||'';
   const breakerSize = document.getElementById('snap-breaker-size')?.value||'';
+  // Preserve existing wireRuns — they're managed by dedicated add/update/remove
+  // functions rather than a single form sweep, so re-harvesting every field here
+  // would clobber in-flight edits.
+  const existingRuns = arr[idx].electricalSnapshot?.wireRuns || [];
   arr[idx].electricalSnapshot = {
     serviceSize:      document.getElementById('snap-panels')?.value||'200A',
     panelBrand,
@@ -5090,12 +5126,92 @@ function saveJobSnapshot(leadId, silent=false) {
     major240VLoads:   document.getElementById('snap-loads')?.value||'',
     solar:            document.getElementById('snap-solar')?.checked||false,
     battery:          document.getElementById('snap-battery')?.checked||false,
-    generator:        document.getElementById('snap-generator')?.checked||false
+    generator:        document.getElementById('snap-generator')?.checked||false,
+    wireRuns:         existingRuns
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
   if (silent) _showAutoSaved('snap-save-btn');
   else toast('Electrical snapshot saved','success');
+}
+
+// ── WIRE RUNS EDITOR ──
+// Runs are rendered per-row so dynamic add/remove works without re-rendering
+// the whole Electrical Snapshot section. Each row writes changes directly into
+// lead.electricalSnapshot.wireRuns and saves debounced via autoSaveSnapshot-style flow.
+
+function renderWireRunRows(leadId, runs, currentBreakerSize) {
+  if (!runs || runs.length === 0) {
+    const suggested = NEC_GAUGE_BY_BREAKER[currentBreakerSize];
+    const hint = suggested
+      ? `Suggested for ${escHtml(currentBreakerSize)}: <strong>${escHtml(suggested)}</strong>`
+      : 'e.g. #6 CU THHN · 75 ft · EMT · Panel → disconnect';
+    return `<div style="padding:10px 12px;font-size:12px;color:var(--text-muted);background:var(--bg-elevated);border:1px dashed var(--border);border-radius:var(--r)">No wire runs captured yet. ${hint}</div>`;
+  }
+  return runs.map(r => _wireRunRow(leadId, r)).join('');
+}
+
+function _wireRunRow(leadId, run) {
+  const gaugeOpts = WIRE_GAUGES.map(g => `<option value="${g}"${g===run.gauge?' selected':''}>${g}</option>`).join('');
+  const condOpts = ['<option value="">— Conduit —</option>'].concat(
+    CONDUIT_TYPES.map(c => `<option value="${c}"${c===run.conduit?' selected':''}>${c}</option>`)
+  ).join('');
+  return `<div class="wire-run-row" data-run="${run.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px">
+    <input class="jd-fi" type="text" placeholder="Label (Panel → disconnect)" value="${escHtml(run.label||'')}" style="flex:1 1 180px;min-width:140px;font-size:12.5px" onchange="updateWireRun('${leadId}','${run.id}','label',this.value)">
+    <select class="jd-fi" style="width:160px;font-size:12.5px" onchange="updateWireRun('${leadId}','${run.id}','gauge',this.value)">
+      <option value="">— Gauge —</option>${gaugeOpts}
+    </select>
+    <input class="jd-fi" type="number" min="0" step="1" placeholder="Length (ft)" value="${run.length||''}" style="width:100px;font-size:12.5px;font-family:var(--mono)" onchange="updateWireRun('${leadId}','${run.id}','length',parseFloat(this.value)||0)">
+    <select class="jd-fi" style="width:120px;font-size:12.5px" onchange="updateWireRun('${leadId}','${run.id}','conduit',this.value)">
+      ${condOpts}
+    </select>
+    <button class="li-del" onclick="removeWireRun('${leadId}','${run.id}')" title="Remove run">×</button>
+  </div>`;
+}
+
+function addWireRun(leadId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  if (!arr[idx].electricalSnapshot) arr[idx].electricalSnapshot = {};
+  if (!Array.isArray(arr[idx].electricalSnapshot.wireRuns)) arr[idx].electricalSnapshot.wireRuns = [];
+  const suggested = NEC_GAUGE_BY_BREAKER[arr[idx].electricalSnapshot.breakerSize] || '';
+  const newRun = {
+    id: 'wr-' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
+    label: '',
+    gauge: suggested,
+    length: 0,
+    conduit: ''
+  };
+  arr[idx].electricalSnapshot.wireRuns.push(newRun);
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  const wrap = document.getElementById('wire-runs-' + leadId);
+  if (wrap) wrap.innerHTML = renderWireRunRows(leadId, arr[idx].electricalSnapshot.wireRuns, arr[idx].electricalSnapshot.breakerSize);
+}
+
+function updateWireRun(leadId, runId, field, value) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const runs = arr[idx].electricalSnapshot?.wireRuns || [];
+  const r = runs.find(x => x.id === runId);
+  if (!r) return;
+  r[field] = value;
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+}
+
+function removeWireRun(leadId, runId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const runs = arr[idx].electricalSnapshot?.wireRuns || [];
+  arr[idx].electricalSnapshot.wireRuns = runs.filter(x => x.id !== runId);
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  const wrap = document.getElementById('wire-runs-' + leadId);
+  if (wrap) wrap.innerHTML = renderWireRunRows(leadId, arr[idx].electricalSnapshot.wireRuns, arr[idx].electricalSnapshot.breakerSize);
 }
 
 const _ISSUE_TASKS = {
@@ -5139,6 +5255,37 @@ const CHARGER_MODELS = {
   'Rivian':      ['48-amp Hardwired'],
   'Ford':        ['48-amp Hardwired', '80-amp Hardwired'],
   'Other':       ['40-amp Hardwired', '48-amp Hardwired', '80-amp Hardwired']
+};
+
+// ── WIRE RUN CONSTANTS ──
+// Gauges ordered from smallest → largest. THHN/THWN-2 copper is the default;
+// XHHW aluminum is the common alt for service feeders 100A+ where cost matters.
+const WIRE_GAUGES = [
+  '#14 CU THHN','#12 CU THHN','#10 CU THHN','#8 CU THHN','#6 CU THHN',
+  '#4 CU THHN','#3 CU THHN','#2 CU THHN','#1 CU THHN',
+  '#1/0 CU THHN','#2/0 CU THHN','#3/0 CU THHN','#4/0 CU THHN',
+  '250 kcmil CU','350 kcmil CU','500 kcmil CU',
+  '#6 AL XHHW','#4 AL XHHW','#2 AL XHHW','#1 AL XHHW',
+  '#1/0 AL XHHW','#2/0 AL XHHW','#4/0 AL XHHW',
+  '250 kcmil AL','350 kcmil AL','500 kcmil AL',
+  'Other'
+];
+const CONDUIT_TYPES = ['EMT','PVC','Rigid','MC Cable','Direct Bury','In Wall','Other'];
+// NEC 310.16 ampacity-based gauge suggestion. Uses the standard 75°C CU column.
+// Maps the job's selected breaker size → suggested wire gauge string that matches
+// a WIRE_GAUGES entry. Tech can override. Conservative — won't suggest aluminum.
+const NEC_GAUGE_BY_BREAKER = {
+  '20-amp':  '#12 CU THHN',
+  '30-amp':  '#10 CU THHN',
+  '40-amp':  '#8 CU THHN',
+  '50-amp':  '#6 CU THHN',
+  '50-amp GFCI': '#6 CU THHN',
+  '60-amp':  '#6 CU THHN',
+  '100-amp': '#3 CU THHN',
+  '150-amp': '#1/0 CU THHN',
+  '200-amp': '#2/0 CU THHN',
+  '300-amp': '#4/0 CU THHN',
+  '400-amp': '500 kcmil CU'
 };
 
 function onChargerMakeChange(makeVal) {
@@ -5484,6 +5631,15 @@ function renderJobDetail(id) {
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
           <input type="checkbox" id="${eid}" ${val?'checked':''} style="accent-color:var(--green)"> ${lbl}
         </label>`).join('')}
+      </div>
+
+      <!-- Wire Runs -->
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:12px;font-weight:500;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Wire Runs</div>
+          <button class="btn btn-g" style="padding:3px 10px;font-size:11px" onclick="addWireRun('${id}')">+ Add Run</button>
+        </div>
+        <div id="wire-runs-${id}">${renderWireRunRows(id, snap.wireRuns||[], snap.breakerSize)}</div>
       </div>
     </div>
   </div>`;
@@ -7341,27 +7497,39 @@ function _dashScheduled(leads, custs, today) {
   const dow = now.getDay();
   const ws = new Date(now); ws.setDate(now.getDate()-dow); ws.setHours(0,0,0,0);
   const we = new Date(ws); we.setDate(ws.getDate()+6); we.setHours(23,59,59,999);
-  const sched = leads.filter(l=>{
-    const d = (l.milestones||{}).installScheduled_date||(l.milestones||{}).installDate;
-    if (!d) return false;
-    const dt = new Date(d);
-    return dt>=ws && dt<=we;
-  });
+  const todayStart = new Date(now); todayStart.setHours(0,0,0,0);
+  const todayEnd   = new Date(now); todayEnd.setHours(23,59,59,999);
+  // Resolve the scheduled date — installScheduled is stored as {done, date}
+  // on milestones, but legacy records used installScheduled_date / installDate.
+  const resolveDate = l => {
+    const ms = l.milestones || {};
+    return ms.installScheduled?.date || ms.installScheduled_date || ms.installDate || '';
+  };
+  const sched = leads
+    .map(l => ({ l, d: resolveDate(l) }))
+    .filter(x => x.d && new Date(x.d)>=ws && new Date(x.d)<=we)
+    .sort((a,b) => new Date(a.d) - new Date(b.d));
   if (!sched.length) {
     wrap.innerHTML = `<div class="empty" style="padding:30px 20px"><div class="etitle" style="font-size:13px">No jobs scheduled this week</div></div>`;
     return;
   }
-  wrap.innerHTML = sched.map(l=>{
+  wrap.innerHTML = sched.map(({l,d}) => {
     const c=custs.find(x=>x.id===l.customerId);
     const name=c?custFullName(c):(l.customerName||'Unknown');
-    const ms=l.milestones||{};
-    const ds=ms.installScheduled_date||ms.installDate||'';
-    return `<div class="task-row" onclick="openLeadDetail('${l.id}')" style="padding:10px 14px;cursor:pointer">
+    const dt = new Date(d);
+    const isToday = dt>=todayStart && dt<=todayEnd;
+    const dateChip = isToday
+      ? `<span style="font-size:10.5px;font-weight:700;color:#0f1117;background:var(--green);padding:2px 7px;border-radius:9px;letter-spacing:0.4px">TODAY</span>`
+      : `<span style="font-size:11px;color:var(--amber);font-weight:500">${dt.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</span>`;
+    return `<div class="task-row" onclick="openTechMode('${l.id}')" style="padding:10px 14px;cursor:pointer">
       <div class="task-body">
-        <div style="font-size:13px;font-weight:500">${escHtml(name)}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px">
+          ${dateChip}
+          <span style="font-size:13px;font-weight:500">${escHtml(name)}</span>
+        </div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
           ${typeChip(l.jobType)}${sourceChip(l.source)}
-          ${ds?`<span style="font-size:11px;color:var(--amber);font-weight:500">${new Date(ds).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</span>`:''}
+          ${l.siteCity?`<span style="font-size:11px;color:var(--text-muted)">${escHtml(l.siteCity)}</span>`:''}
         </div>
       </div>
     </div>`;
@@ -7929,6 +8097,205 @@ function getSchedulableJobs() {
 }
 
 // ── SCHEDULER PAGE RENDER ──
+// ══════════════════════════════════════════════════════
+// ── TECH MODE — mobile-first job view for field work ──
+// ══════════════════════════════════════════════════════
+//
+// Surfaces only what a technician needs on-site: customer info with tap-to-
+// call/text/navigate, scope of work, electrical snapshot + wire runs, charger
+// info, site photos, and a prominent Install Photo camera/upload. Quote editing
+// and payment collection live in later phases — Tech Mode today is read-mostly
+// (photos upload is the sole write path) and designed for a phone screen.
+
+function renderTechPage(leadId) {
+  const pg = document.getElementById('page-tech');
+  if (!pg) return;
+  if (!leadId) {
+    pg.innerHTML = `<div class="empty" style="padding:60px 20px">
+      <div class="etitle">No job selected</div>
+      <div class="edesc">Open a scheduled job from the dashboard or tap a calendar link.</div>
+      <div style="margin-top:16px"><button class="btn btn-p" onclick="navigate('dashboard')">Back to Dashboard</button></div>
+    </div>`;
+    return;
+  }
+  const lead = getLead(leadId);
+  if (!lead) {
+    pg.innerHTML = `<div class="empty" style="padding:60px 20px">
+      <div class="etitle">Job not found</div>
+      <div class="edesc">Lead ${escHtml(leadId)} doesn't exist or may have been deleted.</div>
+    </div>`;
+    return;
+  }
+  const cust = getCustomer(lead.customerId);
+  const custName = cust ? custFullName(cust) : (lead.customerName || 'Unknown');
+  const phone = cust?.phone || lead.customerPhone || '';
+  const phoneE164 = toE164US ? toE164US(phone) : phone;
+  const addrLine = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ');
+  const addrQuery = encodeURIComponent(addrLine);
+  const mapsHref = addrLine ? `https://maps.apple.com/?q=${addrQuery}` : '';
+  const gmapsHref = addrLine ? `https://www.google.com/maps/search/?api=1&query=${addrQuery}` : '';
+  const snap = lead.electricalSnapshot || {};
+  const charger = lead.chargerInfo || {};
+  const isEV = lead.jobType === 'ev-residential';
+  const isDirect = !['Qmerit','Electrum','Treehouse'].includes(lead.source);
+  const installDone = !!lead.milestones?.installScheduled?.done;
+  const installDate = lead.milestones?.installScheduled?.date || '';
+
+  // ── Payment banner — colored by responsibility ──
+  const payBanner = isDirect
+    ? `<div style="background:rgba(46,204,113,0.12);border:1px solid var(--green);border-left-width:4px;border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--green);letter-spacing:0.5px;text-transform:uppercase">Payment: Collect at Job</div>
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-top:2px">Direct customer — ask about preferred payment method before leaving the site.</div>
+      </div>`
+    : `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-left:4px solid var(--text-muted);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase">Payment: ${escHtml(lead.source||'Platform')} Handles It</div>
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-top:2px">Do NOT collect payment from this customer — ${escHtml(lead.source||'the platform')} invoices them directly.</div>
+      </div>`;
+
+  // ── Contact actions — big thumb targets ──
+  const telHref = phoneE164 ? 'tel:' + phoneE164 : '';
+  const smsHref = phoneE164 ? 'sms:' + phoneE164 : '';
+  const contactActions = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    ${telHref ? `<a href="${telHref}" style="flex:1;min-width:110px;text-align:center;padding:12px;background:var(--green);color:#0f1117;border-radius:var(--r);text-decoration:none;font-weight:600;font-size:14px">📞 Call</a>` : ''}
+    ${smsHref ? `<a href="${smsHref}" style="flex:1;min-width:110px;text-align:center;padding:12px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--r);text-decoration:none;font-weight:500;font-size:14px">💬 Text</a>` : ''}
+    ${mapsHref ? `<a href="${mapsHref}" style="flex:1;min-width:110px;text-align:center;padding:12px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--r);text-decoration:none;font-weight:500;font-size:14px">🧭 Navigate</a>` : ''}
+  </div>`;
+
+  // ── Header / customer block ──
+  const hdrBlock = `<div style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${typeChip(lead.jobType)}${sourceChip(lead.source)}
+      ${installDate?`<span class="chip" style="background:var(--blue-dim);color:var(--blue);font-size:11px">Install ${escHtml(installDate)}</span>`:''}
+    </div>
+    <div style="font-size:22px;font-weight:600;color:var(--text-primary);margin-top:8px;line-height:1.2">${escHtml(custName)}</div>
+    ${addrLine?`<div style="font-size:13px;color:var(--text-secondary);margin-top:4px;line-height:1.4">${escHtml(addrLine)}</div>`:''}
+    ${phone?`<div style="font-size:13px;color:var(--text-muted);margin-top:2px;font-family:var(--mono)">${escHtml(phone)}</div>`:''}
+  </div>`;
+
+  // ── Scope of work ──
+  const scopeBlock = lead.scopeOfWork
+    ? `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Scope of Work</div>
+        <div style="font-size:13.5px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap">${escHtml(lead.scopeOfWork)}</div>
+      </div>`
+    : '';
+
+  // ── Electrical Snapshot ──
+  const panelDisplay = snap.panelBrand==='Other' ? (snap.panelBrandOther||'Other') : (snap.panelBrand||'—');
+  const breakerDisplay = snap.breakerSize==='Other' ? (snap.breakerSizeOther||'Other') : (snap.breakerSize||'—');
+  const flagChips = [
+    snap.subpanel?'Sub-panel':null, snap.solar?'Solar':null,
+    snap.battery?'Battery':null, snap.generator?'Generator':null
+  ].filter(Boolean).map(f=>`<span class="chip" style="background:var(--blue-dim);color:var(--blue);font-size:10.5px">${f}</span>`).join('');
+  const snapBlock = `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Electrical Snapshot</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;font-size:13px">
+      <div><div style="color:var(--text-muted);font-size:11px">Service</div><div style="font-weight:500">${escHtml(snap.serviceSize||'—')}</div></div>
+      <div><div style="color:var(--text-muted);font-size:11px">Panel</div><div style="font-weight:500">${escHtml(panelDisplay)}</div></div>
+      <div><div style="color:var(--text-muted);font-size:11px">Breaker</div><div style="font-weight:500">${escHtml(breakerDisplay)}</div></div>
+    </div>
+    ${flagChips?`<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${flagChips}</div>`:''}
+    ${snap.major240VLoads?`<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)"><strong>Issue:</strong> ${escHtml(snap.major240VLoads)}</div>`:''}
+  </div>`;
+
+  // ── Wire Runs (read-only list) ──
+  const runs = snap.wireRuns || [];
+  const wireBlock = runs.length
+    ? `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Wire Runs</div>
+        ${runs.map(r => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+          ${r.label?`<div style="font-weight:500;margin-bottom:2px">${escHtml(r.label)}</div>`:''}
+          <div style="color:var(--text-secondary);font-size:12.5px">
+            <span style="font-family:var(--mono)">${escHtml(r.gauge||'— gauge —')}</span>
+            · <span style="font-family:var(--mono)">${r.length||0} ft</span>
+            ${r.conduit?` · ${escHtml(r.conduit)}`:''}
+          </div>
+        </div>`).join('')}
+      </div>`
+    : '';
+
+  // ── Charger info (EV only) ──
+  const chargerBlock = !isEV ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Charger</div>
+    <div style="font-size:13px">
+      <div style="font-weight:500">${escHtml(charger.make||'—')} ${escHtml(charger.model||'')}</div>
+      ${charger.plugType?`<div style="color:var(--text-muted);font-size:12px;margin-top:2px">Plug: ${escHtml(charger.plugType)}</div>`:''}
+    </div>
+    ${lead.milestones?.chargerConfirmed?.done
+      ? `<div style="margin-top:6px;font-size:11.5px;color:var(--green);font-weight:500">✓ Confirmed on site</div>`
+      : `<div style="margin-top:6px;font-size:11.5px;color:var(--amber);font-weight:500">⚠ Not yet confirmed on site</div>`}
+  </div>`;
+
+  // ── Photos — site (read) + install (write) ──
+  const allFiles = getJobFiles(leadId);
+  const sitePhotos = allFiles.filter(f => f.category === 'site' && (f.mimeType||'').startsWith('image/'));
+  const installPhotos = allFiles.filter(f => f.category === 'install' && (f.mimeType||'').startsWith('image/'));
+
+  const siteGrid = sitePhotos.length
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
+        ${sitePhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','site',${sitePhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
+          <img src="${f.dataUrl}" alt="" style="width:100%;height:100%;object-fit:cover">
+        </div>`).join('')}
+      </div>`
+    : `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">No site photos on file.</div>`;
+
+  const installGrid = installPhotos.length
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;margin-top:10px">
+        ${installPhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','install',${installPhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
+          <img src="${f.dataUrl}" alt="" style="width:100%;height:100%;object-fit:cover">
+        </div>`).join('')}
+      </div>`
+    : '';
+
+  const photosBlock = `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Site Photos</div>
+    ${siteGrid}
+  </div>
+  <div class="card" style="padding:12px 14px;margin-bottom:10px;border:2px solid var(--green);background:rgba(46,204,113,0.04)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.5px">Install Photos ${installPhotos.length?`(${installPhotos.length})`:''}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="fmOpenCamera('${leadId}','install')" style="flex:1;min-width:120px;padding:14px;background:var(--green);color:#0f1117;border:none;border-radius:var(--r);font-weight:600;font-size:14px;cursor:pointer">📷 Take Photo</button>
+      <label style="flex:1;min-width:120px;padding:14px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--r);font-weight:500;font-size:14px;cursor:pointer;text-align:center">
+        Upload Files
+        <input type="file" multiple accept="image/*" style="display:none" onchange="fmFileInput(event,'${leadId}','install',null)">
+      </label>
+    </div>
+    ${installGrid}
+  </div>`;
+
+  // ── Recent notes (read-only) ──
+  const notes = (lead.jobNotes||[]).slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)).slice(0,3);
+  const notesBlock = notes.length
+    ? `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Recent Notes</div>
+        ${notes.map(n => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:3px">${escHtml(n.authorName||'Unknown')} · ${new Date(n.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+          <div style="line-height:1.4;white-space:pre-wrap">${renderNoteBody(n.text)}</div>
+        </div>`).join('')}
+      </div>`
+    : '';
+
+  // ── Assemble ──
+  pg.innerHTML = `<div style="max-width:640px;margin:0 auto;padding:4px">
+    <button onclick="navigate('dashboard')" style="background:none;border:none;color:var(--text-muted);font-size:12.5px;padding:6px 0;cursor:pointer;margin-bottom:8px">← Back to Dashboard</button>
+    ${hdrBlock}
+    ${contactActions}
+    ${payBanner}
+    ${scopeBlock}
+    ${snapBlock}
+    ${wireBlock}
+    ${chargerBlock}
+    ${photosBlock}
+    ${notesBlock}
+    <div style="text-align:center;padding:16px 0;font-size:11px;color:var(--text-muted)">
+      Job ID: <span style="font-family:var(--mono)">${escHtml(leadId)}</span>
+    </div>
+  </div>`;
+  document.getElementById('content').scrollTop = 0;
+}
+
 function renderSchedulerPage() {
   const pg = document.getElementById('page-scheduler');
   if (!pg) return;
@@ -8235,17 +8602,22 @@ function downloadSchedICS() {
     return `${yr}${mo}${dy}T${String(h).padStart(2,'0')}${String(m).padStart(2,'0')}00`;
   }
   const now = new Date().toISOString().replace(/[-:]/g,'').split('.')[0]+'Z';
+  // Base URL for deep-linking into the CRM from a calendar event. Strips any
+  // existing hash so we always build a clean link.
+  const crmBase = location.origin + location.pathname;
   const events = _sched.scheduled.map(s => {
     const cust = custs.find(c => c.id === s.lead.customerId);
     const name = cust ? custFullName(cust) : (s.lead.customerName||'Unknown');
     const addr = [s.lead.siteStreet, s.lead.siteCity, s.lead.siteState||'VA'].filter(Boolean).join(', ');
     const driveMin = Math.round((s.driveHrs||0)*60);
+    const techUrl = `${crmBase}#tech=${encodeURIComponent(s.lead.id)}`;
     const desc = [
       `Job: ${s.lead.id}`,
       `Address: ${addr}`,
       `Duration: ${fmtHrs(s.jobHrs)}`,
       driveMin > 0 ? `Drive from previous stop: ~${driveMin} min` : '',
-      s.lead.scopeOfWork ? `Scope: ${s.lead.scopeOfWork.replace(/\n/g,'\\n')}` : ''
+      s.lead.scopeOfWork ? `Scope: ${s.lead.scopeOfWork.replace(/\n/g,'\\n')}` : '',
+      `Open in CRM: ${techUrl}`
     ].filter(Boolean).join('\\n');
     return [
       'BEGIN:VEVENT',
@@ -8256,6 +8628,7 @@ function downloadSchedICS() {
       `SUMMARY:Install — ${name.replace(/,/g,'\\,')}`,
       `DESCRIPTION:${desc}`,
       `LOCATION:${addr.replace(/,/g,'\\,')}`,
+      `URL:${techUrl}`,
       'STATUS:CONFIRMED',
       'END:VEVENT'
     ].join('\r\n');
@@ -8684,6 +9057,44 @@ let _syncing = false;
 
 const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY];
 
+// ── PLATFORM-AWARE AUTH HELPERS ──
+// iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
+// popups silently. Detect those environments and use redirect flow instead —
+// the page navigates out to login.microsoftonline.com and back, with
+// handleRedirectPromise() in initMSAL() completing the sign-in on return.
+function _shouldUseRedirectAuth() {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua)
+             || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS masquerades as Mac
+  const isStandalonePWA = (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches)
+                       || navigator.standalone === true;
+  return isIOS || isStandalonePWA;
+}
+
+// Interactive token acquisition that picks popup vs redirect per platform.
+// On redirect platforms the page navigates away, so callers must treat this as
+// a terminal call — the current in-flight operation will be lost and must be
+// retried by the user after the redirect completes.
+async function _acquireTokenInteractive(scopes) {
+  if (!_msal) throw new Error('MSAL not initialized');
+  if (_shouldUseRedirectAuth()) {
+    await _msal.acquireTokenRedirect({ scopes });
+    // Redirect in progress — caller won't resume.
+    throw new Error('Redirecting for authentication…');
+  }
+  return await _msal.acquireTokenPopup({ scopes });
+}
+
+// Platform-aware logout. Popup on desktop, redirect on iOS/PWA.
+async function _logoutInteractive(opts) {
+  if (!_msal) return;
+  if (_shouldUseRedirectAuth()) {
+    try { await _msal.logoutRedirect(opts || {}); } catch(_) {}
+    return;
+  }
+  try { await _msal.logoutPopup(opts || {}); } catch(_) {}
+}
+
 // ── MSAL INIT ──
 async function initMSAL() {
   // Dynamically import MSAL as ES module and expose as global
@@ -8733,6 +9144,12 @@ async function initMSAL() {
 
 async function msalLogin() {
   try {
+    if (_shouldUseRedirectAuth()) {
+      // Redirect: page navigates to Microsoft, returns to this URL, and
+      // handleRedirectPromise() in initMSAL() completes the sign-in.
+      await _msal.loginRedirect({ scopes: GRAPH_SCOPES });
+      return;
+    }
     const resp = await _msal.loginPopup({ scopes: GRAPH_SCOPES });
     _gToken = resp.accessToken;
     await _onMSALSuccess(resp.account);
@@ -8759,7 +9176,7 @@ async function _onMSALSuccess(account) {
   const domain = email.split('@')[1] || '';
   if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
     toast(`Sign-in rejected: ${email} is not an authorized GreenKey account.`, 'error');
-    try { await _msal.logoutPopup({ account }); } catch(_){}
+    try { await _logoutInteractive({ account }); } catch(_){}
     return;
   }
 
@@ -9089,7 +9506,8 @@ async function _acquireSMSToken() {
     const r = await _msal.acquireTokenSilent({ account: accounts[0], scopes: SMS_SCOPES });
     return r.accessToken;
   } catch (_) {
-    const r = await _msal.acquireTokenPopup({ scopes: SMS_SCOPES });
+    // Popup on desktop, redirect on iOS/PWA (redirect throws mid-flow).
+    const r = await _acquireTokenInteractive(SMS_SCOPES);
     return r.accessToken;
   }
 }
@@ -9573,8 +9991,10 @@ Class A Electrical Contractor · Richmond, VA · Licensed & Insured`;
           const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
           _gToken = tr.accessToken;
         } catch (silentErr) {
-          console.warn('[GK] silent token failed, trying popup:', silentErr);
-          const tr2 = await _msal.acquireTokenPopup({ scopes: GRAPH_SCOPES });
+          // Silent failed — scope needs interactive consent.
+          // On iOS/PWA this will redirect away; caller will not resume.
+          console.warn('[GK] silent token failed, trying interactive:', silentErr);
+          const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
           _gToken = tr2.accessToken;
         }
         canGraph = !!_gToken;
