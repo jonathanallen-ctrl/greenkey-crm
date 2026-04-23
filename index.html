@@ -1681,8 +1681,8 @@ const ICONS = {
 const NAV_DEF = [
   { sec:'Main', items:[
     {page:'dashboard',label:'Dashboard',roles:['admin','tech','sales'],icon:'grid'},
-    {page:'leads',label:'Leads',roles:['admin','sales'],icon:'star',badge:'0',bc:'a'},
     {page:'jobs',label:'Pipeline',roles:['admin','tech','sales'],icon:'brief'},
+    {page:'leads',label:'Leads',roles:['admin','sales'],icon:'star',badge:'0',bc:'a'},
     {page:'customers',label:'Customers',roles:['admin','sales'],icon:'user'},
     {page:'quotes',label:'Quotes',roles:['admin','tech','sales'],icon:'file'},
   ]},
@@ -3773,7 +3773,7 @@ function saveQuoteChanges(qid){
       const result=generateQuotePDF(saved,cust,lead,true);
       if(result?.dataUrl){
         const approxSize=Math.round(result.dataUrl.length*0.75);
-        addFileRecord(jobId,'documents','quote',{name:result.filename,size:approxSize,type:'application/pdf'},result.dataUrl);
+        addFileRecord(jobId,'documents',null,{name:result.filename,size:approxSize,type:'application/pdf'},result.dataUrl);
         toast('Quote saved and filed to customer documents','success');
       } else {
         toast('Quote saved','success');
@@ -5499,6 +5499,28 @@ function renderJobDetail(id) {
   msHtml += msGrp('Installation');
   msHtml += msRow('intInspScheduled','Intermediate inspection scheduled (if needed)',{date:true,text:true,textKey:'type',textPlaceholder:'Type e.g. Trench'});
   msHtml += msRow('intInspPassed','Intermediate inspection passed',{date:true});
+
+  // ── Add-to-Scheduler override (for jobs blocked by permit/charger gates) ──
+  if (!ms.installScheduled?.done) {
+    const _blk = scheduleBlockReason(lead);
+    const _ov  = lead.scheduleOverride;
+    if (_ov?.reason) {
+      msHtml += `<div style="margin:4px 12px 8px;padding:8px 10px;border:1px solid var(--amber);background:var(--amber-dim);border-radius:var(--r);font-size:11.5px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div>
+          <span style="color:var(--amber);font-weight:500">⚠ Schedule override active</span>
+          <span style="color:var(--text-secondary)"> — ${escHtml(_ov.reason)}</span>
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">Set by ${escHtml(_ov.setBy||'—')} on ${(_ov.setAt||'').slice(0,10)}</div>
+        </div>
+        <button class="btn btn-g" style="padding:3px 8px;font-size:11px" onclick="clearScheduleOverrideAndRerender('${id}')">Clear</button>
+      </div>`;
+    } else if (_blk) {
+      msHtml += `<div style="margin:4px 12px 8px;padding:8px 10px;border:1px dashed var(--border);border-radius:var(--r);font-size:11.5px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="color:var(--text-secondary)">Blocked: <span style="color:var(--text-muted)">${escHtml(_blk)}</span></div>
+        <button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="promptScheduleOverride('${id}')">+ Add to Scheduler</button>
+      </div>`;
+    }
+  }
+
   msHtml += msRow('installScheduled','Install scheduled',{date:true});
   msHtml += msRow('installCompleted','Installation completed',{date:true,num:true,numKey:'actualHours',numLabel:'Actual hrs'});
   msHtml += msRow('reviewCardGiven','Review card given to customer');
@@ -5644,6 +5666,16 @@ async function initFilesCache() {
       localStorage.removeItem(FK);
       console.log('[GK] Migrated', old.length, 'file(s) from localStorage to IndexedDB');
     }
+    // One-time category migration: retired 'panel' and 'inspection' photo buckets → 'site'
+    let remapped = 0;
+    for (const f of _filesCache) {
+      if (f.category === 'panel' || f.category === 'inspection') {
+        f.category = 'site';
+        await _idbPut(f);
+        remapped++;
+      }
+    }
+    if (remapped) console.log('[GK] Remapped', remapped, 'legacy photo(s) into Site Photos');
   } catch(e) {
     console.warn('[GK] IndexedDB unavailable, falling back to localStorage:', e);
     _filesCache = JSON.parse(localStorage.getItem(FK) || '[]');
@@ -5655,20 +5687,9 @@ function getFiles()       { return _filesCache; }
 function getJobFiles(jid) { return _filesCache.filter(f => f.jobId === jid); }
 
 const FM_CATS = [
-  { id:'site',       label:'Site Photos',    accept:'image/*' },
-  { id:'panel',      label:'Panel Photos',   accept:'image/*' },
-  { id:'install',    label:'Install Photos', accept:'image/*' },
-  { id:'inspection', label:'Inspection',     accept:'image/*' },
-  { id:'documents',  label:'Documents',      accept:'*/*'     }
-];
-
-const FM_DOC_FOLDERS = [
-  { id:'quote',    label:'Quote'            },
-  { id:'permit',   label:'Permit'           },
-  { id:'invoice',  label:'Invoice'          },
-  { id:'platform', label:'Platform Docs'    },
-  { id:'utility',  label:'Utility Approval' },
-  { id:'other',    label:'Other'            }
+  { id:'site',      label:'Site Photos',    accept:'image/*' },
+  { id:'install',   label:'Install Photos', accept:'image/*' },
+  { id:'documents', label:'Documents',      accept:'*/*'     }
 ];
 
 function addFileRecord(jobId, category, subFolder, file, dataUrl) {
@@ -5712,14 +5733,13 @@ function fmtSize(bytes) {
 }
 
 // ── FILE MANAGER STATE ──
-function fmState() { return S.fm || (S.fm = {jobId:null, cat:'site', docFolder:'quote'}); }
+function fmState() { return S.fm || (S.fm = {jobId:null, cat:'site'}); }
 function fmBackToJob() {
   const jobId = fmState().jobId || S.jobDetailId;
   navigate('jobs');
   if (jobId) setTimeout(() => openJobDetail(jobId), 50);
 }
-function fmSetCat(cat)          { fmState().cat = cat; fmState().docFolder = 'quote'; renderFilesPage(); }
-function fmSetDocFolder(folder) { fmState().docFolder = folder; renderFilesPage(); }
+function fmSetCat(cat)          { fmState().cat = cat; renderFilesPage(); }
 function fmSetJob(jobId)        { fmState().jobId = jobId; fmState().cat = 'site'; renderFilesPage(); }
 
 // ── FILES PAGE RENDERER ──
@@ -5762,10 +5782,10 @@ function renderFilesPage() {
     return;
   }
 
-  pg.innerHTML = backBtn + jobSel + renderFMInner(fm.jobId, fm.cat, fm.docFolder);
+  pg.innerHTML = backBtn + jobSel + renderFMInner(fm.jobId, fm.cat);
 }
 
-function renderFMInner(jobId, cat, docFolder) {
+function renderFMInner(jobId, cat) {
   const allFiles = getJobFiles(jobId);
   const countBadge = c => {
     const n = allFiles.filter(f => f.category === c).length;
@@ -5775,7 +5795,7 @@ function renderFMInner(jobId, cat, docFolder) {
     `<button class="ptab${c.id===cat?' active':''}" onclick="fmSetCat('${c.id}')">${c.label}${countBadge(c.id)}</button>`
   ).join('');
 
-  const body = cat === 'documents' ? renderFMDocuments(jobId, docFolder) : renderFMPhotos(jobId, cat);
+  const body = cat === 'documents' ? renderFMDocuments(jobId) : renderFMPhotos(jobId, cat);
 
   return `<div class="card">
     <div style="padding:16px 18px 0;border-bottom:1px solid var(--border)">
@@ -5847,34 +5867,26 @@ function renderFMPhotos(jobId, cat) {
 }
 
 // ── DOCUMENTS TAB ──
-function renderFMDocuments(jobId, docFolder) {
-  const allDocs   = getJobFiles(jobId).filter(f => f.category === 'documents');
-  const folderBadge = fid => {
-    const n = allDocs.filter(d => d.subFolder === fid).length;
-    return n ? ` (${n})` : '';
-  };
-  const folderTabs = FM_DOC_FOLDERS.map(f =>
-    `<button class="ptab${f.id===docFolder?' active':''}" onclick="fmSetDocFolder('${f.id}')" style="font-size:11.5px">${f.label}${folderBadge(f.id)}</button>`
-  ).join('');
-
-  const files  = allDocs.filter(f => f.subFolder === docFolder);
-  const dzId   = `fm-doc-dz-${docFolder}`;
+function renderFMDocuments(jobId) {
+  const files = getJobFiles(jobId).filter(f => f.category === 'documents')
+    .sort((a,b) => (b.uploadedAt||'').localeCompare(a.uploadedAt||''));
+  const dzId  = 'fm-doc-dz';
 
   const dzone = `<div class="dzone" id="${dzId}" style="padding:20px"
-    ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','documents','${docFolder}','${dzId}')">
-    <input type="file" id="fm-doc-inp-${docFolder}" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents','${docFolder}')">
+    ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','documents',null,'${dzId}')">
+    <input type="file" id="fm-doc-inp" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents',null)">
     <div class="dico">
       <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6">${ICONS.file}</svg>
     </div>
     <div class="dtitle" style="font-size:13px">Drop files here or click to upload</div>
-    <div class="dsub">PDF, Word, Excel, images — all file types accepted</div>
+    <div class="dsub">PDF, Word, Excel, images — all file types accepted. Filename makes the contents obvious.</div>
   </div>`;
 
   const listRows = files.map(f => {
     const ext = (f.mimeType||'').split('/')[1]?.split(';')[0]?.toUpperCase() || f.name.split('.').pop()?.toUpperCase() || 'FILE';
     const isImg = (f.mimeType||'').startsWith('image/');
     const preview = isImg
-      ? `<div class="fm-mini-thumb" onclick="openFMDocPreview('${jobId}','${docFolder}',${files.indexOf(f)})"><img src="${f.dataUrl}" alt=""></div>`
+      ? `<div class="fm-mini-thumb" onclick="openFMDocPreview('${jobId}',${files.indexOf(f)})"><img src="${f.dataUrl}" alt=""></div>`
       : `<div class="fm-mini-thumb" style="display:flex;align-items:center;justify-content:center;background:var(--blue-dim);border-color:var(--blue)">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" stroke-width="1.5">${ICONS.file}</svg>
         </div>`;
@@ -5885,7 +5897,7 @@ function renderFMDocuments(jobId, docFolder) {
       <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
       <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
       <td style="font-size:11px;color:var(--text-muted)">${escHtml(f.uploadedBy||'—')}</td>
-      <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','documents','${docFolder}')" title="Delete">×</button></td>
+      <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button></td>
     </tr>`;
   }).join('');
 
@@ -5897,18 +5909,16 @@ function renderFMDocuments(jobId, docFolder) {
         </table>
       </div>`
     : `<div class="empty" style="padding:20px 0">
-        <div class="etitle" style="font-size:13px">No documents in ${FM_DOC_FOLDERS.find(f=>f.id===docFolder)?.label||docFolder}</div>
-        <div class="edesc">Upload or drag files above</div>
+        <div class="etitle" style="font-size:13px">No documents yet</div>
+        <div class="edesc">Upload or drag files above — quotes, permits, invoices, inspection reports all live here.</div>
       </div>`;
 
-  return `<div class="ptabs" style="margin-bottom:14px;flex-wrap:wrap">${folderTabs}</div>
-    ${dzone}
-    ${listHtml}`;
+  return `${dzone}${listHtml}`;
 }
 
 // Preview image documents in lightbox
-function openFMDocPreview(jobId, docFolder, idx) {
-  const files = getJobFiles(jobId).filter(f => f.category === 'documents' && f.subFolder === docFolder && (f.mimeType||'').startsWith('image/'));
+function openFMDocPreview(jobId, idx) {
+  const files = getJobFiles(jobId).filter(f => f.category === 'documents' && (f.mimeType||'').startsWith('image/'));
   if (!files.length) return;
   LBFiles = files;
   LBIdx = Math.min(idx, files.length-1);
@@ -6028,10 +6038,7 @@ function fmDeleteFile(fileId, jobId, cat, subFolder) {
   toast('File deleted', 'success');
   if (S.page === 'files') renderFilesPage();
   const jdBody = document.getElementById('jd-fm-body');
-  if (jdBody && S.jobDetailId === jobId) {
-    if (cat === 'documents') jdFMDocFolder(jobId, subFolder||'other');
-    else jdFMSetCat(jobId, cat);
-  }
+  if (jdBody && S.jobDetailId === jobId) jdFMSetCat(jobId, cat);
 }
 
 // ── CAMERA FOR FILE MANAGER ──
@@ -6123,16 +6130,11 @@ function jdFMSetCat(jobId, cat) {
 function renderFMJobCat(jobId, cat) {
   if (cat === 'documents') {
     const docs = getJobFiles(jobId).filter(f => f.category === 'documents');
-    const folderBtns = FM_DOC_FOLDERS.map(f => {
-      const n = docs.filter(d => d.subFolder === f.id).length;
-      return `<button class="ptab" style="font-size:10.5px" onclick="jdFMDocFolder('${jobId}','${f.id}')">${f.label}${n?` (${n})`:''}</button>`;
-    }).join('');
-    return `<div class="ptabs" style="margin-bottom:8px;flex-wrap:wrap">${folderBtns}</div>
-      <div class="dzone" id="jd-fm-doc-dz" style="padding:14px"
-        ondragover="fmDragOver(event,'jd-fm-doc-dz')" ondragleave="fmDragLeave('jd-fm-doc-dz')" ondrop="fmDrop(event,'${jobId}','documents','other','jd-fm-doc-dz')">
-        <input type="file" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents','other')">
-        <div class="dtitle" style="font-size:12px">Drop docs here (saves to Other)</div>
-        <div class="dsub" style="font-size:11px">Click a folder tab above for organized upload</div>
+    return `<div class="dzone" id="jd-fm-doc-dz" style="padding:14px"
+        ondragover="fmDragOver(event,'jd-fm-doc-dz')" ondragleave="fmDragLeave('jd-fm-doc-dz')" ondrop="fmDrop(event,'${jobId}','documents',null,'jd-fm-doc-dz')">
+        <input type="file" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents',null)">
+        <div class="dtitle" style="font-size:12px">Drop docs here or click to upload</div>
+        <div class="dsub" style="font-size:11px">PDF, Word, Excel, images — all file types accepted</div>
       </div>
       ${docs.length ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px">${docs.length} document${docs.length!==1?'s':''} stored — click "Full View →" to manage</div>` : ''}`;
   }
@@ -6164,28 +6166,6 @@ function renderFMJobCat(jobId, cat) {
   return dzone + `<div class="pgrid" style="margin-top:10px">${thumbs}</div>`;
 }
 
-function jdFMDocFolder(jobId, folder) {
-  const docs = getJobFiles(jobId).filter(f => f.category==='documents' && f.subFolder===folder);
-  const body = document.getElementById('jd-fm-body');
-  if (!body) return;
-  const dzId  = `jd-doc-dz-${folder}`;
-  const rows  = docs.map(f => `<tr>
-    <td><a href="${f.dataUrl}" download="${escHtml(f.name)}" style="color:var(--blue);font-size:12px;text-decoration:none">${escHtml(f.name)}</a></td>
-    <td style="color:var(--text-muted);font-family:var(--mono);font-size:10px">${fmtSize(f.size)}</td>
-    <td style="font-size:10px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
-    <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','documents','${folder}')">×</button></td>
-  </tr>`).join('');
-
-  body.innerHTML = `<div style="font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:8px">${FM_DOC_FOLDERS.find(f=>f.id===folder)?.label||folder}</div>
-    <div class="dzone" id="${dzId}" style="padding:12px"
-      ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','documents','${folder}','${dzId}')">
-      <input type="file" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents','${folder}')">
-      <div class="dtitle" style="font-size:12px">Drop files here</div>
-    </div>
-    ${docs.length ? `<table class="fm-list-table" style="margin-top:10px"><tbody>${rows}</tbody></table>` :
-      `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;text-align:center">No documents in this folder</div>`}`;
-}
-
 // ── TEGRITY CONNECT MIGRATION HELPER ──
 function showTegrityImport(jobId) {
   const lead = getLead(jobId);
@@ -6195,8 +6175,7 @@ function showTegrityImport(jobId) {
   const body = `<div class="fsec">
     <div class="fsec-title">Import for: ${escHtml(name)} (${jobId})</div>
     <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:16px">
-      Drag all Tegrity Connect files for this job into the area below. Photos are saved as <strong>Site Photos</strong> and all other files go to <strong>Documents → Other</strong>.
-      You can reassign them afterward using the Full View.
+      Drag all Tegrity Connect files for this job into the area below. Photos are saved as <strong>Site Photos</strong> and all other files go to <strong>Documents</strong>.
     </p>
     <div class="dzone" id="tegrity-dz" style="padding:36px 24px"
       ondragover="tegrityDragOver(event)" ondragleave="tegrityDragLeave()" ondrop="tegrityDrop(event,'${jobId}')">
@@ -6234,7 +6213,7 @@ function tegrityProcessFiles(files, jobId) {
   let done = 0;
   files.forEach(f => {
     const cat  = f.type.startsWith('image/') ? 'site' : 'documents';
-    const sub  = cat === 'documents' ? 'other' : null;
+    const sub  = null;
     const r    = new FileReader();
     r.onload = ev => {
       addFileRecord(jobId, cat, sub, f, ev.target.result);
@@ -7665,12 +7644,74 @@ const _sched = {
   built: false
 };
 
+// Returns a human-readable reason the job can't be scheduled yet, or null if it's ready.
+// Ignores any scheduleOverride — useful for the job detail UI to show what's blocking.
+function scheduleBlockReason(lead) {
+  if (!lead) return null;
+  if (lead.stage === 'archived') return 'Job is archived';
+  const ms = lead.milestones || {};
+  if (ms.installScheduled?.done) return null; // already scheduled, not blocked
+  if (!ms.permitReceived?.done) return 'Permit not yet received';
+  if (lead.jobType === 'ev-residential' && !ms.chargerConfirmed?.done) return 'Charger not yet confirmed on site';
+  return null;
+}
+
+function setScheduleOverride(leadId, reason) {
+  if (!reason || !reason.trim()) return;
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  arr[idx].scheduleOverride = {
+    reason: reason.trim(),
+    setAt:  new Date().toISOString(),
+    setBy:  S.user?.name || 'Unknown'
+  };
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+}
+
+function clearScheduleOverride(leadId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0 || !arr[idx].scheduleOverride) return;
+  delete arr[idx].scheduleOverride;
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+}
+
+function promptScheduleOverride(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const blocked = scheduleBlockReason(lead);
+  if (!blocked) {
+    if (!confirm('This job already meets the scheduling prerequisites — no override needed. Open the Scheduler page?')) return;
+    navigate('scheduler');
+    return;
+  }
+  const suggestion = blocked.startsWith('Permit') ? 'No permit required — like-for-like'
+                   : blocked.startsWith('Charger') ? 'Charger incoming — confirmed by customer'
+                   : '';
+  const reason = window.prompt(`Add this job to the Scheduler despite: "${blocked}".\n\nEnter a short reason (required):`, suggestion);
+  if (!reason || !reason.trim()) return;
+  setScheduleOverride(leadId, reason);
+  toast('Added to Scheduler — override active', 'success');
+  renderJobDetail(leadId);
+}
+
+function clearScheduleOverrideAndRerender(leadId) {
+  if (!confirm('Remove the scheduling override for this job? It will return to the normal gate check.')) return;
+  clearScheduleOverride(leadId);
+  toast('Override removed', 'success');
+  renderJobDetail(leadId);
+}
+
 function getSchedulableJobs() {
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
-    if (ms.installScheduled?.done) return false; // already scheduled
-    if (!ms.permitReceived?.done) return false;  // need permit in hand
+    if (ms.installScheduled?.done) return false;      // already scheduled
+    if (l.scheduleOverride?.reason) return true;      // manual override bypasses gates
+    if (!ms.permitReceived?.done) return false;       // need permit in hand
     const isEV = l.jobType === 'ev-residential';
     if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
     return true;
@@ -7693,19 +7734,22 @@ function renderSchedulerPage() {
 
   // Job pool
   const poolHtml = jobs.length === 0
-    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs ready to schedule.<br><span style="font-size:12px">Jobs need: permit received ✓ + charger confirmed ✓ (EV jobs) + not yet scheduled.</span></div>`
+    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs ready to schedule.<br><span style="font-size:12px">Jobs need: permit received ✓ + charger confirmed ✓ (EV jobs) + not yet scheduled.<br>Use <strong>+ Add to Scheduler</strong> on a job detail page to override gates.</span></div>`
     : jobs.map(l => {
         const cust = custs.find(c => c.id === l.customerId);
         const name = cust ? custFullName(cust) : (l.customerName||'Unknown');
         const addr = [l.siteStreet, l.siteCity, l.siteState||'VA'].filter(Boolean).join(', ');
         const dur  = _sched.durations[l.id] || 2;
         const isScheduled = _sched.scheduled.some(s => s.lead.id === l.id);
+        const overrideChip = l.scheduleOverride?.reason
+          ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${(l.scheduleOverride.setAt||'').slice(0,10)}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
+          : '';
         return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
             <div>
               <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
               <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-              <div style="margin-top:4px">${typeChip(l.jobType)}${sourceChip(l.source)}</div>
+              <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}</div>
             </div>
             <div style="text-align:right;flex-shrink:0">
               <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Duration</div>
@@ -7956,6 +8000,8 @@ function markDayScheduled() {
     if (idx < 0) return;
     if (!arr[idx].milestones) arr[idx].milestones = {};
     arr[idx].milestones.installScheduled = { done: true, date: _sched.date };
+    // Once actually scheduled, the override has served its purpose — clear it.
+    if (arr[idx].scheduleOverride) delete arr[idx].scheduleOverride;
     arr[idx].updatedAt = new Date().toISOString();
   });
   saveLeads(arr);
