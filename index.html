@@ -489,6 +489,16 @@
   .jd-fv{font-size:13px;color:var(--text-primary)}
   .jd-edit-link{background:none;border:1px solid var(--border-light);color:var(--text-muted);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:400}
   .jd-edit-link:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border)}
+  /* Material autocomplete dropdown — fixed-position, attached to body, positioned by JS */
+  #mat-ac-dropdown{position:fixed;display:none;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.18);z-index:9500;max-height:300px;overflow-y:auto;min-width:340px}
+  .mat-ac-item{padding:7px 10px;cursor:pointer;display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--border-light);font-size:12px}
+  .mat-ac-item:last-child{border-bottom:none}
+  .mat-ac-item:hover,.mat-ac-item.active{background:var(--bg-hover)}
+  .mat-ac-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary);font-weight:500}
+  .mat-ac-meta{color:var(--text-muted);font-size:11px;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mat-ac-price{font-family:var(--mono);color:var(--green);font-weight:500;flex-shrink:0;text-align:right;min-width:64px}
+  .mat-ac-empty{padding:10px;font-size:12px;color:var(--text-muted);font-style:italic}
+  .mat-ac-footer{padding:6px 10px;font-size:10.5px;color:var(--text-muted);border-top:1px solid var(--border-light);background:var(--bg)}
   .jd-fi{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none;width:100%;transition:border-color var(--t)}
   .jd-fi:focus{border-color:var(--green)}
   .jd-fsel{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none;width:100%;transition:border-color var(--t)}
@@ -1253,6 +1263,7 @@
 
 <div id="toast"></div>
 <div id="critBanner"><div><strong>SharePoint sync issue</strong><span id="critBannerMsg"></span></div><button onclick="document.getElementById('critBanner').classList.remove('show')">Dismiss</button></div>
+<div id="mat-ac-dropdown"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
@@ -3663,7 +3674,7 @@ function renderDetailedQuoteForm(q){
   const lines=q.lines||[];
   const rentals=q.rentals||[];
   const matRows=lines.map((ln,i)=>`<tr>
-    <td><input class="li-inp" list="mat-list" value="${(ln.desc||'').replace(/"/g,'&quot;')}" placeholder="Material / description" style="min-width:140px" onchange="updateLine('${q.id}',${i},'desc',this.value)"></td>
+    <td><input class="li-inp mat-ac-input" data-qid="${q.id}" data-idx="${i}" value="${(ln.desc||'').replace(/"/g,'&quot;')}" placeholder="Type to search materials..." style="min-width:140px" autocomplete="off" oninput="matAcOpen(this)" onfocus="matAcOpen(this)" onkeydown="matAcKey(event,this)" onblur="setTimeout(matAcClose,180)" onchange="updateLine('${q.id}',${i},'desc',this.value)"></td>
     <td><input class="li-inp num" type="number" value="${ln.qty||1}" min="0" step="0.5" oninput="updateLine('${q.id}',${i},'qty',this.value)"></td>
     <td><select class="li-inp" style="width:82px" onchange="updateLine('${q.id}',${i},'unit',this.value)">${['each','per foot','per box','per job'].map(u=>`<option${u===ln.unit?' selected':''}>${u}</option>`).join('')}</select></td>
     <td><input class="li-inp num" type="number" value="${ln.unitCost||0}" min="0" step="0.01" oninput="updateLine('${q.id}',${i},'unitCost',this.value)"></td>
@@ -3677,7 +3688,6 @@ function renderDetailedQuoteForm(q){
     <button class="li-del" onclick="removeRental('${q.id}',${i})">×</button>
   </div>`).join('');
   wrap.innerHTML=`
-    <datalist id="mat-list">${mats.map(m=>`<option value="${m.name}">`).join('')}</datalist>
     <div class="qq-section">
       <div class="qq-title">Materials</div>
       <div style="overflow-x:auto">
@@ -3775,6 +3785,134 @@ function updateLine(qid,idx,field,val){
   const ext=document.getElementById('li-ext-'+idx);if(ext)ext.textContent=fmt$(calcLine(lines[idx]));
   onDQChange(qid);
 }
+
+// ── MATERIAL AUTOCOMPLETE ──
+// Substring-match autocomplete dropdown for the quote line "Description" field.
+// Picks from the Materials Library and auto-fills unit cost, markup, and unit.
+// Handles mouse + keyboard nav. Shared dropdown element (#mat-ac-dropdown)
+// is positioned below the active input via getBoundingClientRect.
+const MAT_AC_LIMIT = 12;
+let _matAcInput = null;
+
+function matAcRank(q, name) {
+  // 0 = starts with q, 1 = word-boundary match, 2 = substring, -1 = no match
+  if (name.startsWith(q)) return 0;
+  if ((' ' + name).includes(' ' + q)) return 1;
+  if (name.includes(q)) return 2;
+  return -1;
+}
+
+function matAcOpen(input) {
+  _matAcInput = input;
+  const dd = document.getElementById('mat-ac-dropdown');
+  if (!dd) return;
+  const q = (input.value || '').trim().toLowerCase();
+  const mats = getMaterials();
+
+  // Position the dropdown below the input
+  const r = input.getBoundingClientRect();
+  dd.style.left = r.left + 'px';
+  dd.style.top = (r.bottom + 2) + 'px';
+  dd.style.minWidth = Math.max(r.width, 340) + 'px';
+  dd.style.maxWidth = Math.max(r.width, 480) + 'px';
+
+  if (!q) {
+    // Empty input: show recently/most-likely materials? For now, show first N alphabetical.
+    const all = mats.slice().sort((a,b)=>a.name.localeCompare(b.name)).slice(0, MAT_AC_LIMIT);
+    if (!all.length) { dd.style.display = 'none'; return; }
+    matAcRender(dd, all, mats.length);
+    return;
+  }
+
+  const scored = [];
+  for (const m of mats) {
+    const r2 = matAcRank(q, (m.name || '').toLowerCase());
+    if (r2 >= 0) scored.push({ m, r: r2 });
+    // Also match on category and manufacturer
+    else if ((m.category || '').toLowerCase().includes(q)) scored.push({ m, r: 3 });
+    else if ((m.manufacturer || '').toLowerCase().includes(q)) scored.push({ m, r: 3 });
+  }
+  scored.sort((a, b) => a.r - b.r || a.m.name.localeCompare(b.m.name));
+  const top = scored.slice(0, MAT_AC_LIMIT);
+  if (!top.length) {
+    dd.innerHTML = '<div class="mat-ac-empty">No materials match — your typed text will be saved as-is.</div>';
+    dd.style.display = 'block';
+    return;
+  }
+  matAcRender(dd, top.map(x => x.m), scored.length);
+}
+
+function matAcRender(dd, items, totalMatched) {
+  const html = items.map((m, i) =>
+    `<div class="mat-ac-item${i === 0 ? ' active' : ''}" data-mid="${m.id}" onmousedown="event.preventDefault();matAcPick('${m.id}')">
+      <div style="flex:1;min-width:0">
+        <div class="mat-ac-name">${escHtml(m.name)}</div>
+        <div class="mat-ac-meta">${escHtml(m.category || '')}${m.manufacturer ? ' · ' + escHtml(m.manufacturer) : ''}</div>
+      </div>
+      <div class="mat-ac-price">$${(+m.unitCost).toFixed(2)}<div style="font-size:10px;color:var(--text-muted);font-weight:400">${escHtml(m.unit || 'each')}</div></div>
+    </div>`).join('');
+  const footer = totalMatched > items.length
+    ? `<div class="mat-ac-footer">Showing ${items.length} of ${totalMatched} matches — keep typing to narrow</div>`
+    : '';
+  dd.innerHTML = html + footer;
+  dd.style.display = 'block';
+}
+
+function matAcClose() {
+  const dd = document.getElementById('mat-ac-dropdown');
+  if (dd) dd.style.display = 'none';
+  _matAcInput = null;
+}
+
+function matAcPick(matId) {
+  const input = _matAcInput;
+  if (!input) { matAcClose(); return; }
+  const m = getMaterials().find(x => x.id === matId);
+  if (!m) { matAcClose(); return; }
+  const qid = input.dataset.qid;
+  const idx = parseInt(input.dataset.idx);
+  // Set value visually + persist via updateLine (handles auto-fill of cost/markup/unit)
+  input.value = m.name;
+  updateLine(qid, idx, 'desc', m.name);
+  matAcClose();
+  // Re-render so cost/markup/unit fields show their new values immediately
+  renderDetailedQuoteForm(getQuote(qid));
+}
+
+function matAcKey(e, input) {
+  const dd = document.getElementById('mat-ac-dropdown');
+  if (!dd || dd.style.display === 'none') return;
+  const items = dd.querySelectorAll('.mat-ac-item');
+  if (!items.length) return;
+  let active = -1;
+  for (let i = 0; i < items.length; i++) if (items[i].classList.contains('active')) { active = i; break; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (active >= 0) items[active].classList.remove('active');
+    active = (active + 1) % items.length;
+    items[active].classList.add('active');
+    items[active].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (active >= 0) items[active].classList.remove('active');
+    active = (active - 1 + items.length) % items.length;
+    items[active].classList.add('active');
+    items[active].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    if (active >= 0) {
+      e.preventDefault();
+      matAcPick(items[active].dataset.mid);
+    }
+  } else if (e.key === 'Escape') {
+    matAcClose();
+  } else if (e.key === 'Tab') {
+    matAcClose();
+  }
+}
+
+// Reposition dropdown if the page scrolls or the window resizes while it's open.
+window.addEventListener('scroll', () => { if (_matAcInput) matAcOpen(_matAcInput); }, true);
+window.addEventListener('resize', () => { if (_matAcInput) matAcOpen(_matAcInput); });
 function addRental(qid){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[]),{id:'ren-'+Date.now(),desc:'',cost:0}];upsertQuote({...q,rentals});renderDetailedQuoteForm(getQuote(qid));}
 function removeRental(qid,idx){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[])];rentals.splice(idx,1);upsertQuote({...q,rentals});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function updateRental(qid,idx,field,val){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[])];rentals[idx]={...rentals[idx],[field]:field==='cost'?parseFloat(val)||0:val};upsertQuote({...q,rentals});onDQChange(qid);}
