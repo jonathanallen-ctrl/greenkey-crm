@@ -1836,6 +1836,9 @@ function navigate(page) {
 const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
 
 function showPage(page) {
+  // Any cross-page navigation should also tear down the SMS poller. If the
+  // user lands back on a job detail, openJobDetail will restart it.
+  try { if (typeof stopSMSPolling === 'function') stopSMSPolling(); } catch (_) {}
   S.page = page;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   const t = document.getElementById('page-'+page);
@@ -5031,9 +5034,12 @@ function openJobDetail(id) {
   if (pv) pv.style.display = 'none';
   if (dv) dv.style.display = 'block';
   renderJobDetail(id);
+  // Begin auto-refresh of SMS thread + consent state for this lead.
+  try { if (typeof startSMSPolling === 'function') startSMSPolling(id); } catch (_) {}
 }
 
 function closeJobDetail() {
+  try { if (typeof stopSMSPolling === 'function') stopSMSPolling(); } catch (_) {}
   S.jobDetailId = null;
   const pv = document.getElementById('jobs-pipe-view');
   const dv = document.getElementById('jobs-detail-view');
@@ -9848,6 +9854,14 @@ function _buildTemplateContext(lead, cust) {
 let _smsLeadId = null;
 let _smsCurrentTemplateKey = 'intro';
 
+// Auto-refresh polling for the open lead's SMS thread + consent state.
+// While a job-detail page is open, hit the Worker every SMS_POLL_INTERVAL_MS
+// to pick up inbound messages and STOP/START events without a manual reload.
+const SMS_POLL_INTERVAL_MS = 7000;
+let _smsPollTimer = null;
+let _smsPollLeadId = null;
+const _smsThreadFingerprint = {}; // leadId -> last-rendered fingerprint, prevents flicker
+
 // Acquire an MSAL access token scoped to the SMS Relay API.
 async function _acquireSMSToken() {
   if (!SMS_SCOPE_URL) {
@@ -10459,8 +10473,10 @@ async function hydrateConsentFromServer(customerId) {
     let changed = false;
 
     // SMS channel
+    let smsTransitionedToOptOut = false;
     if (data.sms && data.sms.status) {
       const local = getConsentSms(customerId);
+      const prevStatus = local && local.status;
       const serverTs = data.sms.capturedAt ? new Date(data.sms.capturedAt).getTime() : 0;
       const localTs  = local && local.capturedAt ? new Date(local.capturedAt).getTime() : 0;
       // Server wins if (a) we have nothing locally, (b) server record is
@@ -10496,6 +10512,12 @@ async function hydrateConsentFromServer(customerId) {
             evidence: { serverId: data.sms.id }
           };
           changed = true;
+          // Detect the good->opted_out transition so we can warn the user
+          // and dismiss any open SMS compose window.
+          if (localStatus === CONSENT_STATUSES.OPTED_OUT &&
+              prevStatus && prevStatus !== CONSENT_STATUSES.OPTED_OUT) {
+            smsTransitionedToOptOut = true;
+          }
         }
       }
     }
@@ -10523,6 +10545,23 @@ async function hydrateConsentFromServer(customerId) {
       // Re-render the job detail if currently open so the banner picks up the change
       if (typeof S !== 'undefined' && S.jobDetailId && typeof renderJobDetail === 'function') {
         try { renderJobDetail(S.jobDetailId); } catch(_) {}
+      }
+    }
+    // If the customer just unsubscribed via STOP, surface it to the user.
+    // If the SMS compose modal is open for this customer, dismiss it so the
+    // user doesn't fire a send into the void.
+    if (smsTransitionedToOptOut) {
+      const name = (cust.firstName || cust.businessName || 'Customer');
+      const smsModal = document.getElementById('sms-modal');
+      const smsModalOpen = smsModal && smsModal.classList.contains('show');
+      const sameLead = (typeof _smsLeadId !== 'undefined') &&
+                       _smsLeadId &&
+                       getLead(_smsLeadId)?.customerId === customerId;
+      if (smsModalOpen && sameLead) {
+        smsModal.classList.remove('show');
+        try { toast(`${name} just unsubscribed — message not sent`, 'warning'); } catch(_) {}
+      } else {
+        try { toast(`${name} unsubscribed via SMS — outgoing texts disabled`, 'warning'); } catch(_) {}
       }
     }
   } catch (e) {
@@ -10643,7 +10682,10 @@ async function sendIntroSMS() {
 }
 
 // Fetch & render the full SMS thread for a lead.
-async function renderSMSThread(leadId) {
+// quiet=true is used by the auto-refresh poller — skip the loading placeholder,
+// skip re-rendering if nothing changed, and don't yank the scroll position
+// unless the user is already pinned near the bottom of the thread.
+async function renderSMSThread(leadId, quiet) {
   const el = document.getElementById('sms-thread-' + leadId);
   if (!el) return;
 
@@ -10652,7 +10694,9 @@ async function renderSMSThread(leadId) {
     return;
   }
 
-  el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>`;
+  if (!quiet) {
+    el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>`;
+  }
 
   try {
     const token = await _acquireSMSToken();
@@ -10664,10 +10708,21 @@ async function renderSMSThread(leadId) {
     if (!resp.ok) throw new Error(data?.error || 'Failed to load thread');
 
     const msgs = data.messages || [];
+
+    // Fingerprint to detect changes — covers count, ids, and status updates.
+    const fingerprint = msgs.map(m => (m.id || '') + ':' + (m.status || '') + ':' + (m.body || '').length).join('|');
+    if (quiet && _smsThreadFingerprint[leadId] === fingerprint) {
+      return; // nothing changed, skip re-render
+    }
+    _smsThreadFingerprint[leadId] = fingerprint;
+
     if (!msgs.length) {
       el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">No messages yet. Use "New Text" above to start the conversation.</div>`;
       return;
     }
+
+    // Preserve scroll-pinned-to-bottom behavior across re-renders.
+    const wasPinnedToBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 24;
 
     el.innerHTML = msgs.map(m => {
       const out = m.direction === 'out';
@@ -10687,11 +10742,56 @@ async function renderSMSThread(leadId) {
       </div>`;
     }).join('');
 
-    el.scrollTop = el.scrollHeight;
+    // Only auto-scroll on initial load or if user was at the bottom already.
+    if (!quiet || wasPinnedToBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
   } catch (e) {
-    el.innerHTML = `<div style="font-size:12.5px;color:#e74c3c;padding:4px 0">Failed to load thread: ${escHtml(e.message)}</div>`;
+    if (!quiet) {
+      el.innerHTML = `<div style="font-size:12.5px;color:#e74c3c;padding:4px 0">Failed to load thread: ${escHtml(e.message)}</div>`;
+    }
+    // On a quiet (background) failure, leave the existing thread on screen.
   }
 }
+
+// ── SMS auto-refresh poller ──
+// Hits /consent/status + /sms/thread every SMS_POLL_INTERVAL_MS while a job
+// detail page is open. Pauses when the tab is hidden. Stops cleanly on close
+// or page navigation.
+function startSMSPolling(leadId) {
+  stopSMSPolling();
+  if (!_smsConfigured() || !leadId) return;
+  _smsPollLeadId = leadId;
+  _smsPollTimer  = setInterval(_smsPollTick, SMS_POLL_INTERVAL_MS);
+}
+function stopSMSPolling() {
+  if (_smsPollTimer) { clearInterval(_smsPollTimer); _smsPollTimer = null; }
+  _smsPollLeadId = null;
+}
+async function _smsPollTick() {
+  if (document.hidden) return;
+  if (!_smsPollLeadId) return;
+  // Bail if the user navigated away from this lead without us being notified.
+  if (typeof S !== 'undefined' && S.jobDetailId !== _smsPollLeadId) {
+    stopSMSPolling();
+    return;
+  }
+  const lead = getLead(_smsPollLeadId);
+  if (!lead) return;
+  try {
+    if (lead.customerId && typeof hydrateConsentFromServer === 'function') {
+      await hydrateConsentFromServer(lead.customerId);
+    }
+    await renderSMSThread(_smsPollLeadId, true);
+  } catch (_) {
+    // swallow — background poll, never disrupt the user
+  }
+}
+// Fire an immediate poll when the tab regains focus so users coming back to a
+// laptop don't have to wait the full 7 s for fresh data.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && _smsPollLeadId) _smsPollTick();
+});
 
 // ── ONE-TIME LEAD CLEANUP (archive leads >50 days old) ──
 function archiveOldLeads() {
