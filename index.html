@@ -487,6 +487,8 @@
   .jd-f{display:flex;flex-direction:column;gap:2px;padding:3px 0}
   .jd-fl{font-size:10px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
   .jd-fv{font-size:13px;color:var(--text-primary)}
+  .jd-edit-link{background:none;border:1px solid var(--border-light);color:var(--text-muted);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-weight:400}
+  .jd-edit-link:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border)}
   .jd-fi{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none;width:100%;transition:border-color var(--t)}
   .jd-fi:focus{border-color:var(--green)}
   .jd-fsel{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none;width:100%;transition:border-color var(--t)}
@@ -2886,7 +2888,12 @@ function saveCustomer() {
   });
   closeDrawer();
   toast('Customer saved','success');
-  if (S.custView) renderCustomerDetail(S.custView);
+  // Refresh whichever view the user is currently looking at, so the name change
+  // is reflected immediately. Order matters: jobDetail takes priority because
+  // editing a customer from a job is the most common path.
+  if (S.jobDetailId) renderJobDetail(S.jobDetailId);
+  else if (S.custView) renderCustomerDetail(S.custView);
+  else if (S.page === 'leads') renderLeadsPage();
   else renderCustomersPage();
 }
 
@@ -3412,11 +3419,14 @@ function renderQuickQuoteForm(q){
       </div>`}
     </div>
     <div class="qq-section">
-      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
-        ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
+        <div style="display:flex;gap:6px">
+          ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Job</button>` : ''}
+          <button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pushQuoteScope('${q.id}')" title="Copy this quote's scope into the job's Scope of Work">↗ Push to Job</button>
+        </div>
       </div>
-      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending. If the job's Scope of Work is empty, it will be filled in automatically.</div>
       <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||lead?.scopeOfWork||autoScope(q)}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
@@ -3559,7 +3569,19 @@ function updateQQRunSegFt(qid,idx,val){
 function addQQExtra(qid,eid,name,price){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];if(extras.find(e=>e.id===eid))return;extras.push({id:eid,name,price});upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function removeQQExtra(qid,idx){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras.splice(idx,1);upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function updateQQExtra(qid,idx,v){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras[idx]={...extras[idx],price:parseFloat(v)||0};upsertQuote({...q,qq:{...(q.qq||{}),extras}});onQQChange(qid);}
-function onQQScopeChange(qid){const v=document.getElementById('qq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
+function onQQScopeChange(qid){
+  const v=document.getElementById('qq-scope')?.value||'';
+  const q=getQuote(qid);
+  if(!q) return;
+  upsertQuote({...q,scope:v});
+  // Auto-mirror to the lead's scopeOfWork only when the lead is empty —
+  // saves a copy/paste step when you start on the quote first.
+  // Once the job has scope, we don't auto-overwrite (use ↗ Push button instead).
+  const lead=getLead(q.leadId);
+  if (lead && !(lead.scopeOfWork||'').trim() && v.trim()) {
+    upsertLead({...lead, scopeOfWork: v});
+  }
+}
 function onQQBufferChange(qid){
   const q=getQuote(qid); if(!q) return;
   const el=document.getElementById('qq-buffer');
@@ -3575,6 +3597,21 @@ function pullLeadScope(qid){
   ta.value=lead.scopeOfWork;
   upsertQuote({...q,scope:lead.scopeOfWork});
   toast('Scope pulled from job Scope of Work','success');
+}
+
+// Explicit push from quote scope → lead's scopeOfWork.
+// Used when the lead already has a scope and the auto-mirror won't fire.
+function pushQuoteScope(qid){
+  const q=getQuote(qid); if(!q) return;
+  const v=(q.scope||'').trim();
+  if(!v){ toast('Quote has no scope text yet','warning'); return; }
+  const lead=getLead(q.leadId); if(!lead) return;
+  const existing=(lead.scopeOfWork||'').trim();
+  if (existing && existing !== v) {
+    if (!confirm('The job already has a Scope of Work. Overwrite it with the quote\'s scope?\n\nCurrent job scope:\n'+(existing.length>200?existing.substring(0,200)+'…':existing)+'\n\nNew scope:\n'+(v.length>200?v.substring(0,200)+'…':v))) return;
+  }
+  upsertLead({...lead, scopeOfWork: v});
+  toast('Scope pushed to job','success');
 }
 function onQQIncChange(qid){const v=document.getElementById('qq-inc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,inclusions:v});}
 function onQQExcChange(qid){const v=document.getElementById('qq-exc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,exclusions:v});}
@@ -3704,11 +3741,14 @@ function renderDetailedQuoteForm(q){
       </div>
     </div>`:''}
     <div class="qq-section">
-      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
-        ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Scope of Work</button>` : ''}
+        <div style="display:flex;gap:6px">
+          ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Job</button>` : ''}
+          <button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pushQuoteScope('${q.id}')" title="Copy this quote's scope into the job's Scope of Work">↗ Push to Job</button>
+        </div>
       </div>
-      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending. If the job's Scope of Work is empty, it will be filled in automatically.</div>
       <textarea class="fta" id="dq-scope" rows="4" style="min-height:100px" oninput="onDQScopeChange('${q.id}')">${q.scope||lead?.scopeOfWork||''}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="dq-inc" rows="3" style="min-height:72px" oninput="onDQIncChange('${q.id}')">${q.inclusions||''}</textarea>
@@ -3766,7 +3806,17 @@ function onDQChange(qid){
   upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
 }
-function onDQScopeChange(qid){const v=document.getElementById('dq-scope')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,scope:v});}
+function onDQScopeChange(qid){
+  const v=document.getElementById('dq-scope')?.value||'';
+  const q=getQuote(qid);
+  if(!q) return;
+  upsertQuote({...q,scope:v});
+  // Same auto-mirror behavior as onQQScopeChange.
+  const lead=getLead(q.leadId);
+  if (lead && !(lead.scopeOfWork||'').trim() && v.trim()) {
+    upsertLead({...lead, scopeOfWork: v});
+  }
+}
 function onDQBufferChange(qid){
   const q=getQuote(qid); if(!q) return;
   const el=document.getElementById('dq-buffer');
@@ -4809,8 +4859,11 @@ function renderMaterialsLibrary(){
   const cats=[...new Set(mats.map(m=>m.category))].sort();
   return `<div class="stitle">Materials Library</div>
     <div class="sdesc">Standard materials used in detailed quotes. Unit costs and markups are editable.</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px">
-      <input class="fi" id="mat-srch" placeholder="Search materials..." style="flex:1" oninput="filterMats()">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <input class="fi" id="mat-srch" placeholder="Search materials..." style="flex:1;min-width:180px" oninput="filterMats()">
+      <button class="btn btn-g" onclick="openMaterialImport()" title="Import from Capital Electric pricing list">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import Pricing
+      </button>
       <button class="btn btn-p" onclick="openAddMaterial()">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add
       </button>
@@ -4868,6 +4921,103 @@ function saveMaterialEntry(existingId){
   saveMaterials(mats);
   toast('Material saved','success');
   showSec(null,'Materials Library');
+}
+
+// ── BULK IMPORT FROM DISTRIBUTOR PRICING ──
+// Loads materials_seed.json (sibling of index.html) and shows a modal with
+// items grouped by auto-categorized buckets so the user can pick the subset
+// they actually use. Existing items (matched case-insensitively by name)
+// are filtered out so we don't create duplicates.
+async function openMaterialImport(){
+  let seed;
+  try {
+    const resp = await fetch('./materials_seed.json', { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    seed = await resp.json();
+  } catch(e) {
+    toast('Could not load distributor pricing file: ' + e.message, 'error');
+    return;
+  }
+  if (!seed || !Array.isArray(seed.items)) { toast('Pricing file is malformed','error'); return; }
+  const existing = new Set(getMaterials().map(m => (m.name||'').toLowerCase()));
+  const items = seed.items.filter(it => !existing.has((it.name||'').toLowerCase()));
+  const skipped = seed.items.length - items.length;
+  if (!items.length) { toast('All distributor items are already in your library','warning'); return; }
+  const byCat = {};
+  for (const it of items) (byCat[it.category] = byCat[it.category] || []).push(it);
+  const sortedCats = Object.keys(byCat).sort();
+  const overlay = document.createElement('div');
+  overlay.id = 'matimp-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div class="card" style="padding:24px;max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;background:var(--bg-elevated);box-shadow:var(--shadow-drop)">
+    <div style="font-size:18px;font-weight:600;margin-bottom:6px">Import Distributor Pricing</div>
+    <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">${items.length} new items from Capital Electric (${skipped} already in your library, skipped). Pick what to add — uncheck what you don't use. Default markup is 30% — you can adjust per-item afterward.</div>
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="document.querySelectorAll('.matimp-cb').forEach(c=>c.checked=true)">Select All</button>
+      <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="document.querySelectorAll('.matimp-cb').forEach(c=>c.checked=false)">Clear All</button>
+      <span id="matimp-count" style="margin-left:auto;font-size:12px;color:var(--text-muted);align-self:center"></span>
+    </div>
+    <div id="matimp-scroll" style="overflow:auto;flex:1;border:1px solid var(--border);border-radius:6px;padding:8px">
+      ${sortedCats.map(cat => `
+        <details style="margin-bottom:6px" open>
+          <summary style="cursor:pointer;padding:8px 4px;font-weight:600;font-size:13px;display:flex;justify-content:space-between;align-items:center"><span>${cat} (${byCat[cat].length})</span><span onclick="event.preventDefault();event.stopPropagation();const det=this.closest('details');det.querySelectorAll('.matimp-cb').forEach(c=>c.checked=!c.checked);updateMatImpCount()" style="color:var(--green);cursor:pointer;font-size:12px;font-weight:400">toggle category</span></summary>
+          ${byCat[cat].map(it => `<label class="srow" style="cursor:pointer;display:flex;gap:10px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--border-light)"><input type="checkbox" class="matimp-cb" data-mid="${it.id}" onchange="updateMatImpCount()" /><div style="flex:1;min-width:0"><div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(it.name||'').replace(/"/g,'&quot;')}">${it.name||''}</div><div style="font-size:11px;color:var(--text-muted)">${(it.manufacturer||'')} · ${it.unitOfMeasure}${it.catalog?' · '+it.catalog:''}</div></div><span style="font-family:var(--mono);font-size:13px;color:var(--green);flex-shrink:0">$${(+it.unitPrice).toFixed(2)}</span></label>`).join('')}
+        </details>
+      `).join('')}
+    </div>
+    <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px">
+      <button class="btn btn-g" onclick="closeMaterialImport()">Cancel</button>
+      <button class="btn btn-p" onclick="commitMaterialImport()">Import Selected</button>
+    </div>
+  </div>`;
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeMaterialImport(); });
+  document.body.appendChild(overlay);
+  // Stash items keyed by id for the commit step.
+  window._matImpItems = items.reduce((m, it) => { m[it.id] = it; return m; }, {});
+  updateMatImpCount();
+}
+
+function updateMatImpCount(){
+  const el = document.getElementById('matimp-count');
+  if (!el) return;
+  const n = document.querySelectorAll('.matimp-cb:checked').length;
+  el.textContent = n + ' selected';
+}
+
+function closeMaterialImport(){
+  const ov = document.getElementById('matimp-overlay');
+  if (ov) ov.remove();
+  window._matImpItems = null;
+}
+
+function commitMaterialImport(){
+  const checked = document.querySelectorAll('.matimp-cb:checked');
+  if (!checked.length) { toast('Nothing selected','warning'); return; }
+  const mats = getMaterials();
+  const map = window._matImpItems || {};
+  // UOM → existing app's unit vocabulary
+  const uomMap = { 'ft':'per foot', 'bx':'per box', 'pk':'per box', 'kt':'each', 'pr':'each', 'ea':'each' };
+  let added = 0;
+  for (const cb of checked) {
+    const src = map[cb.dataset.mid];
+    if (!src) continue;
+    mats.push({
+      id: 'm-imp-' + Date.now() + '-' + added,
+      name: src.name,
+      category: src.category,
+      unit: uomMap[src.unitOfMeasure] || 'each',
+      unitCost: +(+src.unitPrice).toFixed(4),
+      markup: 30,
+      manufacturer: src.manufacturer || '',
+      catalog: src.catalog || '',
+      source: src.source || 'imported'
+    });
+    added++;
+  }
+  saveMaterials(mats);
+  toast('Imported ' + added + ' material' + (added===1?'':'s'), 'success');
+  closeMaterialImport();
+  showSec(null, 'Materials Library');
 }
 
 // ══════════════════════════════════════════════════════
@@ -5438,8 +5588,8 @@ function renderJobDetail(id) {
     </div>
     <div class="jd-sb">
       <div class="jd-fg">
-        <div class="jd-f"><div class="jd-fl">${_custHeaderLabel}</div><div class="jd-fv" style="font-weight:500">${_custHeaderValue}</div></div>
-        ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv">${custName}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
+        <div class="jd-f"><div class="jd-fl">${_custHeaderLabel}</div><div class="jd-fv" style="font-weight:500;display:flex;align-items:center;gap:8px">${_custHeaderValue}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>
+        ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv" style="display:flex;align-items:center;gap:8px">${custName}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
         <div class="jd-f"><div class="jd-fl">Phone</div><div class="jd-fv">${cust?.phone||lead.customerPhone||'—'}</div></div>
         <div class="jd-f"><div class="jd-fl">Email</div><div class="jd-fv">${cust?.email||lead.customerEmail||'—'}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
@@ -9236,6 +9386,9 @@ async function _onMSALSuccess(account) {
   try {
     await _spInit();
     await _syncFromSP();
+    // Start the periodic JSON backup to the Documents drive once SP is ready.
+    // Safe to call multiple times — internal guard prevents duplicate timers.
+    _startBackupTimer();
   } catch(e) {
     console.warn('[GK] SharePoint unavailable, using local data:', e);
     toast('SharePoint sync failed — running with local data', 'error');
@@ -9254,10 +9407,29 @@ async function _graphFetch(path, opts = {}) {
       _gToken = tr.accessToken;
     }
   }
-  const resp = await fetch(url, {
+  const doFetch = () => fetch(url, {
     ...opts,
     headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json', ...(opts.headers||{}) }
   });
+  let resp = await doFetch();
+  // Access tokens are short-lived (~1h). When one expires Graph returns 401
+  // with InvalidAuthenticationToken. MSAL caches a refresh token, so we can
+  // re-acquire silently via forceRefresh and retry the request once. This
+  // keeps long-lived tabs working without the user having to reload.
+  if (resp.status === 401 && _msal) {
+    try {
+      const accounts = _msal.getAllAccounts();
+      if (accounts.length > 0) {
+        const tr = await _msal.acquireTokenSilent({ account: accounts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+        _gToken = tr.accessToken;
+        console.log('[GK] Token refreshed after 401, retrying request');
+        resp = await doFetch();
+      }
+    } catch(e) {
+      console.warn('[GK] Silent token refresh failed:', e);
+      // Fall through to the normal error path below.
+    }
+  }
   if (resp.status === 204 || resp.status === 202) return null;
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Graph ${resp.status}: ${t.slice(0,300)}`); }
   // Some endpoints (e.g. sendMail) return 2xx with an empty body.
@@ -9440,6 +9612,96 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
   }
 }
 
+// ── AUTO-BACKUP TO SHAREPOINT DRIVE ──
+// Writes a JSON snapshot of all sync-tracked localStorage to
+// SharePoint's Documents library, in a folder called GreenKeyCRM_Backups.
+// Runs every BACKUP_INTERVAL_MS while the tab is open. Belt-and-suspenders
+// recovery option: even if the GreenKeyCRM_Data list gets corrupted, we
+// have a recent JSON snapshot to restore from.
+const SP_BACKUP_DIR = 'GreenKeyCRM_Backups';
+const BACKUP_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
+const BACKUP_INITIAL_DELAY_MS = 5 * 60 * 1000; // wait 5 min after sign-in
+const BACKUP_KEEP_COUNT = 50;
+let _backupTmr = null;
+
+async function _writeBackupSnapshot() {
+  if (!_gToken || !_spDrive) return null;
+  try {
+    const data = {};
+    for (const k of [...SYNC_KEYS, `gk_seq_${new Date().getFullYear()}`]) {
+      const v = localStorage.getItem(k);
+      if (v) data[k] = v;
+    }
+    // Sanity check — never write a backup of obviously empty/broken state.
+    let leadCount = 0, custCount = 0;
+    try { leadCount = JSON.parse(data['gk_leads'] || '[]').length; } catch {}
+    try { custCount = JSON.parse(data['gk_customers'] || '[]').length; } catch {}
+    if (leadCount < 5 && custCount < 5) {
+      console.log('[GK] Backup skipped: data looks empty (leads=' + leadCount + ', customers=' + custCount + ')');
+      return null;
+    }
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `gk_backup_${ts}.json`;
+    const filePath = `${SP_BACKUP_DIR}/${filename}`;
+    const body = JSON.stringify({
+      _meta: {
+        timestamp: new Date().toISOString(),
+        source: 'auto-backup',
+        leadCount, customerCount: custCount,
+        userEmail: S.user?.username || S.user?.email || ''
+      },
+      data
+    }, null, 2);
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${filePath}:/content`, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json' },
+      body
+    });
+    if (!resp.ok) throw new Error('Backup upload failed: ' + resp.status);
+    const result = await resp.json();
+    console.log('[GK] Backup written:', filename, '(' + leadCount + ' leads, ' + custCount + ' customers)');
+    // Best-effort cleanup; failure here doesn't matter to the user.
+    _pruneOldBackups().catch(e => console.warn('[GK] Backup pruning failed:', e));
+    return result;
+  } catch(e) {
+    console.warn('[GK] Backup failed:', e);
+    return null;
+  }
+}
+
+async function _pruneOldBackups() {
+  if (!_gToken || !_spDrive) return;
+  const listResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${SP_BACKUP_DIR}:/children?$top=200`, {
+    headers: { 'Authorization': `Bearer ${_gToken}` }
+  });
+  if (!listResp.ok) return;
+  const listData = await listResp.json();
+  const items = (listData.value || [])
+    .filter(it => it.name && it.name.startsWith('gk_backup_'))
+    .sort((a, b) => (b.createdDateTime || '').localeCompare(a.createdDateTime || ''));
+  if (items.length <= BACKUP_KEEP_COUNT) return;
+  const toDelete = items.slice(BACKUP_KEEP_COUNT);
+  for (const it of toDelete) {
+    try {
+      await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${it.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${_gToken}` }
+      });
+    } catch(e) { /* ignore individual failures */ }
+  }
+  console.log('[GK] Pruned', toDelete.length, 'old backup(s); kept newest', BACKUP_KEEP_COUNT);
+}
+
+function _startBackupTimer() {
+  if (_backupTmr) return; // already running
+  // Wait a bit after sign-in so the first SP sync has a chance to populate
+  // localStorage before we snapshot it.
+  setTimeout(() => {
+    _writeBackupSnapshot();
+    _backupTmr = setInterval(_writeBackupSnapshot, BACKUP_INTERVAL_MS);
+  }, BACKUP_INITIAL_DELAY_MS);
+}
+
 function _dataUrlToBlob(dataUrl) {
   const arr = dataUrl.split(','), mime = arr[0].match(/:(.*?);/)[1];
   const bstr = atob(arr[1]);
@@ -9469,14 +9731,32 @@ function _syncStatusHide() {
   if (el) el.style.display = 'none';
 }
 
-// Also sync on page visibility change (when user switches back to tab)
+// Sync from SharePoint when the user switches back to the tab — but with
+// guardrails. Without these, an aggressive auto-pull can overwrite legitimate
+// local edits made just before tab-switching.
+//
+// Guards (in order of precedence):
+//   1. Skip if a push is already queued (local changes pending — pulling now
+//      would clobber them before they reach SP).
+//   2. Skip if a push is currently in flight.
+//   3. Cooldown: don't pull more than once every 60 seconds.
+//   4. Skip if SharePoint isn't fully initialized (_spList is also required).
+let _lastVisibilitySync = 0;
+const VISIBILITY_SYNC_COOLDOWN_MS = 60_000;
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && _gToken && _spSite && S.user) {
-    _syncFromSP().then(() => {
-      // Re-render current page with fresh data
-      if (typeof navigate === 'function') navigate(S.page);
-    }).catch(e => console.warn('[GK] Visibility sync failed:', e));
+  if (document.hidden) return;
+  if (!_gToken || !_spSite || !_spList || !S.user) return;
+  if (_syncTmr) { console.log('[GK] Visibility sync skipped: local push queued'); return; }
+  if (_syncing) { console.log('[GK] Visibility sync skipped: push in flight'); return; }
+  const since = Date.now() - _lastVisibilitySync;
+  if (since < VISIBILITY_SYNC_COOLDOWN_MS) {
+    console.log('[GK] Visibility sync skipped: cooldown', Math.round((VISIBILITY_SYNC_COOLDOWN_MS - since)/1000), 's remaining');
+    return;
   }
+  _lastVisibilitySync = Date.now();
+  _syncFromSP().then(() => {
+    if (typeof navigate === 'function') navigate(S.page);
+  }).catch(e => console.warn('[GK] Visibility sync failed:', e));
 });
 
 // ════════════════════════════════════════════════════════════
