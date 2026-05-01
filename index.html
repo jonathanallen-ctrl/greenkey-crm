@@ -9357,7 +9357,12 @@ const AZURE_TENANT_ID   = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
 const AZURE_REDIRECT    = 'https://jonathanallen-ctrl.github.io/greenkey-crm/';
 const SP_HOSTNAME       = 'greenkeyusa.sharepoint.com';
 const SP_LIST_NAME      = 'GreenKeyCRM_Data';
-const SP_PHOTO_LIB_NAME = 'GreenKeyCRM_Photos';
+// Path within the Documents drive where photos and backups live. These were moved
+// (2026-04-30) from the Documents root into CEO/CRM software/ so they don't
+// clutter the company's primary file index. NOTE: contains a space ("CRM software")
+// — URL building must use encodeURI() (handled in _uploadPhotoToSP, _writeBackupSnapshot,
+// _pruneOldBackups). Update both constants together if folders move again.
+const SP_PHOTO_LIB_NAME = 'CEO/CRM software/GreenKeyCRM_Photos';
 const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read','Mail.Send'];
 
 let _msal    = null;
@@ -9619,9 +9624,11 @@ async function _spEnsureList() {
 }
 
 async function _spEnsureDrive() {
+  // Photos and backups live in subfolders of the site's Shared Documents
+  // drive (see SP_PHOTO_LIB_NAME / SP_BACKUP_DIR for the folder paths within
+  // it). Previous code looked for a separate "GreenKeyCRM_Photos" library,
+  // but those folders are now nested inside Documents — no separate library.
   const drives = await _graphFetch(`/sites/${_spSite}/drives`);
-  const lib = drives.value.find(d => d.name === SP_PHOTO_LIB_NAME);
-  if (lib) return lib.id;
   const docs = drives.value.find(d => d.webUrl && (d.webUrl.includes('Shared%20Documents') || d.webUrl.includes('Shared Documents')));
   return docs ? docs.id : (drives.value[0]?.id || null);
 }
@@ -9741,7 +9748,8 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
     const fname = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
     const spPath = `${SP_PHOTO_LIB_NAME}/${jobId}/${category}/${fname}`;
     const blob = _dataUrlToBlob(dataUrl);
-    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${spPath}:/content`, {
+    // encodeURI handles the space in "CRM software" while preserving / and :
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}:/content`, {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': file.type || 'image/jpeg' },
       body: blob
@@ -9762,7 +9770,9 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
 // Runs every BACKUP_INTERVAL_MS while the tab is open. Belt-and-suspenders
 // recovery option: even if the GreenKeyCRM_Data list gets corrupted, we
 // have a recent JSON snapshot to restore from.
-const SP_BACKUP_DIR = 'GreenKeyCRM_Backups';
+// Path within the Documents drive where backups live. Moved (2026-04-30) from
+// the Documents root into CEO/CRM software/. URL-encode when building fetch URLs.
+const SP_BACKUP_DIR = 'CEO/CRM software/GreenKeyCRM_Backups';
 const BACKUP_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
 const BACKUP_INITIAL_DELAY_MS = 5 * 60 * 1000; // wait 5 min after sign-in
 const BACKUP_KEEP_COUNT = 50;
@@ -9796,7 +9806,7 @@ async function _writeBackupSnapshot() {
       },
       data
     }, null, 2);
-    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${filePath}:/content`, {
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(filePath)}:/content`, {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json' },
       body
@@ -9815,7 +9825,7 @@ async function _writeBackupSnapshot() {
 
 async function _pruneOldBackups() {
   if (!_gToken || !_spDrive) return;
-  const listResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${SP_BACKUP_DIR}:/children?$top=200`, {
+  const listResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(SP_BACKUP_DIR)}:/children?$top=200`, {
     headers: { 'Authorization': `Bearer ${_gToken}` }
   });
   if (!listResp.ok) return;
