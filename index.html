@@ -1267,6 +1267,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 // ── CONSTANTS ──
 const UK = 'gk_users', SK = 'gk_session';
@@ -1479,13 +1480,45 @@ const STOP_KEYWORDS = ['STOP','UNSUBSCRIBE','QUIT','CANCEL','END','STOPALL'];
 const HELP_KEYWORDS = ['HELP','INFO'];
 const START_KEYWORDS = ['START','UNSTOP','YES'];
 
+// Customer-facing project phrase derived from lead.jobType. Used in consent
+// emails, verbal scripts, and any other copy that has historically said
+// "EV charger installation". Falls back to "electrical project" when the
+// type is unknown / not set.
+const _PROJECT_PHRASES = {
+  'ev-residential':      'EV charger installation',
+  'nema-1450':           'NEMA 14-50 outlet installation',
+  'hvac-circuit':        'HVAC circuit installation',
+  'circuit-replacement': 'circuit replacement',
+  'panel-replacement':   'panel replacement',
+  'battery-system':      'battery system installation',
+  'v2h-system':          'V2H system installation',
+  'new-service':         'new electrical service installation',
+  'service-upgrade':     'electrical service upgrade',
+  'generator':           'generator installation'
+};
+function getProjectPhrase(leadOrJobType) {
+  // Accept either a lead object or a raw jobType string for flexibility.
+  const jt = (leadOrJobType && typeof leadOrJobType === 'object')
+    ? leadOrJobType.jobType
+    : leadOrJobType;
+  return _PROJECT_PHRASES[jt] || 'electrical project';
+}
+// Picks the right indefinite article for a phrase ("a panel replacement" vs
+// "an EV charger installation"). Used where copy reads "...about {a/an} X".
+function _aOrAn(phrase) {
+  return /^[aeiou]/i.test((phrase||'').trim()) ? 'an' : 'a';
+}
+
 // Verbal consent script — must be read VERBATIM to customer before logging consent.
 // This text is shown in the Capture Consent modal's "Verbal (phone)" tab.
-function getVerbalConsentScript(phone) {
+// Pass the lead so the script names the right project type; phone-only call
+// signature is preserved for backward compatibility.
+function getVerbalConsentScript(phone, lead) {
   const p = phone || '[customer phone]';
+  const project = getProjectPhrase(lead);
   return `Before we finish up, I need your consent to text you about your project.
 
-GreenKey would like to send text messages to ${p} regarding scheduling, quotes, project updates, and service for your EV charger installation.
+GreenKey would like to send text messages to ${p} regarding scheduling, quotes, project updates, and service for your ${project}.
 
 Message and data rates may apply. Message frequency varies — typically 1 to 10 messages per project.
 
@@ -1982,7 +2015,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Users & Access','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2035,6 +2068,7 @@ const SECS = {
 
   'Materials Library':null,
   'Tech Mode':null,
+  'Backups & Export':null,
   'Scheduling':`<div class="stitle">Scheduling</div><div class="sdesc">Settings used by the Scheduler to calculate drive times and build optimal day routes.</div>
     <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
       <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139'}">
@@ -2076,8 +2110,164 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderMaterialsLibrary();
   } else if (sec==='Tech Mode') {
     document.getElementById('spanel').innerHTML = renderTechModeSettings();
+  } else if (sec==='Backups & Export') {
+    document.getElementById('spanel').innerHTML = renderBackupsExportSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
+  }
+}
+
+function renderBackupsExportSettings() {
+  const lastExport = localStorage.getItem('gk_last_export_at') || '';
+  const lastExportLabel = lastExport ? new Date(lastExport).toLocaleString('en-US', { dateStyle:'medium', timeStyle:'short' }) : 'never';
+  const customers = (() => { try { return JSON.parse(localStorage.getItem('gk_customers')||'[]').length; } catch { return 0; } })();
+  const leads     = (() => { try { return JSON.parse(localStorage.getItem('gk_leads')||'[]').length; } catch { return 0; } })();
+  const quotes    = (() => { try { return JSON.parse(localStorage.getItem('gk_quotes')||'[]').length; } catch { return 0; } })();
+  const mats      = (() => { try { return JSON.parse(localStorage.getItem('gk_materials')||'[]').length; } catch { return 0; } })();
+  const tasks     = (() => { try { return JSON.parse(localStorage.getItem('gk_tasks')||'[]').length; } catch { return 0; } })();
+  const files     = (typeof _filesCache !== 'undefined') ? _filesCache.length : 0;
+
+  return `<div class="stitle">Backups &amp; Export</div>
+    <div class="sdesc">Belt-and-suspenders insurance for your customer data. SharePoint already keeps a 50-snapshot rolling backup; this section adds long-term retention and an off-tenant export for true off-Microsoft redundancy.</div>
+
+    <div style="margin-top:18px">
+      <div class="srl" style="font-size:13px;font-weight:600;margin-bottom:6px">Automatic backups (running)</div>
+      <div class="srd" style="line-height:1.5;margin-bottom:14px">
+        Every 30 minutes, a JSON snapshot of all your data is written to <code>CEO/CRM software/GreenKeyCRM_Backups</code> in SharePoint. The newest 50 snapshots rotate (~25 hour history). In addition, <strong>one snapshot per month</strong> is preserved indefinitely in <code>GreenKeyCRM_Backups/monthly/</code> — these never auto-delete, giving you a multi-year recovery window.
+      </div>
+    </div>
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+      <div class="srl" style="font-size:13px;font-weight:600;margin-bottom:6px">Off-tenant export (manual)</div>
+      <div class="srd" style="line-height:1.5;margin-bottom:14px">
+        Download a single ZIP containing all your customer / lead / quote / material data as JSON. Keep it somewhere outside Microsoft 365 — personal Google Drive, a USB stick, etc. — as insurance against tenant-level loss. <strong>Recommended cadence:</strong> monthly. Photos are not included (they live in SharePoint at <code>GreenKeyCRM_Photos</code> and can be downloaded separately if needed).
+      </div>
+      <div class="srow" style="background:var(--bg-elevated)">
+        <div style="flex:1">
+          <div class="srl">Current data snapshot</div>
+          <div class="srd">${customers} customers · ${leads} leads · ${quotes} quotes · ${mats} materials · ${tasks} tasks · ${files} file records</div>
+        </div>
+        <button class="btn btn-p" onclick="exportDataZip()" style="padding:8px 16px">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>
+          Download Data ZIP
+        </button>
+      </div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">Last export: ${escHtml(lastExportLabel)}</div>
+    </div>
+
+    <div style="margin-top:22px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-size:12.5px;color:var(--text-muted);line-height:1.55">
+      <strong style="color:var(--text-secondary)">Restore from a backup:</strong> there's no one-click restore in the UI yet. If you ever need to recover, contact me with the backup file (either a monthly snapshot from SharePoint or one of these export ZIPs) and we'll do a guided restore.
+    </div>`;
+}
+
+// Builds and downloads a single ZIP containing all sync-tracked data plus
+// file metadata. Excludes photo blobs (those live in SharePoint and can be
+// retrieved from the GreenKeyCRM_Photos library directly). Stamps
+// gk_last_export_at on success.
+async function exportDataZip() {
+  if (typeof JSZip === 'undefined') {
+    toast('ZIP library not loaded — refresh the page and try again', 'error');
+    return;
+  }
+  toast('Building export ZIP…', 'info');
+  try {
+    const zip = new JSZip();
+    const now = new Date();
+    const ts = now.toISOString().replace(/[:.]/g, '-');
+    const isoDate = now.toISOString();
+
+    // Pull every sync-tracked localStorage entity
+    const data = {};
+    for (const k of (typeof SYNC_KEYS !== 'undefined' ? SYNC_KEYS : ['gk_customers','gk_leads','gk_quotes','gk_materials','gk_tasks','gk_notifications','gk_users','gk_prefs'])) {
+      const v = localStorage.getItem(k);
+      if (v != null) {
+        try { data[k] = JSON.parse(v); } catch { data[k] = v; }
+      }
+    }
+
+    // File metadata only — strip dataUrl base64 blobs (they bloat the ZIP)
+    const fileMetadata = (typeof _filesCache !== 'undefined' ? _filesCache : [])
+      .map(f => {
+        const { dataUrl, ...rest } = f;
+        return rest;
+      });
+
+    const counts = {
+      customers:    Array.isArray(data.gk_customers)    ? data.gk_customers.length    : 0,
+      leads:        Array.isArray(data.gk_leads)        ? data.gk_leads.length        : 0,
+      quotes:       Array.isArray(data.gk_quotes)       ? data.gk_quotes.length       : 0,
+      materials:    Array.isArray(data.gk_materials)    ? data.gk_materials.length    : 0,
+      tasks:        Array.isArray(data.gk_tasks)        ? data.gk_tasks.length        : 0,
+      notifications:Array.isArray(data.gk_notifications)? data.gk_notifications.length: 0,
+      users:        Array.isArray(data.gk_users)        ? data.gk_users.length        : 0,
+      fileRecords:  fileMetadata.length
+    };
+
+    const manifest = {
+      _format: 'GreenKey CRM data export v1',
+      _exportedAt: isoDate,
+      _exportedBy: S.user?.username || S.user?.email || 'unknown',
+      _counts: counts,
+      _notes: [
+        'This ZIP is a complete off-tenant snapshot of your CRM data.',
+        'Photos are not included — they live in SharePoint at CEO/CRM software/GreenKeyCRM_Photos.',
+        'To restore: contact your CRM developer with this ZIP and they will guide a restore.'
+      ]
+    };
+
+    // Per-entity files for easier inspection
+    Object.keys(data).forEach(k => {
+      const friendly = k.replace(/^gk_/, '') + '.json';
+      zip.file('data/' + friendly, JSON.stringify(data[k], null, 2));
+    });
+    zip.file('data/files-metadata.json', JSON.stringify(fileMetadata, null, 2));
+
+    // Single combined snapshot for restore (matches the SharePoint backup format)
+    zip.file('snapshot.json', JSON.stringify({
+      _meta: { ...manifest, source: 'manual-export' },
+      data: Object.fromEntries(Object.keys(data).map(k => [k, JSON.stringify(data[k])]))
+    }, null, 2));
+
+    zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+    zip.file('readme.txt',
+      `GreenKey CRM Data Export\n` +
+      `========================\n\n` +
+      `Exported: ${isoDate}\n` +
+      `By: ${S.user?.name || ''} (${S.user?.username || ''})\n\n` +
+      `Contents:\n` +
+      `  - manifest.json     summary + counts\n` +
+      `  - snapshot.json     single-file restore-ready snapshot (SharePoint-backup format)\n` +
+      `  - data/*.json       per-entity exports for manual inspection\n\n` +
+      `Counts:\n` +
+      Object.entries(counts).map(([k,v]) => `  - ${k}: ${v}`).join('\n') + `\n\n` +
+      `What's NOT in this ZIP:\n` +
+      `  - Photo blobs (they live in SharePoint at CEO/CRM software/GreenKeyCRM_Photos\n` +
+      `    and can be downloaded directly from there or via OneDrive sync).\n\n` +
+      `How to restore:\n` +
+      `  Contact your CRM developer with this ZIP and the snapshot.json file —\n` +
+      `  the restore is a one-time guided operation that overwrites localStorage\n` +
+      `  and triggers a SharePoint resync. Don't try to restore manually.\n\n` +
+      `Recommended storage:\n` +
+      `  Keep this ZIP somewhere outside Microsoft 365 — personal Google Drive,\n` +
+      `  USB drive in a safe, etc. The whole point is off-tenant redundancy.\n` +
+      `  Run a fresh export once a month.\n`
+    );
+
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    const filename = `greenkey-crm-export_${ts}.zip`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+
+    localStorage.setItem('gk_last_export_at', isoDate);
+    toast(`Exported ${counts.customers} customers, ${counts.leads} leads, ${counts.quotes} quotes`, 'success');
+    // Re-render the panel so "Last export" timestamp updates
+    if (typeof showSec === 'function') showSec(null, 'Backups & Export');
+  } catch (e) {
+    console.error('[GK] Export failed:', e);
+    toast('Export failed: ' + e.message, 'error');
   }
 }
 
@@ -11709,6 +11899,11 @@ async function _writeBackupSnapshot() {
     if (!resp.ok) throw new Error('Backup upload failed: ' + resp.status);
     const result = await resp.json();
     console.log('[GK] Backup written:', filename, '(' + leadCount + ' leads, ' + custCount + ' customers)');
+    // Long-term retention: also write a per-month snapshot that survives the
+    // 50-rolling-snapshot rotation. Within a given month the file is
+    // overwritten with the latest, so we always have the freshest data from
+    // each month going back forever (~5 MB/month, negligible).
+    _writeMonthlyBackup(body).catch(e => console.warn('[GK] Monthly backup failed:', e));
     // Best-effort cleanup; failure here doesn't matter to the user.
     _pruneOldBackups().catch(e => console.warn('[GK] Backup pruning failed:', e));
     return result;
@@ -11716,6 +11911,26 @@ async function _writeBackupSnapshot() {
     console.warn('[GK] Backup failed:', e);
     return null;
   }
+}
+
+// Write/overwrite the current month's long-retention snapshot. Path:
+// SP_BACKUP_DIR/monthly/YYYY-MM.json. These never rotate — the pruner only
+// touches files starting with "gk_backup_" in the parent directory.
+async function _writeMonthlyBackup(body) {
+  if (!_gToken || !_spDrive) return null;
+  const yearMonth = new Date().toISOString().slice(0, 7); // e.g., "2026-05"
+  const filePath = `${SP_BACKUP_DIR}/monthly/${yearMonth}.json`;
+  const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(filePath)}:/content`, {
+    method: 'PUT',
+    headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json' },
+    body
+  });
+  if (!resp.ok) {
+    console.warn('[GK] Monthly backup upload failed:', resp.status);
+    return null;
+  }
+  console.log('[GK] Monthly backup updated:', yearMonth + '.json');
+  return await resp.json();
 }
 
 async function _pruneOldBackups() {
@@ -11944,8 +12159,12 @@ function openConsentModal(customerId, channel) {
   document.getElementById('consent-cust-display').innerHTML =
     `<strong>${escHtml(name)}</strong> · ${escHtml(phone)}`;
 
-  // Populate verbal script with customer's phone number
-  document.getElementById('consent-verbal-script').textContent = getVerbalConsentScript(phone);
+  // Populate verbal script with customer's phone number, and pull the most
+  // recent active lead so the script names the right project type.
+  const _custLeads = getLeads().filter(l => l.customerId === customerId && l.stage !== 'archived');
+  _custLeads.sort((a,b) => new Date(b.updatedAt||b.createdAt||0) - new Date(a.updatedAt||a.createdAt||0));
+  const _consentLead = _custLeads[0] || null;
+  document.getElementById('consent-verbal-script').textContent = getVerbalConsentScript(phone, _consentLead);
 
   // Reset field values so stale data from a prior capture doesn't leak in
   document.getElementById('consent-partner-ref').value = '';
@@ -12108,9 +12327,12 @@ function _consentEmailBrandBlock() {
 
 // Build the full consent email HTML. viewUrl / declineUrl come from the
 // Cloudflare Worker's POST /consent/token response.
-function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl }) {
-  const safeFirst = escHtml(customerFirst || 'there');
-  const safePhone = escHtml(phone || 'your mobile number');
+function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl, projectPhrase }) {
+  const safeFirst   = escHtml(customerFirst || 'there');
+  const safePhone   = escHtml(phone || 'your mobile number');
+  const projectRaw  = projectPhrase || 'electrical project';
+  const safeProject = escHtml(projectRaw);
+  const projectArticle = _aOrAn(projectRaw);
   // Buttons are bulletproof-ish with padding via <a> + rounded corners. We
   // also add a tiny "Button not working?" plain-text fallback linking to the
   // same URL, so clients that strip <a> styling still work.
@@ -12131,7 +12353,7 @@ function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl }) {
             <td style="padding:24px 28px 8px 28px">
               <div style="font-size:15px;line-height:1.55;color:#0f1115">
                 <p style="margin:0 0 14px 0">Hi ${safeFirst},</p>
-                <p style="margin:0 0 14px 0">Thanks for reaching out to GreenKey about your EV charger project. We've received your inquiry and will be in touch soon with next steps.</p>
+                <p style="margin:0 0 14px 0">Thanks for reaching out to GreenKey about your ${safeProject}. We've received your inquiry and will be in touch soon with next steps.</p>
                 <p style="margin:0 0 14px 0"><strong>Quick question</strong> — for most projects, we send short text updates (appointment reminders, ETA on the day of install, permit or inspection updates, and a final handoff). It's the fastest way to keep you in the loop.</p>
                 <p style="margin:0 0 18px 0">Is it okay to text you at <strong>${safePhone}</strong>?</p>
               </div>
@@ -12159,7 +12381,7 @@ function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl }) {
             <td style="padding:8px 28px 22px 28px">
               <div style="border-top:1px solid #e6e8eb;padding-top:14px;font-size:11.5px;color:#5a6270;line-height:1.55">
                 <div style="font-weight:600;color:#0f1115;font-size:12px;margin-bottom:6px">What you're agreeing to, if you click "Yes"</div>
-                <div style="margin-bottom:6px">GreenKey will send you text messages related to your EV charger project — scheduling, install-day ETAs, permit/inspection updates, and project handoff. You can expect roughly 1&ndash;10 messages per project.</div>
+                <div style="margin-bottom:6px">GreenKey will send you text messages related to your ${safeProject} — scheduling, install-day ETAs, permit/inspection updates, and project handoff. You can expect roughly 1&ndash;10 messages per project.</div>
                 <div style="margin-bottom:6px">Message and data rates may apply. Consent is not a condition of purchase. Reply <strong>STOP</strong> at any time to unsubscribe. Reply <strong>HELP</strong> for help, or call <a href="tel:+18043105368" style="color:#3aaa35;text-decoration:underline">(804) 310-5368</a>.</div>
                 <div style="margin-bottom:0">Our <a href="https://greenkey-usa.com/privacy" style="color:#3aaa35;text-decoration:underline">Privacy Policy</a> and <a href="https://greenkey-usa.com/sms-terms" style="color:#3aaa35;text-decoration:underline">SMS Terms</a> describe how we use your information. We do not sell or share mobile opt-in data with third parties for marketing.</div>
               </div>
@@ -12179,7 +12401,7 @@ function buildConsentEmailHtml({ customerFirst, phone, viewUrl, declineUrl }) {
           <tr>
             <td style="padding:14px 28px;background:#f8f9fb;border-top:1px solid #e6e8eb">
               <div style="font-size:11px;color:#8a919c;line-height:1.5;text-align:center">
-                This message was sent to you because you contacted GreenKey Richmond VA LLC about an EV charger project. If this wasn't you, just ignore this email.
+                This message was sent to you because you contacted GreenKey Richmond VA LLC about ${projectArticle} ${safeProject}. If this wasn't you, just ignore this email.
               </div>
             </td>
           </tr>
@@ -12216,6 +12438,11 @@ async function openConsentEmailModal(leadId) {
   const nameFull = custFullName(cust) || lead.customerName || 'Customer';
   const first = cust.firstName || (lead.customerName || '').split(' ')[0] || 'there';
 
+  // Compute the project phrase from the lead's job type so the consent
+  // email reflects the actual project (HVAC circuit, panel replacement, etc.)
+  // instead of the legacy "EV charger" hardcode.
+  const projectPhrase = getProjectPhrase(lead);
+
   _consentEmail = {
     leadId: lead.id,
     customerId: cust.id,
@@ -12223,13 +12450,14 @@ async function openConsentEmailModal(leadId) {
     toEmail,
     phone,
     first,
+    projectPhrase,
     tokenBundle: null  // will be populated on send
   };
 
   // Populate form
   document.getElementById('ce-to').value      = toEmail;
   document.getElementById('ce-phone').value   = phone;
-  document.getElementById('ce-subject').value = "We've got your EV charger inquiry — and a quick question";
+  document.getElementById('ce-subject').value = `We've got your inquiry about your ${projectPhrase} — and a quick question`;
 
   // "From" indicator
   let fromDisp = 'Outlook (not signed in — will open draft)';
@@ -12248,7 +12476,8 @@ async function openConsentEmailModal(leadId) {
     customerFirst: first,
     phone,
     viewUrl: '#preview',
-    declineUrl: '#preview'
+    declineUrl: '#preview',
+    projectPhrase
   });
   _renderConsentEmailPreview(previewHtml);
 
@@ -12273,7 +12502,8 @@ async function openConsentEmailModal(leadId) {
       customerFirst: _consentEmail.first,
       phone: ph,
       viewUrl: '#preview',
-      declineUrl: '#preview'
+      declineUrl: '#preview',
+      projectPhrase: _consentEmail.projectPhrase
     });
     _renderConsentEmailPreview(html);
   };
@@ -12312,7 +12542,8 @@ async function sendConsentEmail() {
   // Pull latest form values (user may have edited To/Phone/Subject)
   ce.toEmail = (document.getElementById('ce-to').value || '').trim();
   ce.phone   = (document.getElementById('ce-phone').value || '').trim();
-  const subject = (document.getElementById('ce-subject').value || '').trim() || "We've got your EV charger inquiry — and a quick question";
+  const _defaultSubj = `We've got your inquiry about your ${ce.projectPhrase || 'electrical project'} — and a quick question`;
+  const subject = (document.getElementById('ce-subject').value || '').trim() || _defaultSubj;
 
   if (!ce.toEmail) { toast('Please enter a recipient email', 'warning'); return; }
   if (!ce.phone)   { toast('Please enter a mobile number (covered by the consent)', 'warning'); return; }
@@ -12368,13 +12599,15 @@ async function sendConsentEmail() {
     customerFirst: ce.first,
     phone: ce.phone,
     viewUrl: tokenBundle.viewUrl,
-    declineUrl: tokenBundle.declineUrl
+    declineUrl: tokenBundle.declineUrl,
+    projectPhrase: ce.projectPhrase
   });
   // Also build a plain-text fallback for email clients that strip HTML.
+  const _ceProject = ce.projectPhrase || 'electrical project';
   const textBody =
 `Hi ${ce.first},
 
-Thanks for reaching out to GreenKey about your EV charger project. We've received your inquiry and will be in touch soon with next steps.
+Thanks for reaching out to GreenKey about your ${_ceProject}. We've received your inquiry and will be in touch soon with next steps.
 
 Quick question: for most projects, we send short text updates (appointment reminders, ETA on the day of install, permit/inspection updates, and a final handoff). Is it okay to text you at ${ce.phone}?
 
@@ -12382,7 +12615,7 @@ Yes, text me:    ${tokenBundle.viewUrl}
 No thanks:       ${tokenBundle.declineUrl}
 
 What you're agreeing to if you click "Yes":
-GreenKey will send you text messages related to your EV charger project — scheduling, install-day ETAs, permit/inspection updates, and project handoff. Roughly 1–10 messages per project. Message and data rates may apply. Consent is not a condition of purchase. Reply STOP at any time to unsubscribe. Reply HELP for help, or call (804) 310-5368.
+GreenKey will send you text messages related to your ${_ceProject} — scheduling, install-day ETAs, permit/inspection updates, and project handoff. Roughly 1–10 messages per project. Message and data rates may apply. Consent is not a condition of purchase. Reply STOP at any time to unsubscribe. Reply HELP for help, or call (804) 310-5368.
 
 Privacy Policy: https://greenkey-usa.com/privacy
 SMS Terms:     https://greenkey-usa.com/sms-terms
