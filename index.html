@@ -1266,6 +1266,7 @@
 <div id="mat-ac-dropdown"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // ── CONSTANTS ──
 const UK = 'gk_users', SK = 'gk_session';
@@ -1294,15 +1295,50 @@ const STAGES = [
 const STAGE_MAP = Object.fromEntries(STAGES.map(s=>[s.id,s]));
 
 // ── SOURCES ──
-const SOURCES = ['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink','Website','Phone'];
+const SOURCES = ['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink','Website','Phone'];
+
+// Sources where the bill-to is typically the referrer (a B2B customer record)
+// rather than the homeowner. Quotes from these sources auto-suggest the
+// referrer-as-bill-to flow and zero out the card payment buffer.
+const REFERRER_BILL_SOURCES = ['AF1'];
+
+// Sources where GreenKey doesn't invoice the homeowner directly because the
+// platform handles payment. Drives buffer auto-zero on quotes.
+const PLATFORM_PAY_SOURCES = ['Qmerit','Electrum','Treehouse'];
 
 // ── JOB TYPES ──
+// Metadata-driven catalog. Adding a new type (e.g., 'generator') is a one-line
+// append plus implementing its renderQQ_<id> function (or leaving qqEnabled
+// false to route to Detailed Quote with optional detailedTemplate pre-fill).
+//   id              — stable identifier persisted on leads/quotes
+//   label           — UI label shown in dropdowns
+//   description     — short helper text under the selector
+//   qqEnabled       — true: has a Quick Quote form; false: routes to Detailed
+//   permitDefault   — default permit fee for direct (non-Qmerit) jobs
+//   permitQmerit    — default permit fee for Qmerit jobs
+//   noPermit        — true: zero-out permit fee by default (replacement work)
+//   detailedTemplate— material pre-fill key for Detailed mode (battery, v2h, etc.)
+//   category        — UI grouping in the lead-form dropdown
 const JOB_TYPES = [
-  {id:'ev-residential', label:'EV Charger — Residential'},
-  {id:'nema-1450',      label:'NEMA 14-50 Outlet'},
-  {id:'service-upgrade', label:'Service Upgrade'},
-  {id:'new-service',     label:'New Service'}
+  // Branch-circuit installs (Quick Quote enabled)
+  {id:'ev-residential',      label:'EV Charger — Residential',     description:'Hardwired Level 2 EVSE',                qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
+  {id:'nema-1450',           label:'NEMA 14-50 Outlet',             description:'50A 240V outlet for plug-in EVSE',       qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
+  {id:'hvac-circuit',        label:'HVAC Dedicated Circuit',        description:'Branch circuit for HVAC equipment',      qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
+  {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:true,  permitDefault:0,   permitQmerit:0,   noPermit:true, category:'Branch Circuit'},
+
+  // Panel & service work
+  {id:'panel-replacement',   label:'Panel Replacement',             description:'Swap panel, same service size',          qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Panel & Service'},
+  {id:'service-upgrade',     label:'Service Upgrade',               description:'Upgrade existing service amperage',      qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'service-upgrade', category:'Panel & Service'},
+  {id:'new-service',         label:'New Service Install',           description:'New utility service entrance + meter',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'new-service',     category:'Panel & Service'},
+
+  // Energy systems (Detailed Quote with templates — Quick Quote forms in a future round)
+  {id:'battery-system',      label:'Battery System',                description:'Powerwall / Enphase / Generac / FranklinWH',qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'battery',         category:'Energy Systems'},
+  {id:'v2h-system',          label:'V2H System',                    description:'Vehicle-to-Home bidirectional EVSE',     qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'v2h',             category:'Energy Systems'},
+  {id:'generator',           label:'Generator Install',             description:'Standby or portable generator wiring',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'generator',       category:'Energy Systems'}
 ];
+
+// Lookup helper
+function getJobType(id){ return JOB_TYPES.find(t => t.id === id) || null; }
 
 // ── SPECIAL JURISDICTIONS ──
 const SPEC_JURIS = [
@@ -1944,12 +1980,12 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Quick Quote Pricing':`<div class="stitle">Quick Quote Pricing</div><div class="sdesc">Base prices and add-on rates for the Quick Quote configurator.</div>
-    <div class="srow"><div><div class="srl">Garage — within 10 ft</div></div><input class="sinput" value="$650"></div>
-    <div class="srow"><div><div class="srl">Interior / Basement — within 10 ft</div></div><input class="sinput" value="$900"></div>
-    <div class="srow"><div><div class="srl">Additional distance — per 10 ft (surface)</div></div><input class="sinput" value="$150"></div>
-    <div class="srow"><div><div class="srl">Trenching — hand dig per 10 ft</div></div><input class="sinput" value="$200"></div>
+    <div class="srow"><div><div class="srl">Garage — within 5 ft of panel (wire run)</div><div class="srd">Distance is measured as actual conduit / wire-run length, not tape-measure distance.</div></div><input class="sinput" value="$500"></div>
+    <div class="srow"><div><div class="srl">Interior / Basement — within 5 ft of panel (wire run)</div><div class="srd">Distance is measured as actual conduit / wire-run length, not tape-measure distance.</div></div><input class="sinput" value="$750"></div>
+    <div class="srow"><div><div class="srl">Additional distance — per 10 ft of wire run (surface)</div><div class="srd">Beyond the included 5 ft. Charged in 10-ft increments of conduit run.</div></div><input class="sinput" value="$150"></div>
+    <div class="srow"><div><div class="srl">Trenching — hand dig per 10 ft of trench</div></div><input class="sinput" value="$200"></div>
     <div class="srow"><div><div class="srl">Trenching — machine base fee (50+ ft)</div></div><input class="sinput" value="$650"></div>
-    <div class="srow"><div><div class="srl">Trenching — machine per additional 10 ft</div></div><input class="sinput" value="$150"></div>
+    <div class="srow"><div><div class="srl">Trenching — machine per additional 10 ft of trench</div></div><input class="sinput" value="$150"></div>
     <div class="srow"><div><div class="srl">Tandem breaker (per breaker)</div></div><input class="sinput" value="$40"></div>
     <div class="srow"><div><div class="srl">Post — 4x4 treated w/ sonotube</div></div><input class="sinput" value="$150"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
@@ -2615,7 +2651,15 @@ function showLeadForm(lead, prefillCustId) {
         </div>
         <div class="fg"><div class="fl">Job Type</div>
           <select class="fsel" id="lf-type">
-            ${JOB_TYPES.map(t=>`<option value="${t.id}"${t.id===l.jobType?' selected':''}>${t.label}</option>`).join('')}
+            ${(() => {
+              const cats = [...new Set(JOB_TYPES.map(t => t.category || 'Other'))];
+              return cats.map(cat => {
+                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat).map(t =>
+                  `<option value="${t.id}"${t.id===l.jobType?' selected':''}>${t.label}</option>`
+                ).join('');
+                return `<optgroup label="${cat}">${opts}</optgroup>`;
+              }).join('');
+            })()}
           </select>
         </div>
       </div>
@@ -3028,7 +3072,29 @@ function criticalBanner(msg) {
 const QK='gk_quotes', MK='gk_materials';
 
 function getQQPricing(){
-  return {garage:500,interior:750,addl10Surface:150,handDig10:200,machineTrenchBase:650,machineTrench10:150,tandemBreaker:40,post:150,standardPermit:200,qmeritPermit:250,specialPermit:500,materialsBuffer:0.10,qmeritFlat:199,qmeritPct:0.12,nema1450Inside:50,nema1450Outside:100,travelPerBlock:80,travelFreeMin:30,veteranDiscountPct:0.10};
+  return {
+    // Base install (covers labor, conduit, sundries, and 5 ft of any-gauge wire)
+    garage:500, interior:750,
+    // EV Charger / NEMA 14-50 — all-in per-10-ft rates (wire baked in, assumed 6/3)
+    addl10Surface:150, handDig10:200, machineTrenchBase:650, machineTrench10:150,
+    // HVAC Circuit — decomposed labor-only rates (wire is a separate line item)
+    hvacAddl10Surface:115, hvacHandDig10:170, hvacMachineTrenchBase:620, hvacMachineTrench10:115,
+    // HVAC disconnect at the unit
+    hvacDisconnectNonFused:75, hvacDisconnectFused:150,
+    // Circuit Replacement — flat fees by amperage tier (no permit)
+    circuitReplaceUnder30A:350, circuitReplace30To50A:450, circuitReplace60Plus:600,
+    // Panel Replacement — base labor + per-breaker re-termination
+    panelReplaceBase:1500, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    // Existing add-ons
+    tandemBreaker:40, post:150,
+    // Permits / fees
+    standardPermit:200, qmeritPermit:250, specialPermit:500,
+    materialsBuffer:0.10,
+    qmeritFlat:199, qmeritPct:0.12,
+    nema1450Inside:50, nema1450Outside:100,
+    travelPerBlock:80, travelFreeMin:30,
+    veteranDiscountPct:0.10
+  };
 }
 
 function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
@@ -3041,31 +3107,169 @@ function upsertQuote(data){
   saveQuotes(a); return data.id||a[a.length-1].id;
 }
 
+// ── BILL-TO HELPERS ──
+// The "service location" is always the homeowner's property — the customer
+// linked to the lead. The "bill-to" defaults to the same homeowner but can be
+// overridden to a B2B referrer customer record (e.g., AF1 paying us directly).
+function getQuoteServiceCustomer(q) {
+  if (!q) return null;
+  const home = q.customerId ? getCustomer(q.customerId) : null;
+  if (home) return home;
+  const lead = q.leadId ? getLead(q.leadId) : null;
+  return lead && lead.customerId ? getCustomer(lead.customerId) : null;
+}
+function getQuoteBillToCustomer(q) {
+  if (!q) return null;
+  if (q.billToCustomerId) {
+    const c = getCustomer(q.billToCustomerId);
+    if (c) return c;
+  }
+  return getQuoteServiceCustomer(q);
+}
+// True when bill-to is a B2B referrer (different customer record from the
+// homeowner whose property is the service location).
+function isQuoteBilledToReferrer(q) {
+  if (!q) return false;
+  const home = getQuoteServiceCustomer(q);
+  return !!(q.billToCustomerId && home && q.billToCustomerId !== home.id);
+}
+// True when the source is a platform that pays GreenKey directly (Qmerit etc).
+function isQuotePlatformPaid(q) {
+  return !!(q && Array.isArray(PLATFORM_PAY_SOURCES) && PLATFORM_PAY_SOURCES.includes(q.source));
+}
+// Combined gate for payment-buffer auto-zero: B2B pays via ACH/check, not
+// credit card, so we don't need to bake in a card-processing buffer.
+function shouldZeroBuffer(q) {
+  return isQuotePlatformPaid(q) || isQuoteBilledToReferrer(q);
+}
+
 function getMaterials(){try{return JSON.parse(localStorage.getItem(MK)||'[]');}catch{return[];}}
 function saveMaterials(a){localStorage.setItem(MK,JSON.stringify(a));queueSPSync();}
+
+// Master materials catalog. Pricing refreshed 2026-04-23 from Capital Electric
+// "Most Purchased Items" export plus follow-up sales rep lookups. Items with
+// ceId have a verifiable Capital Electric SKU; items with source:'estimated'
+// are placeholders awaiting verification.
+const _DEFAULT_MATERIALS = [
+  // ── NM-B branch-circuit cable (sorted ascending by gauge) ──
+  {id:'m-022', name:'NM-B 14/2 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:0.30, markup:30, lastUpdated:'2026-05-01', source:'estimated', notes:'Pull from Capital Electric to verify'},
+  {id:'m-023', name:'NM-B 14/3 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:0.45, markup:30, lastUpdated:'2026-05-01', source:'estimated', notes:'Pull from Capital Electric to verify'},
+  {id:'m-020', name:'NM-B 12/2 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:0.49, markup:30, ceId:'3873',   lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-021', name:'NM-B 12/3 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:1.13, markup:30, ceId:'301402', lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-001', name:'NM-B 10/2 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:1.56, markup:30, ceId:'210515', lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-002', name:'NM-B 10/3 Cable', category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:1.73, markup:30, ceId:'301392', lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-024', name:'NM-B 8/2 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:1.59, markup:30,                lastUpdated:'2026-05-01', source:'Capital Electric'},
+  {id:'m-025', name:'NM-B 8/3 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:2.24, markup:30,                lastUpdated:'2026-05-01', source:'Capital Electric'},
+  {id:'m-026', name:'NM-B 6/2 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:2.24, markup:30,                lastUpdated:'2026-05-01', source:'Capital Electric'},
+  {id:'m-003', name:'NM-B 6/3 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:3.27, markup:30,                lastUpdated:'2026-05-01', source:'Capital Electric'},
+  {id:'m-027', name:'NM-B 4/2 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:5.00, markup:30,                lastUpdated:'2026-05-01', source:'estimated', notes:'Needed for 15 kW electric furnace — verify gauge per nameplate; price TBD'},
+  {id:'m-028', name:'NM-B 4/3 Cable',  category:'Wire', subcategory:'NM-B', unit:'per foot', unitCost:7.00, markup:30,                lastUpdated:'2026-05-01', source:'estimated', notes:'Capital Electric quoted $12.17/ft — likely data error, awaiting callback'},
+
+  // ── Service Entrance & Subpanel Feeders ──
+  {id:'m-029', name:'SEU 6-6-6 Cu Cable (150 ft coil)', category:'Wire', subcategory:'SEU',  unit:'per foot', unitCost:2.43, markup:30, ceId:'212708', lastUpdated:'2026-04-23', source:'Capital Electric', notes:'Crawl-space and attic workhorse'},
+  {id:'m-030', name:'SEU 4/0-4/0-2/0 Al Cable',         category:'Wire', subcategory:'SEU',  unit:'per foot', unitCost:3.31, markup:30, ceId:'448616', lastUpdated:'2026-04-23', source:'Capital Electric', notes:'200 A residential service entrance'},
+  {id:'m-031', name:'SER #2-2-2-4 Al Cable',            category:'Wire', subcategory:'SER',  unit:'per foot', unitCost:1.94, markup:30, ceId:'300631', lastUpdated:'2026-04-23', source:'Capital Electric', notes:'Smaller subpanel feeders (~90 A)'},
+  {id:'m-032', name:'SER 2/0-2/0-2/0-2/0-#1 Al Cable',  category:'Wire', subcategory:'SER',  unit:'per foot', unitCost:7.77, markup:30, ceId:'300627', lastUpdated:'2026-04-23', source:'Capital Electric', notes:'100-150 A subpanel feeders'},
+  {id:'m-033', name:'SER 4/0-4/0-4/0-2/0 Al Cable',     category:'Wire', subcategory:'SER',  unit:'per foot', unitCost:4.62, markup:30, ceId:'300640', lastUpdated:'2026-04-23', source:'Capital Electric', notes:'200 A subpanel feeders'},
+  {id:'m-034', name:'XHHW 4/0 Al Black (master reel)',  category:'Wire', subcategory:'XHHW', unit:'per foot', unitCost:1.31, markup:30, ceId:'87470',  lastUpdated:'2026-04-23', source:'Capital Electric', notes:'NEC 230.85 disconnect-next-to-meter and EV stand work'},
+
+  // ── THHN individual conductors (sold per-foot, single-color) ──
+  {id:'m-035', name:'THHN #2 Black',  category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:2.30, markup:30, ceId:'866',    lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-036', name:'THHN #3 Black',  category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:1.84, markup:30, ceId:'31487',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-037', name:'THHN #6 Black',  category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.95, markup:30, ceId:'14990',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-038', name:'THHN #6 Red',    category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.95, markup:30, ceId:'16291',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-039', name:'THHN #6 White',  category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.95, markup:30, ceId:'27018',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-040', name:'THHN #8 Green',  category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.62, markup:30, ceId:'9190',   lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-041', name:'THHN #10 Green', category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.33, markup:30, ceId:'94278',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+  {id:'m-042', name:'THHN #10 Red',   category:'Wire', subcategory:'THHN', unit:'per foot', unitCost:0.33, markup:30, ceId:'11266',  lastUpdated:'2026-04-23', source:'Capital Electric'},
+
+  // ── Conduit ──
+  {id:'m-004', name:'1" EMT Conduit',     category:'Conduit', unit:'per foot', unitCost:1.80, markup:30},
+  {id:'m-005', name:'3/4" EMT Conduit',   category:'Conduit', unit:'per foot', unitCost:1.20, markup:30},
+  {id:'m-006', name:'1" PVC Schedule 40', category:'Conduit', unit:'per foot', unitCost:0.85, markup:30},
+
+  // ── Breakers ──
+  {id:'m-007', name:'2-pole 50A Breaker', category:'Breakers', unit:'each', unitCost:18, markup:40},
+  {id:'m-008', name:'2-pole 40A Breaker', category:'Breakers', unit:'each', unitCost:15, markup:40},
+  {id:'m-009', name:'Tandem Breaker',     category:'Breakers', unit:'each', unitCost:22, markup:40},
+
+  // ── Devices ──
+  {id:'m-010', name:'NEMA 14-50 Outlet', category:'Devices', unit:'each', unitCost:12,   markup:40},
+  {id:'m-011', name:'NEMA 6-50 Outlet',  category:'Devices', unit:'each', unitCost:11,   markup:40},
+  {id:'m-012', name:'Weatherproof Box',  category:'Devices', unit:'each', unitCost:8.50, markup:40},
+
+  // ── Fittings ──
+  {id:'m-013', name:'LB Conduit Body 1"', category:'Fittings', unit:'each', unitCost:9.75, markup:40},
+  {id:'m-014', name:'PVC Sweep 90 1"',    category:'Fittings', unit:'each', unitCost:3.50, markup:40},
+
+  // ── Equipment ──
+  {id:'m-015', name:'Emporia Vue Monitor',  category:'Equipment', unit:'each', unitCost:160, markup:25},
+  {id:'m-016', name:'Generac Smart Module', category:'Equipment', unit:'each', unitCost:225, markup:25},
+  {id:'m-017', name:'EV Tap (J1772/NACS)',  category:'Equipment', unit:'each', unitCost:95,  markup:25},
+
+  // ── Hardware ──
+  {id:'m-018', name:'4x4 Treated Post w/ Sonotube', category:'Hardware', unit:'each',    unitCost:55, markup:45},
+  {id:'m-019', name:'Misc Fittings & Hardware',     category:'Hardware', unit:'per job', unitCost:25, markup:40},
+];
+
+// One-time migration: refreshes wire prices and adds metadata fields on
+// pre-existing CRM installs. Safe to re-run; gated by localStorage flag.
+// Won't override manual edits — only refreshes prices that match the
+// original seeded values from the v1 catalog.
+function migrateMaterialsV2() {
+  const FLAG = 'gk_materials_migration_v2';
+  if (localStorage.getItem(FLAG)) return;
+
+  const mats = getMaterials();
+  if (!mats.length) {
+    // initMaterials will seed from _DEFAULT_MATERIALS — nothing to migrate.
+    localStorage.setItem(FLAG, '1');
+    return;
+  }
+
+  // Wire entries from the v1 seed that we want to refresh in place.
+  // Comparison against oldSeedCost protects manual user edits.
+  const PRICE_REFRESH = {
+    'm-001': { newCost: 1.56, oldSeedCost: 1.20, name: 'NM-B 10/2 Cable', ceId: '210515' },
+    'm-002': { newCost: 1.73, oldSeedCost: 1.65, name: 'NM-B 10/3 Cable', ceId: '301392' },
+    'm-003': { newCost: 3.27, oldSeedCost: 3.20, name: 'NM-B 6/3 Cable'                  },
+  };
+
+  let dirty = false;
+  Object.keys(PRICE_REFRESH).forEach(id => {
+    const mat = mats.find(m => m.id === id);
+    if (!mat) return;
+    const r = PRICE_REFRESH[id];
+    if (Math.abs((mat.unitCost || 0) - r.oldSeedCost) < 0.001) {
+      mat.unitCost = r.newCost;
+      mat.name = r.name;
+      mat.subcategory = 'NM-B';
+      if (r.ceId) mat.ceId = r.ceId;
+      mat.lastUpdated = '2026-04-23';
+      mat.source = 'Capital Electric';
+      dirty = true;
+    }
+  });
+
+  // Add any new SKUs from _DEFAULT_MATERIALS that aren't already present.
+  _DEFAULT_MATERIALS.forEach(s => {
+    if (!mats.find(m => m.id === s.id)) {
+      mats.push({ ...s });
+      dirty = true;
+    }
+  });
+
+  if (dirty) saveMaterials(mats);
+  localStorage.setItem(FLAG, '1');
+}
+
 function initMaterials(){
+  // Run the v2 migration first so existing installs get refreshed prices
+  // and new SKUs without losing manual edits.
+  migrateMaterialsV2();
+  // Fresh installs: seed the full catalog.
   if(getMaterials().length) return;
-  saveMaterials([
-    {id:'m-001',name:'10/2 NM-B Wire',category:'Wire',unit:'per foot',unitCost:1.20,markup:30},
-    {id:'m-002',name:'10/3 NM-B Wire',category:'Wire',unit:'per foot',unitCost:1.65,markup:30},
-    {id:'m-003',name:'6/3 NM-B Wire',category:'Wire',unit:'per foot',unitCost:3.20,markup:30},
-    {id:'m-004',name:'1" EMT Conduit',category:'Conduit',unit:'per foot',unitCost:1.80,markup:30},
-    {id:'m-005',name:'3/4" EMT Conduit',category:'Conduit',unit:'per foot',unitCost:1.20,markup:30},
-    {id:'m-006',name:'1" PVC Schedule 40',category:'Conduit',unit:'per foot',unitCost:0.85,markup:30},
-    {id:'m-007',name:'2-pole 50A Breaker',category:'Breakers',unit:'each',unitCost:18,markup:40},
-    {id:'m-008',name:'2-pole 40A Breaker',category:'Breakers',unit:'each',unitCost:15,markup:40},
-    {id:'m-009',name:'Tandem Breaker',category:'Breakers',unit:'each',unitCost:22,markup:40},
-    {id:'m-010',name:'NEMA 14-50 Outlet',category:'Devices',unit:'each',unitCost:12,markup:40},
-    {id:'m-011',name:'NEMA 6-50 Outlet',category:'Devices',unit:'each',unitCost:11,markup:40},
-    {id:'m-012',name:'Weatherproof Box',category:'Devices',unit:'each',unitCost:8.50,markup:40},
-    {id:'m-013',name:'LB Conduit Body 1"',category:'Fittings',unit:'each',unitCost:9.75,markup:40},
-    {id:'m-014',name:'PVC Sweep 90 1"',category:'Fittings',unit:'each',unitCost:3.50,markup:40},
-    {id:'m-015',name:'Emporia Vue Monitor',category:'Equipment',unit:'each',unitCost:160,markup:25},
-    {id:'m-016',name:'Generac Smart Module',category:'Equipment',unit:'each',unitCost:225,markup:25},
-    {id:'m-017',name:'EV Tap (J1772/NACS)',category:'Equipment',unit:'each',unitCost:95,markup:25},
-    {id:'m-018',name:'4x4 Treated Post w/ Sonotube',category:'Hardware',unit:'each',unitCost:55,markup:45},
-    {id:'m-019',name:'Misc Fittings & Hardware',category:'Hardware',unit:'per job',unitCost:25,markup:40},
-  ]);
+  saveMaterials(_DEFAULT_MATERIALS.map(m => ({ ...m })));
 }
 
 function fmt$(n){if(!n&&n!==0)return'—';return'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
@@ -3266,12 +3470,48 @@ function renderQuoteBuilder(qid){
         <div id="qb-form"></div>
       </div>
       <div id="qb-sidebar">
-        <div class="card" style="padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Source</div>
-          <select id="qb-source" onchange="changeQuoteSource('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
-            ${(['Qmerit','Electrum','Treehouse','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
+        <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Job Type</div>
+          <select id="qb-jobtype" onchange="changeQuoteJobType('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+            ${(() => {
+              const cats = [...new Set(JOB_TYPES.map(t => t.category || 'Other'))];
+              return cats.map(cat => {
+                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat).map(t =>
+                  `<option value="${t.id}"${(q.jobType||'')===t.id?' selected':''}>${t.label}${t.qqEnabled?'':' — Detailed'}</option>`
+                ).join('');
+                return `<optgroup label="${cat}">${opts}</optgroup>`;
+              }).join('');
+            })()}
           </select>
         </div>
+        <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Source</div>
+          <select id="qb-source" onchange="changeQuoteSource('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+            ${(['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        ${(() => {
+          // Bill-To selector — only render if there are referrer customers
+          // available (e.g., AF1) so the dropdown isn't visually empty for users
+          // who don't do B2B referral work.
+          const referrers = getCustomers().filter(c => c.isReferrer);
+          if (!referrers.length) return '';
+          const homeCust = getQuoteServiceCustomer(q);
+          const homeLabel = homeCust ? (custFullName(homeCust) || 'Homeowner') : 'Homeowner';
+          const homeId = homeCust ? homeCust.id : '';
+          const currentBillTo = q.billToCustomerId || homeId;
+          return `
+            <div class="card" style="padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+              <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Bill To</div>
+              <select id="qb-billto" onchange="changeQuoteBillTo('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+                <option value="${homeId}"${currentBillTo===homeId?' selected':''}>${escHtml(homeLabel)} (homeowner)</option>
+                ${referrers.map(r => {
+                  const label = r.businessName || custFullName(r) || r.id;
+                  return `<option value="${r.id}"${currentBillTo===r.id?' selected':''}>${escHtml(label)}</option>`;
+                }).join('')}
+              </select>
+            </div>`;
+        })()}
         ${renderTotalsBox(q,totals,isAdmin,isQmerit)}
         ${isAdmin?renderMarginBox(q,totals,isQmerit):''}
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -3309,9 +3549,17 @@ function renderQBForm(q){
   else renderDetailedQuoteForm(q);
 }
 
-// ── QUICK QUOTE FORM ──
+// ── QUICK QUOTE FORM (dispatcher) ──
+// Routes to type-specific renderers. Default falls through to the EV /
+// NEMA-14-50 form below since those are the original Quick Quote types.
 function renderQuickQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
+  if (q.jobType === 'hvac-circuit')         return _renderQQ_HVAC(q);
+  if (q.jobType === 'circuit-replacement')  return _renderQQ_CircuitReplacement(q);
+  if (q.jobType === 'panel-replacement')    return _renderQQ_PanelReplacement(q);
+  const t = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  if (t && t.qqEnabled === false)            return _renderQQ_DetailedRedirect(q);
+  // Fallthrough: EV Charger / NEMA 14-50 (existing behavior).
   const qq=q.qq||{};
   const isQmerit=q.source==='Qmerit';
   const lead=getLead(q.leadId);
@@ -3320,13 +3568,19 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Panel Location</div>
       <div class="fg"><div class="fl">Panel Location</div>
         <select class="fsel" id="qq-panel" onchange="onQQChange('${q.id}')">
-          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 10 ft) — $500</option>
-          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 10 ft) — $750</option>
+          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 5 ft of panel, wire run) — $500</option>
+          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 5 ft of panel, wire run) — $750</option>
         </select>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+          The included 5 ft is <strong>actual wire / conduit run length</strong>, not tape-measure distance. A 5 ft tape measurement to the charger usually requires 8–12 ft of conduit once it's routed through the wall. Use Run Segments below to add anything beyond the first 5 ft of wire run.
+        </div>
       </div>
     </div>
     <div class="qq-section">
       <div class="qq-title">Run Segments</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.45">
+        Distances here are <strong>wire / conduit run length</strong>, not tape-measure distance. Charged in 10 ft increments — round up to the next 10 ft.
+      </div>
       <div id="qq-runs-list">${renderQQRunSegs(qq.runSegs||[], q.id)}</div>
       <button class="li-add" style="margin-top:10px" onclick="addQQRunSeg('${q.id}')">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add Segment
@@ -3451,9 +3705,378 @@ function renderQuickQuoteForm(q){
     </div>`;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// HVAC DEDICATED CIRCUIT — Quick Quote
+// ────────────────────────────────────────────────────────────────────────
+// Wire-options surfaced in the gauge selector. Order matters (smallest gauge
+// number = largest wire = highest amperage) — common HVAC sizes first.
+const HVAC_WIRE_OPTIONS = [
+  {id:'m-022', label:'14/2 NM-B (15 A)'},
+  {id:'m-020', label:'12/2 NM-B (20 A) — common A/C condenser'},
+  {id:'m-001', label:'10/2 NM-B (30 A) — heat pump / mid-tonnage'},
+  {id:'m-002', label:'10/3 NM-B (30 A w/ neutral)'},
+  {id:'m-024', label:'8/2 NM-B (40 A) — large condenser'},
+  {id:'m-025', label:'8/3 NM-B (40 A w/ neutral)'},
+  {id:'m-026', label:'6/2 NM-B (50-60 A) — large heat pump'},
+  {id:'m-003', label:'6/3 NM-B (60 A w/ neutral)'},
+  {id:'m-027', label:'4/2 NM-B (~80 A) — large electric furnace'},
+  {id:'m-028', label:'4/3 NM-B (~80 A w/ neutral)'}
+];
+function _renderQQ_HVAC(q) {
+  const wrap = document.getElementById('qb-form'); if (!wrap) return;
+  const qq = q.qq || {};
+  const isQmerit = q.source === 'Qmerit';
+  const wireId = qq.hvacWireId || 'm-001'; // 10/2 default — most common HVAC size
+  const wireMat = getMaterials().find(m => m.id === wireId) || {};
+  wrap.innerHTML = `
+    <div class="qq-section">
+      <div class="qq-title">Panel Location</div>
+      <div class="fg"><div class="fl">Panel Location</div>
+        <select class="fsel" id="qq-panel" onchange="onQQChange('${q.id}')">
+          <option value="garage"${qq.panelLocation==='garage'?' selected':''}>Garage (within 5 ft of panel, wire run) — $500</option>
+          <option value="interior"${qq.panelLocation==='interior'?' selected':''}>Interior / Basement (within 5 ft of panel, wire run) — $750</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+          Base covers labor, conduit, and 5 ft of wire run. Add wire-run distance below in 10 ft increments.
+        </div>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Wire Size</div>
+      <div class="fg"><div class="fl">Conductor Gauge</div>
+        <select class="fsel" id="qq-hvac-wire" onchange="onQQChange('${q.id}')">
+          ${HVAC_WIRE_OPTIONS.map(opt => `<option value="${opt.id}"${wireId===opt.id?' selected':''}>${opt.label}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+          Wire is itemized as a separate materials line: gauge × total run length × markup. Pick from the materials catalog — adjust prices in Settings → Materials.
+        </div>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Run Segments</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.45">
+        Distances are <strong>wire / conduit run length</strong>. Charged in 10 ft increments — round up. AF1 jobs are typically surface-run; trenching options are available if needed.
+      </div>
+      <div id="qq-runs-list">${renderQQRunSegs(qq.runSegs||[], q.id)}</div>
+      <button class="li-add" style="margin-top:10px" onclick="addQQRunSeg('${q.id}')">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add Segment
+      </button>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Disconnect at HVAC Unit</div>
+      <div class="fg"><div class="fl">Disconnect Type</div>
+        <select class="fsel" id="qq-hvac-disconnect" onchange="onQQChange('${q.id}')">
+          <option value="none"${(qq.hvacDisconnect||'none')==='none'?' selected':''}>None — already in place</option>
+          <option value="non-fused"${qq.hvacDisconnect==='non-fused'?' selected':''}>Non-fused disconnect (+$75)</option>
+          <option value="fused"${qq.hvacDisconnect==='fused'?' selected':''}>Fused disconnect (+$150)</option>
+        </select>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Add-Ons</div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Unusual access, tight spaces, attic runs, etc.</div></div>
+        <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Travel Time (minutes from office)</div>
+          <div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Permit</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
+      </div>
+      ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Overrides &amp; Discounts <span style="font-size:11px;color:var(--text-muted);font-weight:400">(admin only)</span></div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px">Use these when you've agreed to a number verbally. Leave blank for computed values.</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Override Base Install ($)</div>
+          <input class="fi" type="number" id="qq-install-override" placeholder="auto" value="${q.qq?.installOverride!=null?q.qq.installOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">Override L&amp;M Subtotal ($)</div>
+          <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+      </label>
+      ${shouldZeroBuffer(q) ? '' : `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
+          <input class="fi" type="number" step="0.1" min="0" max="10" id="qq-buffer" style="width:120px" value="${(typeof q.paymentBuffer==='number')?q.paymentBuffer:3}" oninput="onQQBufferChange('${q.id}')">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Shown as a separate line on the customer quote. Set to 0 to disable for this job.</div>
+        </div>
+      </div>`}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Scope of Work</div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending.</div>
+      <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
+      <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
+        <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
+      </div>
+      <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
+        <textarea class="fta" id="qq-exc" rows="2" style="min-height:60px" oninput="onQQExcChange('${q.id}')">${q.exclusions||autoExclusions(q)}</textarea>
+      </div>
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// CIRCUIT REPLACEMENT (no-permit) — Quick Quote
+// Pull existing circuit, run new wire through the same path, swap breaker.
+// No new permit because the circuit was previously inspected.
+// ────────────────────────────────────────────────────────────────────────
+function _renderQQ_CircuitReplacement(q) {
+  const wrap = document.getElementById('qb-form'); if (!wrap) return;
+  const qq = q.qq || {};
+  const wireId = qq.hvacWireId || 'm-001';
+  const targetAmps = qq.targetAmps || 30;
+  const runFt = qq.replaceRunFt || 30;
+  wrap.innerHTML = `
+    <div class="qq-section">
+      <div class="qq-title">Existing Circuit</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Existing Breaker (A)</div>
+          <input class="fi" type="number" id="qq-existing-amps" value="${qq.existingAmps||20}" min="15" max="200" step="5" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">Existing Wire Gauge</div>
+          <input class="fi" id="qq-existing-gauge" value="${qq.existingGauge||'12/2'}" placeholder="e.g. 12/2" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+        Document what's there now. Useful for the AF1 file and for explaining to the homeowner why the upgrade is required.
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Target Circuit</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">New Breaker (A)</div>
+          <input class="fi" type="number" id="qq-target-amps" value="${targetAmps}" min="15" max="200" step="5" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">New Wire</div>
+          <select class="fsel" id="qq-hvac-wire" onchange="onQQChange('${q.id}')">
+            ${HVAC_WIRE_OPTIONS.map(opt => `<option value="${opt.id}"${wireId===opt.id?' selected':''}>${opt.label}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Run Length</div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Existing Run (ft)</div><div class="qq-sub">Wire is being pulled through the existing route — no new path needed.</div></div>
+        <input class="li-inp num" type="number" id="qq-replace-run-ft" value="${runFt}" min="5" step="5" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Disconnect</div>
+      <div class="fg"><div class="fl">Replace Disconnect?</div>
+        <select class="fsel" id="qq-hvac-disconnect" onchange="onQQChange('${q.id}')">
+          <option value="none"${(qq.hvacDisconnect||'none')==='none'?' selected':''}>No — keep existing</option>
+          <option value="non-fused"${qq.hvacDisconnect==='non-fused'?' selected':''}>Replace with non-fused (+$75)</option>
+          <option value="fused"${qq.hvacDisconnect==='fused'?' selected':''}>Replace with fused (+$150)</option>
+        </select>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Add-Ons</div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Bound wire, tight access, etc.</div></div>
+        <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div></div>
+        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+    </div>
+    <div class="qq-section" style="background:var(--bg-elevated);border-left:3px solid var(--green);padding-left:14px">
+      <div style="font-size:12.5px;color:var(--text-muted);line-height:1.5">
+        <strong>No permit fee</strong> — circuit replacement reuses the existing inspected path. Permit field below is here for the rare case a jurisdiction requires it (default $0).
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Permit (override)</div>
+      <div class="fg"><div class="fl">Permit Fee ($)</div>
+        <input class="fi" type="number" id="qq-permit" value="${q.permitFee||0}" min="0" oninput="onQQChange('${q.id}')">
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Overrides &amp; Discounts</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Override Base ($)</div>
+          <input class="fi" type="number" id="qq-install-override" placeholder="auto" value="${q.qq?.installOverride!=null?q.qq.installOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">Override L&amp;M Subtotal ($)</div>
+          <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+      </label>
+      ${shouldZeroBuffer(q) ? '' : `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
+          <input class="fi" type="number" step="0.1" min="0" max="10" id="qq-buffer" style="width:120px" value="${(typeof q.paymentBuffer==='number')?q.paymentBuffer:3}" oninput="onQQBufferChange('${q.id}')">
+        </div>
+      </div>`}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Scope of Work</div>
+      <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
+      <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
+        <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
+      </div>
+      <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
+        <textarea class="fta" id="qq-exc" rows="2" style="min-height:60px" oninput="onQQExcChange('${q.id}')">${q.exclusions||autoExclusions(q)}</textarea>
+      </div>
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// PANEL REPLACEMENT — Quick Quote
+// Same service size, swap the panel. Common AF1 add-on when an existing
+// panel can't accommodate a new HVAC circuit.
+// ────────────────────────────────────────────────────────────────────────
+const PANEL_BRAND_OPTIONS = [
+  {id:'square-d-hom', label:'Square D Homeline (HOM)'},
+  {id:'square-d-qo',  label:'Square D QO'},
+  {id:'eaton-br',     label:'Eaton BR'},
+  {id:'eaton-ch',     label:'Eaton CH'},
+  {id:'siemens-ql',   label:'Siemens QL'},
+  {id:'other',        label:'Other (specify in scope)'}
+];
+function _renderQQ_PanelReplacement(q) {
+  const wrap = document.getElementById('qb-form'); if (!wrap) return;
+  const qq = q.qq || {};
+  const brand = qq.panelBrand || 'square-d-hom';
+  const slots = qq.panelSlots || 40;
+  const breakerCount = qq.panelBreakerCount || 12;
+  const serviceAmps = qq.panelServiceAmps || 200;
+  wrap.innerHTML = `
+    <div class="qq-section">
+      <div class="qq-title">New Panel</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Brand</div>
+          <select class="fsel" id="qq-panel-brand" onchange="onQQChange('${q.id}')">
+            ${PANEL_BRAND_OPTIONS.map(b => `<option value="${b.id}"${brand===b.id?' selected':''}>${b.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="fg"><div class="fl">Service Size (A)</div>
+          <select class="fsel" id="qq-panel-amps" onchange="onQQChange('${q.id}')">
+            ${[100,125,150,200,300,400].map(a => `<option value="${a}"${serviceAmps===a?' selected':''}>${a} A</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="frow2" style="margin-top:10px">
+        <div class="fg"><div class="fl">Slot Count</div>
+          <select class="fsel" id="qq-panel-slots" onchange="onQQChange('${q.id}')">
+            ${[12,20,24,30,40,42].map(s => `<option value="${s}"${slots===s?' selected':''}>${s}-space</option>`).join('')}
+          </select>
+        </div>
+        <div class="fg"><div class="fl">Existing Breakers to Re-terminate</div>
+          <input class="fi" type="number" id="qq-panel-breaker-count" value="${breakerCount}" min="0" max="42" step="1" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Pricing Breakdown</div>
+      <div style="font-size:11.5px;color:var(--text-muted);line-height:1.55">
+        Base panel-swap labor: <strong>$${getQQPricing().panelReplaceBase.toLocaleString()}</strong> (full or partial-day work depending on access).<br>
+        Per-breaker re-termination: <strong>$${getQQPricing().panelReplacePerBreaker}</strong> × ${breakerCount} = $${(getQQPricing().panelReplacePerBreaker * breakerCount).toLocaleString()}.<br>
+        Hardware (panel itself + main breaker + ground bar kit) ships separately as materials.
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Add-Ons</div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Stucco / brick exterior, attic feeders, AFCI/GFCI breaker upgrades, etc.</div></div>
+        <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+      <div class="qq-row">
+        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div></div>
+        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Permit</div>
+      <div class="fg"><div class="fl">Permit Fee ($)</div>
+        <input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Overrides &amp; Discounts</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Override Base ($)</div>
+          <input class="fi" type="number" id="qq-install-override" placeholder="auto" value="${q.qq?.installOverride!=null?q.qq.installOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+        <div class="fg"><div class="fl">Override L&amp;M Subtotal ($)</div>
+          <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+      </label>
+      ${shouldZeroBuffer(q) ? '' : `
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
+          <input class="fi" type="number" step="0.1" min="0" max="10" id="qq-buffer" style="width:120px" value="${(typeof q.paymentBuffer==='number')?q.paymentBuffer:3}" oninput="onQQBufferChange('${q.id}')">
+        </div>
+      </div>`}
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Scope of Work</div>
+      <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
+      <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
+        <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
+      </div>
+      <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
+        <textarea class="fta" id="qq-exc" rows="2" style="min-height:60px" oninput="onQQExcChange('${q.id}')">${q.exclusions||autoExclusions(q)}</textarea>
+      </div>
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// DETAILED-QUOTE REDIRECT — for types where Quick Quote is too rigid (Battery,
+// V2H, New Service, Service Upgrade, Generator). Shows a guidance card and a
+// one-click switch to Detailed mode with material pre-fills.
+// ────────────────────────────────────────────────────────────────────────
+function _renderQQ_DetailedRedirect(q) {
+  const wrap = document.getElementById('qb-form'); if (!wrap) return;
+  const t = getJobType(q.jobType);
+  const label = t ? t.label : 'this job type';
+  wrap.innerHTML = `
+    <div class="qq-section" style="background:var(--bg-elevated);border-left:3px solid var(--amber);padding:18px 18px 18px 22px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">Use Detailed Quote for ${label}</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.55;margin-bottom:14px">
+        ${label} pricing varies too much (utility coordination, equipment brand, scope) to fit a Quick Quote form well. Switch to Detailed mode and the line items will be pre-populated with the typical materials for this job type — adjust quantities and prices as needed for your specific install.
+      </div>
+      <button class="btn btn-p" onclick="switchQuoteType('${q.id}','detailed')">
+        Switch to Detailed Quote →
+      </button>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-top:14px;line-height:1.5">
+        A Quick Quote form for ${label} is on the roadmap — once we collect enough completed jobs to identify the common cost drivers, we'll wire one up.
+      </div>
+    </div>`;
+}
+
 // ── QQ CALCULATIONS ──
 function onQQChange(qid){
   const q=getQuote(qid); if(!q) return;
+  // Type-specific math handlers (route to specialized compute functions)
+  if (q.jobType === 'hvac-circuit')         return _onQQChange_HVAC(qid);
+  if (q.jobType === 'circuit-replacement')  return _onQQChange_CircuitReplacement(qid);
+  if (q.jobType === 'panel-replacement')    return _onQQChange_PanelReplacement(qid);
+  // Fallthrough: EV Charger / NEMA 14-50 (existing math)
   const p=getQQPricing();
   const panelLoc=document.getElementById('qq-panel')?.value||'garage';
   const isNema=q.jobType==='nema-1450';
@@ -3501,8 +4124,8 @@ function onQQChange(qid){
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
   const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
-  const _isPlatformQ = ['Qmerit','Electrum','Treehouse'].includes(q.source);
-  const paymentBuffer = _isPlatformQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
+  const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
@@ -3521,6 +4144,223 @@ function onQQChange(qid){
   upsertQuote(updated);
   refreshQBSidebar(qid);
 }
+
+// Shared helper — totals up labor+materials with the existing buffer/permit/
+// veteran/Qmerit logic, then upserts the quote. Used by all type-specific
+// onQQChange handlers so the buffer + Qmerit math stays consistent.
+function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
+  const p = getQQPricing();
+  const isVeteran = !!qqPatch.isVeteran;
+  const veteranDiscount = isVeteran ? Math.round(lm * (p.veteranDiscountPct||0.10) * 100) / 100 : 0;
+  const lmAfterDiscount = lm - veteranDiscount;
+  let qmeritFee = 0;
+  if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lmAfterDiscount * p.qmeritPct);
+  const preProcessingTotal = lmAfterDiscount + qmeritFee + permitFee;
+  const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
+  const paymentBuffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const paymentProcessingFee = Math.round(preProcessingTotal * paymentBuffer / 100 * 100) / 100;
+  const quoteTotal = preProcessingTotal + paymentProcessingFee;
+  upsertQuote({
+    ...q,
+    qq: { ...(q.qq||{}), ...qqPatch },
+    permitFee,
+    laborAndMaterials: lm,
+    veteranDiscount,
+    qmeritFee,
+    preProcessingTotal,
+    paymentBuffer,
+    paymentProcessingFee,
+    quoteTotal
+  });
+  refreshQBSidebar(q.id);
+}
+
+// HVAC Circuit math: base + decomposed labor segments + wire materials + disconnect.
+function _onQQChange_HVAC(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const p = getQQPricing();
+  const panelLoc = document.getElementById('qq-panel')?.value || 'garage';
+  const wireId = document.getElementById('qq-hvac-wire')?.value || (q.qq?.hvacWireId) || 'm-001';
+  const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
+  const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
+  const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
+  const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || (q.specialJurisdiction ? 500 : (q.source==='Qmerit' ? 250 : 200));
+  const installOverrideRaw = document.getElementById('qq-install-override')?.value;
+  const installOverride = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
+  const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
+  const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
+  const isVeteran = !!document.getElementById('qq-veteran')?.checked;
+  const runSegs = q.qq?.runSegs || [];
+
+  const baseInstall = installOverride!=null && !isNaN(installOverride)
+    ? installOverride
+    : (panelLoc==='garage' ? p.garage : p.interior);
+
+  let lm = baseInstall;
+
+  // Run-segment labor (decomposed — no wire baked in)
+  let totalRunFt = 5; // base path included
+  runSegs.forEach(seg => {
+    const ft = Math.max(parseInt(seg.ft)||0, 0);
+    totalRunFt += ft;
+    if (seg.type==='surface')        lm += (ft/10) * p.hvacAddl10Surface;
+    else if (seg.type==='hand-trench') lm += (ft/10) * p.hvacHandDig10;
+    else if (seg.type==='machine-trench') {
+      const mft = Math.max(ft, 50);
+      lm += p.hvacMachineTrenchBase + Math.max(0, Math.ceil((mft-50)/10)) * p.hvacMachineTrench10;
+    }
+  });
+
+  // Wire materials line — gauge × total wire run × markup
+  const wireMat = getMaterials().find(m => m.id === wireId);
+  let wireMaterialsCost = 0;
+  if (wireMat && wireMat.unitCost != null) {
+    const sellPerFt = wireMat.unitCost * (1 + (wireMat.markup||0)/100);
+    wireMaterialsCost = Math.round(sellPerFt * totalRunFt * 100) / 100;
+  }
+  lm += wireMaterialsCost;
+
+  // Disconnect at HVAC unit
+  if (disconnect === 'non-fused') lm += p.hvacDisconnectNonFused;
+  else if (disconnect === 'fused') lm += p.hvacDisconnectFused;
+
+  // Difficulty + travel
+  lm += difficultyFee;
+  lm += travelAdder;
+
+  // L&M override (admin)
+  if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
+
+  _finalizeQQTotals(q, lm, {
+    panelLocation: panelLoc,
+    runSegs,
+    hvacWireId: wireId,
+    hvacDisconnect: disconnect,
+    hvacWireFt: totalRunFt,
+    hvacWireCost: wireMaterialsCost,
+    difficultyFee,
+    travelMinutes,
+    travelAdder,
+    extras: q.qq?.extras || [],
+    installOverride,
+    lmOverride,
+    isVeteran
+  }, permitFee);
+}
+
+// Circuit Replacement math: flat fee by amperage tier + wire materials.
+function _onQQChange_CircuitReplacement(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const p = getQQPricing();
+  const targetAmps = parseFloat(document.getElementById('qq-target-amps')?.value) || 30;
+  const existingAmps = parseFloat(document.getElementById('qq-existing-amps')?.value) || 20;
+  const existingGauge = document.getElementById('qq-existing-gauge')?.value || '';
+  const wireId = document.getElementById('qq-hvac-wire')?.value || (q.qq?.hvacWireId) || 'm-001';
+  const runFt = parseFloat(document.getElementById('qq-replace-run-ft')?.value) || 30;
+  const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
+  const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
+  const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
+  const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || 0; // no permit by default
+  const installOverrideRaw = document.getElementById('qq-install-override')?.value;
+  const installOverride = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
+  const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
+  const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
+  const isVeteran = !!document.getElementById('qq-veteran')?.checked;
+
+  // Flat-fee labor by amperage tier (covers pull, re-pull, breaker swap)
+  let baseLabor;
+  if (installOverride != null && !isNaN(installOverride)) baseLabor = installOverride;
+  else if (targetAmps < 30) baseLabor = p.circuitReplaceUnder30A;
+  else if (targetAmps <= 50) baseLabor = p.circuitReplace30To50A;
+  else baseLabor = p.circuitReplace60Plus;
+
+  let lm = baseLabor;
+
+  // Wire materials
+  const wireMat = getMaterials().find(m => m.id === wireId);
+  let wireMaterialsCost = 0;
+  if (wireMat && wireMat.unitCost != null) {
+    const sellPerFt = wireMat.unitCost * (1 + (wireMat.markup||0)/100);
+    wireMaterialsCost = Math.round(sellPerFt * runFt * 100) / 100;
+  }
+  lm += wireMaterialsCost;
+
+  if (disconnect === 'non-fused') lm += p.hvacDisconnectNonFused;
+  else if (disconnect === 'fused') lm += p.hvacDisconnectFused;
+
+  lm += difficultyFee;
+  lm += travelAdder;
+
+  if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
+
+  _finalizeQQTotals(q, lm, {
+    existingAmps,
+    existingGauge,
+    targetAmps,
+    hvacWireId: wireId,
+    replaceRunFt: runFt,
+    hvacDisconnect: disconnect,
+    hvacWireCost: wireMaterialsCost,
+    difficultyFee,
+    travelMinutes,
+    travelAdder,
+    extras: q.qq?.extras || [],
+    installOverride,
+    lmOverride,
+    isVeteran
+  }, permitFee);
+}
+
+// Panel Replacement math: base labor + per-breaker re-termination + panel hardware.
+function _onQQChange_PanelReplacement(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const p = getQQPricing();
+  const brand = document.getElementById('qq-panel-brand')?.value || (q.qq?.panelBrand) || 'square-d-hom';
+  const slots = parseInt(document.getElementById('qq-panel-slots')?.value) || 40;
+  const breakerCount = parseInt(document.getElementById('qq-panel-breaker-count')?.value) || 12;
+  const serviceAmps = parseInt(document.getElementById('qq-panel-amps')?.value) || 200;
+  const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
+  const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
+  const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || (q.specialJurisdiction ? 500 : (q.source==='Qmerit' ? 250 : 200));
+  const installOverrideRaw = document.getElementById('qq-install-override')?.value;
+  const installOverride = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
+  const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
+  const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
+  const isVeteran = !!document.getElementById('qq-veteran')?.checked;
+
+  let lm = installOverride!=null && !isNaN(installOverride) ? installOverride : p.panelReplaceBase;
+  lm += breakerCount * p.panelReplacePerBreaker;
+  // Panel hardware — use 200A by default, 100A for smaller services
+  const hardwareCost = serviceAmps >= 200 ? p.panelHardware200A : p.panelHardware100A;
+  lm += Math.round(hardwareCost * 1.30 * 100) / 100; // 30% markup on hardware
+
+  lm += difficultyFee;
+  lm += travelAdder;
+
+  if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
+
+  _finalizeQQTotals(q, lm, {
+    panelBrand: brand,
+    panelSlots: slots,
+    panelBreakerCount: breakerCount,
+    panelServiceAmps: serviceAmps,
+    panelHardwareCost: hardwareCost,
+    difficultyFee,
+    travelMinutes,
+    travelAdder,
+    extras: q.qq?.extras || [],
+    installOverride,
+    lmOverride,
+    isVeteran
+  }, permitFee);
+}
+
 // ── QQ RUN SEGMENTS ──
 function qqSegCost(seg,p){
   const ft=Math.max(parseInt(seg.ft)||0,0);
@@ -3537,12 +4377,12 @@ function renderQQRunSegs(segs,qid){
     const cost=qqSegCost(seg,p);
     return `<div class="qq-row" style="gap:8px;flex-wrap:wrap">
       <select class="fsel" style="flex:1;min-width:200px" onchange="updateQQRunSegType('${qid}',${i},this.value)">
-        <option value="surface"${seg.type==='surface'?' selected':''}>Surface Run / Crawl Space / Attic — $150/10 ft</option>
-        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Hand-dig Trenching — $200/10 ft</option>
-        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Machine Trenching — $650 base</option>
+        <option value="surface"${seg.type==='surface'?' selected':''}>Surface Run / Crawl Space / Attic — $150 per 10 ft of wire run</option>
+        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Hand-dig Trenching — $200 per 10 ft of trench</option>
+        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Machine Trenching — $650 base (first 50 ft)</option>
       </select>
       <div style="display:flex;align-items:center;gap:6px">
-        <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft</span>
+        <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${isMachine?'(trench)':'(wire run)'}</span>
       </div>
       <div style="font-family:var(--mono);font-size:12.5px;color:var(--green);min-width:60px;text-align:right">${fmt$(cost)}</div>
       <button class="li-del" onclick="removeQQRunSeg('${qid}',${i})">×</button>
@@ -3631,37 +4471,118 @@ function onQQIncChange(qid){const v=document.getElementById('qq-inc')?.value||''
 function onQQExcChange(qid){const v=document.getElementById('qq-exc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,exclusions:v});}
 
 // ── AUTO SCOPE TEXT ──
+// ── AUTO SCOPE / INCLUSIONS / EXCLUSIONS (dispatcher by job type) ──
 function autoScope(q){
-  const qq=q.qq||{};
-  const loc=qq.panelLocation==='garage'?'garage':'interior/basement';
-  const segs=qq.runSegs||[];
-  const runParts=segs.map(seg=>{
-    const ft=seg.ft||0;
-    if(seg.type==='surface') return `${ft} ft surface run`;
-    if(seg.type==='hand-trench') return `${ft} ft of hand-dug trenching`;
-    if(seg.type==='machine-trench') return `approximately ${Math.max(ft,50)} ft of machine trenching`;
+  const qq = q.qq || {};
+  const loc = qq.panelLocation==='garage' ? 'garage' : 'interior/basement';
+  const segs = qq.runSegs || [];
+  const runParts = segs.map(seg => {
+    const ft = seg.ft || 0;
+    if (seg.type==='surface')        return `${ft} ft of additional wire-run (surface conduit)`;
+    if (seg.type==='hand-trench')    return `${ft} ft of hand-dug trenching`;
+    if (seg.type==='machine-trench') return `approximately ${Math.max(ft,50)} ft of machine trenching`;
     return '';
   }).filter(Boolean);
-  const run=runParts.length?`, with `+runParts.join(' and '):'';
-  if(q.jobType==='nema-1450'){
-    const outLoc=qq.nemaLocation==='outside'?'exterior':'interior';
-    return `Supply and install a dedicated 50-amp, 240-volt circuit protected by a 50-amp GFCI breaker from the main electrical panel located in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted)${run}. All work performed to NEC standards and local code requirements.`;
+  const run = runParts.length ? `, including ` + runParts.join(' and ') : '';
+  const wireRunNote = ' Pricing includes the first 5 ft of wire / conduit run from the panel; additional run length is itemized separately. All distances are measured along the actual conduit path, not as straight-line distance.';
+
+  // HVAC Dedicated Circuit
+  if (q.jobType === 'hvac-circuit') {
+    const wireMat = (qq.hvacWireId && getMaterials().find(m => m.id === qq.hvacWireId)) || null;
+    const wireDesc = wireMat ? wireMat.name.replace(/ Cable$/,'') : 'NM-B';
+    const disc = qq.hvacDisconnect || 'none';
+    const discDesc = disc === 'fused' ? ' with a fused disconnect at the unit'
+                    : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
+                    : '';
+    return `Supply and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel located in the ${loc} to the HVAC equipment disconnect${discDesc}${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
   }
-  const mount=qq.mountType==='post'?' mounted on a 4×4 treated post with concrete footing':'';
-  return `Supply and install a dedicated 60-amp, 240-volt circuit from the main electrical panel located in the ${loc} to a Level 2 EV charger installation${mount}${run}. All work performed to NEC standards and local code requirements.`;
+
+  // Circuit Replacement (no permit)
+  if (q.jobType === 'circuit-replacement') {
+    const wireMat = (qq.hvacWireId && getMaterials().find(m => m.id === qq.hvacWireId)) || null;
+    const wireDesc = wireMat ? wireMat.name.replace(/ Cable$/,'') : 'correctly-sized cable';
+    const targetAmps = qq.targetAmps || 30;
+    const existingAmps = qq.existingAmps || 0;
+    const existingNote = existingAmps ? ` (replacing the existing ${existingAmps}-amp circuit)` : '';
+    const discText = qq.hvacDisconnect && qq.hvacDisconnect !== 'none' ? ` Replacement of the equipment disconnect (${qq.hvacDisconnect}) is included.` : '';
+    return `Replace the existing branch circuit with new ${wireDesc} cable, sized for a ${targetAmps}-amp breaker${existingNote}. New wire is pulled through the existing route from the main electrical panel to the equipment.${discText} All work performed to NEC standards. No permit required — this is a like-for-like replacement of a previously inspected circuit.`;
+  }
+
+  // Panel Replacement
+  if (q.jobType === 'panel-replacement') {
+    const brands = {
+      'square-d-hom':'Square D Homeline',
+      'square-d-qo':'Square D QO',
+      'eaton-br':'Eaton BR',
+      'eaton-ch':'Eaton CH',
+      'siemens-ql':'Siemens QL',
+      'other':'manufacturer-equivalent'
+    };
+    const brand = brands[qq.panelBrand] || 'Square D Homeline';
+    const slots = qq.panelSlots || 40;
+    const amps = qq.panelServiceAmps || 200;
+    const breakers = qq.panelBreakerCount || 12;
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. All ${breakers} existing branch circuits will be re-terminated to the new panel using current NEC standards (AFCI/GFCI breakers as required by code for affected circuits). Includes panel hardware, main breaker, ground bar kit, and labor for swap, re-termination, and rough-in inspection.`;
+  }
+
+  // Battery / V2H / Service / Generator — fallback (Detailed Quote drives the scope)
+  if (q.jobType === 'battery-system' || q.jobType === 'v2h-system' ||
+      q.jobType === 'new-service'    || q.jobType === 'service-upgrade' ||
+      q.jobType === 'generator') {
+    const t = getJobType(q.jobType);
+    return `${t ? t.label : 'Custom installation'} per detailed scope below. All work performed to NEC standards and local code requirements.`;
+  }
+
+  // NEMA 14-50 Outlet
+  if (q.jobType === 'nema-1450') {
+    const outLoc = qq.nemaLocation==='outside' ? 'exterior' : 'interior';
+    return `Supply and install a dedicated 50-amp, 240-volt circuit protected by a 50-amp GFCI breaker from the main electrical panel located in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted)${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
+  }
+
+  // Default: EV Charger
+  const mount = qq.mountType==='post' ? ' mounted on a 4×4 treated post with concrete footing' : '';
+  return `Supply and install a dedicated 60-amp, 240-volt circuit from the main electrical panel located in the ${loc} to a Level 2 EV charger installation${mount}${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
 }
+
 function autoInclusions(q){
-  const lines=['• All labor and materials','• Permit application and inspection coordination','• Cleanup and job site restoration'];
-  if(q.source==='Qmerit') lines.push('• Platform coordination and documentation');
-  if((q.qq?.extras||[]).find(e=>e.id==='emporia')) lines.push('• Emporia Vue energy monitor installation');
+  const lines = ['• All labor and materials','• Cleanup and job site restoration'];
+  // Permit-required types include "Permit application and inspection coordination"
+  const t = getJobType(q.jobType);
+  if (!t || !t.noPermit) lines.splice(1, 0, '• Permit application and inspection coordination');
+  if (q.source === 'Qmerit') lines.push('• Platform coordination and documentation');
+  if ((q.qq?.extras||[]).find(e => e.id==='emporia')) lines.push('• Emporia Vue energy monitor installation');
+  if (q.jobType === 'panel-replacement') {
+    lines.push('• Re-termination of all existing branch circuits to the new panel');
+    lines.push('• Panel hardware, main breaker, ground bar kit, and required AFCI/GFCI breakers');
+  }
+  if (q.jobType === 'hvac-circuit' && q.qq?.hvacDisconnect && q.qq.hvacDisconnect !== 'none') {
+    lines.push('• Disconnect at the HVAC equipment');
+  }
   return lines.join('\n');
 }
+
 function autoExclusions(q){
-  const lines=[];
-  if(q.jobType==='nema-1450') lines.push('• NEMA 14-50 plug or device (customer supplied)');
-  else lines.push('• EV charger / EVSE unit (customer supplied)');
+  const lines = [];
+  if (q.jobType === 'nema-1450') {
+    lines.push('• NEMA 14-50 plug or device (customer supplied)');
+  } else if (q.jobType === 'ev-residential') {
+    lines.push('• EV charger / EVSE unit (customer supplied)');
+  } else if (q.jobType === 'hvac-circuit') {
+    lines.push('• HVAC equipment, refrigerant work, and any HVAC-side wiring (handled by the HVAC contractor)');
+  } else if (q.jobType === 'circuit-replacement') {
+    lines.push('• Equipment served by the circuit (handled by the homeowner / installing contractor)');
+  } else if (q.jobType === 'panel-replacement') {
+    lines.push('• Service entrance conductor replacement (separate scope if needed)');
+    lines.push('• Utility coordination (panel replacement only — not a service upgrade)');
+  } else if (q.jobType === 'battery-system' || q.jobType === 'v2h-system') {
+    lines.push('• Battery / V2H equipment (customer or program-supplied unless line-itemed below)');
+  } else if (q.jobType === 'new-service' || q.jobType === 'service-upgrade') {
+    lines.push('• Utility-side coordination charges (paid by homeowner directly to the utility)');
+  }
   lines.push('• Drywall or wall repair','• Any electrical work not described above');
-  if((q.qq?.runSegs||[]).some(s=>s.type&&s.type.includes('trench'))) lines.push('• Landscaping restoration after trenching');
+  if ((q.qq?.runSegs||[]).some(s => s.type && s.type.includes('trench'))) {
+    lines.push('• Landscaping restoration after trenching');
+  }
   return lines.join('\n');
 }
 
@@ -3940,8 +4861,8 @@ function onDQChange(qid){
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
   const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
-  const _isPlatformQ = ['Qmerit','Electrum','Treehouse'].includes(q.source);
-  const paymentBuffer = _isPlatformQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
+  const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
@@ -3972,7 +4893,10 @@ function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||''
 // ── TOTALS & MARGIN ──
 function calcQuoteTotals(q){
   if(!q) return {};
-  const buffer = (typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0;
+  // Buffer is force-zeroed for platform-paid jobs (Qmerit/Electrum/Treehouse)
+  // and for B2B referrer-billed jobs (e.g., AF1 paying us directly via ACH).
+  const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
+  const buffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const lmAfterDiscount = (q.laborAndMaterials||0) - (q.veteranDiscount||0);
   const preProcessingTotal = lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0);
   const paymentProcessingFee = Math.round(preProcessingTotal * buffer / 100 * 100) / 100;
@@ -4708,11 +5632,64 @@ function updateQuoteLabel(qid,label){
   upsertQuote({...q,label:clean});
   // Light-touch save — don't re-render the whole builder or the user loses focus
 }
+// Switch a quote's job type (e.g. EV Charger → HVAC Circuit). Resets type-
+// specific qq state to defaults so the new form renders cleanly, then re-
+// renders the builder. Permit fee gets reset based on the new type's defaults.
+function changeQuoteJobType(qid, newType) {
+  const q = getQuote(qid); if (!q) return;
+  if (q.jobType === newType) return;
+  const t = getJobType(newType);
+  if (!t) { toast('Unknown job type: ' + newType, 'error'); return; }
+  // Permit reset: if the new type is no-permit, zero out; otherwise set to
+  // the type's default for the current source. Don't override a manual
+  // override (specialJurisdiction permits stay as-is).
+  let newPermit = q.permitFee;
+  if (!q.specialJurisdiction) {
+    if (t.noPermit) newPermit = 0;
+    else newPermit = (q.source === 'Qmerit' ? t.permitQmerit : t.permitDefault);
+  }
+  // Reset type-specific qq state so the new form has a clean slate. Keep
+  // shared fields (panel location, run segments) since they're useful across
+  // branch-circuit types.
+  const sharedQQ = (() => {
+    const old = q.qq || {};
+    return {
+      panelLocation: old.panelLocation || 'garage',
+      runSegs:       old.runSegs || [],
+      mountType:     old.mountType || 'wall',
+      tandemBreakers: old.tandemBreakers || 0,
+      difficultyFee: old.difficultyFee || 0,
+      travelFee:     old.travelFee || 0,
+      travelFeeType: old.travelFeeType || 'baked',
+      travelMinutes: old.travelMinutes || 0,
+      extras:        old.extras || [],
+      isVeteran:     old.isVeteran || false,
+      installOverride: old.installOverride,
+      lmOverride:    old.lmOverride
+    };
+  })();
+  upsertQuote({ ...q, jobType: newType, permitFee: newPermit, qq: sharedQQ });
+  // Force a recompute under the new type's rules.
+  try {
+    if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
+    else { if (typeof onQQChange === 'function') onQQChange(qid); }
+  } catch(_) {}
+  renderQuoteBuilder(qid);
+  toast(`Job type set to ${t.label}`, 'success');
+}
 // Switch a quote's source (e.g. Qmerit → Direct for a service-upgrade split).
 // Recalculates qmeritFee via the appropriate form handler, then re-renders.
+// For AF1 (and other REFERRER_BILL_SOURCES), auto-suggests the matching
+// referrer customer as bill-to if one exists and bill-to isn't already set.
 function changeQuoteSource(qid,newSource){
   const q=getQuote(qid); if(!q) return;
-  upsertQuote({...q, source:newSource});
+  const updates = { source: newSource };
+  // Auto-suggest bill-to when source maps to a known B2B referrer
+  if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(newSource) && !q.billToCustomerId) {
+    const ref = getCustomers().find(c => c.isReferrer && (c.id === 'cust-ref-' + newSource.toLowerCase()));
+    if (ref) updates.billToCustomerId = ref.id;
+  }
+  upsertQuote({...q, ...updates});
   // Force fee recalc — the quick/detailed handlers read q.source and recompute qmeritFee.
   try {
     if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
@@ -4720,6 +5697,30 @@ function changeQuoteSource(qid,newSource){
   } catch(_){}
   renderQuoteBuilder(qid);
   toast(`Source set to ${newSource}`, 'success');
+}
+
+// Switch a quote's bill-to customer. Empty string or homeowner ID = clear
+// override (revert to homeowner default). Triggers buffer recalc since
+// referrer-billed jobs auto-zero the buffer.
+function changeQuoteBillTo(qid, newCustId) {
+  const q = getQuote(qid); if (!q) return;
+  const home = getQuoteServiceCustomer(q);
+  const isHomeowner = !newCustId || (home && newCustId === home.id);
+  const updates = { billToCustomerId: isHomeowner ? null : newCustId };
+  upsertQuote({...q, ...updates});
+  // Recompute totals — buffer rules just changed.
+  try {
+    if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
+    else { if (typeof onQQChange === 'function') onQQChange(qid); }
+  } catch(_) {}
+  renderQuoteBuilder(qid);
+  if (isHomeowner) {
+    toast('Bill-to: homeowner', 'success');
+  } else {
+    const c = getCustomer(newCustId);
+    const label = c ? (c.businessName || custFullName(c)) : newCustId;
+    toast(`Bill-to: ${label}`, 'success');
+  }
 }
 // Clone a quote as a new option for the same lead. Preserves scope, line items,
 // totals, and plug-type choices — just resets identity, status, timestamps, and
@@ -4808,13 +5809,33 @@ function pdfHeader(doc,label,qRef,dateStr,W){
   doc.setTextColor(...GRAY);doc.text('Date: '+dateStr,W-36,70,{align:'right'});
 }
 
-function pdfCustomerBlock(doc,cust,lead,y){
+// Renders the customer block on quote PDFs.
+//   cust: the homeowner / service-location customer
+//   lead: the lead (for site address)
+//   q (optional): the quote — if provided and bill-to is a different customer
+//     (e.g., AF1 paying us directly), the block splits into "BILL TO" +
+//     "SERVICE LOCATION" stacked sections. Otherwise renders single block.
+function pdfCustomerBlock(doc,cust,lead,y,q){
   const DARK=[15,17,23],GRAY=[100,110,130];
-  doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('QUOTE FOR:',36,y);y+=13;
-  if(cust){
-    const _isCom=cust.propertyType==='commercial';
-    const _biz=_isCom && cust.businessName ? cust.businessName : '';
-    const _person=custFullName(cust);
+  // Determine bill-to vs. service-location.
+  let billTo = cust;
+  let isSplit = false;
+  if (q && typeof getQuoteBillToCustomer === 'function') {
+    const bt = getQuoteBillToCustomer(q);
+    if (bt && cust && bt.id && cust.id && bt.id !== cust.id) {
+      billTo = bt;
+      isSplit = true;
+    }
+  }
+
+  // Helper to render a single party block (header + business/person + phone/email).
+  function _renderParty(label, c) {
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);
+    doc.text(label,36,y);y+=13;
+    if(!c) return;
+    const _isCom = c.propertyType==='commercial';
+    const _biz = _isCom && c.businessName ? c.businessName : '';
+    const _person = custFullName(c);
     if(_biz){
       doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_biz,36,y);y+=14;
       if(_person){
@@ -4825,9 +5846,35 @@ function pdfCustomerBlock(doc,cust,lead,y){
       doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_person,36,y);y+=14;
     }
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
-    if(cust.phone){doc.text(cust.phone,36,y);y+=12;}
-    if(cust.email){doc.text(cust.email,36,y);y+=12;}
+    if(c.phone){doc.text(c.phone,36,y);y+=12;}
+    if(c.email){doc.text(c.email,36,y);y+=12;}
   }
+
+  // BILL TO (or QUOTE FOR if no split)
+  _renderParty(isSplit ? 'BILL TO:' : 'QUOTE FOR:', billTo);
+  if (isSplit && q && q.poNumber) {
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
+    doc.text('PO #: '+q.poNumber,36,y);y+=12;
+  }
+
+  // SERVICE LOCATION
+  if (isSplit) {
+    y += 6;
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);
+    doc.text('SERVICE LOCATION:',36,y);y+=13;
+    if (cust) {
+      const _person = custFullName(cust);
+      if (_person) {
+        doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(...DARK);
+        doc.text(_person,36,y);y+=13;
+      }
+      doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
+      if (cust.phone) { doc.text(cust.phone,36,y);y+=12; }
+    }
+  }
+
+  // Address — for split, this comes after Service Location header; for
+  // single, this comes after the QUOTE FOR contact info.
   if(lead?.siteStreet){
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
     const addrLines=[lead.siteStreet,[lead.siteCity,lead.siteState||'VA',lead.siteZip].filter(Boolean).join(', ')].filter(Boolean);
@@ -4860,7 +5907,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const GREEN=[109,194,48],DARK=[15,17,23],GRAY=[100,110,130],LGRAY=[238,240,245];
   pdfHeader(doc,'QUOTE',q.id,q.createdAt?q.createdAt.slice(0,10):new Date().toISOString().slice(0,10),W);
   y=108;
-  y=pdfCustomerBlock(doc,cust,lead,y);
+  y=pdfCustomerBlock(doc,cust,lead,y,q);
   // validity badge
   doc.setFillColor(235,250,225);doc.roundedRect(W-180,108,144,30,4,4,'F');
   doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
@@ -4948,15 +5995,9 @@ function generateInvoicePDF(q,cust,lead,invNum){
   const GREEN=[109,194,48],DARK=[15,17,23],GRAY=[100,110,130],LGRAY=[238,240,245];
   pdfHeader(doc,'INVOICE',invNum,new Date().toISOString().slice(0,10),W);
   y=108;
-  // bill to label swap
-  doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('BILL TO:',36,y);y+=13;
-  if(cust){
-    doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(custFullName(cust),36,y);y+=14;
-    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
-    if(cust.phone){doc.text(cust.phone,36,y);y+=12;}
-    if(cust.email){doc.text(cust.email,36,y);y+=12;}
-    if(lead?.siteStreet){const al=[lead.siteStreet,[lead.siteCity,lead.siteState||'VA',lead.siteZip].filter(Boolean).join(', ')].filter(Boolean);doc.text(al,36,y);y+=al.length*12;}
-  }
+  // Use the unified pdfCustomerBlock so invoice and quote share the bill-to
+  // split logic (Bill-To + Service Location when AF1 etc. is paying directly).
+  y = pdfCustomerBlock(doc, cust, lead, y, q);
   // payment terms box
   doc.setFillColor(235,250,225);doc.roundedRect(W-180,108,144,44,4,4,'F');
   doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('PAYMENT TERMS',W-108,121,{align:'center'});
@@ -4999,11 +6040,14 @@ function renderMaterialsLibrary(){
   const mats=getMaterials();
   const cats=[...new Set(mats.map(m=>m.category))].sort();
   return `<div class="stitle">Materials Library</div>
-    <div class="sdesc">Standard materials used in detailed quotes. Unit costs and markups are editable.</div>
+    <div class="sdesc">Standard materials used in detailed quotes. Unit costs and markups are editable. Use "Import Excel" to refresh from the Capital Electric "Most Purchased Items" export — pricing updates by Capital Electric ID, no duplicates.</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <input class="fi" id="mat-srch" placeholder="Search materials..." style="flex:1;min-width:180px" oninput="filterMats()">
-      <button class="btn btn-g" onclick="openMaterialImport()" title="Import from Capital Electric pricing list">
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import Pricing
+      <button class="btn btn-g" onclick="openMaterialExcelImport()" title="Import from Capital Electric Most Purchased Excel export">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import Excel
+      </button>
+      <button class="btn btn-g" onclick="openMaterialImport()" title="Import from materials_seed.json">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import JSON
       </button>
       <button class="btn btn-p" onclick="openAddMaterial()">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add
@@ -5012,13 +6056,22 @@ function renderMaterialsLibrary(){
     <div id="mat-list-wrap">
       ${cats.map(cat=>`<div style="margin-bottom:10px">
         <div class="fsec-title">${cat}</div>
-        ${mats.filter(m=>m.category===cat).map(m=>`<div class="srow" id="mat-row-${m.id}">
-          <div style="flex:1"><div class="srl">${m.name}</div><div class="srd">${m.unit} · ${m.markup}% markup</div></div>
-          <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-right:12px">$${m.unitCost}</span>
-          <button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="editMaterial('${m.id}')">Edit</button>
-        </div>`).join('')}
+        ${mats.filter(m=>m.category===cat).map(m=>{
+          const meta = [];
+          if (m.unit) meta.push(m.unit);
+          if (m.markup != null) meta.push(m.markup + '% markup');
+          if (m.ceId) meta.push('CE #' + m.ceId);
+          if (m.lastUpdated) meta.push('Updated ' + m.lastUpdated);
+          if (m.source && m.source === 'estimated') meta.push('<span style="color:var(--amber)">est.</span>');
+          return `<div class="srow" id="mat-row-${m.id}">
+            <div style="flex:1"><div class="srl">${escHtml(m.name)}</div><div class="srd">${meta.join(' · ')}</div></div>
+            <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-right:12px">$${m.unitCost}</span>
+            <button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="editMaterial('${m.id}')">Edit</button>
+          </div>`;
+        }).join('')}
       </div>`).join('')}
-    </div>`;
+    </div>
+    <input type="file" id="mat-xlsx-input" accept=".xlsx,.xls" style="display:none" onchange="onMaterialExcelFile(event)">`;
 }
 function filterMats(){
   const q=(document.getElementById('mat-srch')?.value||'').toLowerCase();
@@ -5069,6 +6122,202 @@ function saveMaterialEntry(existingId){
 // items grouped by auto-categorized buckets so the user can pick the subset
 // they actually use. Existing items (matched case-insensitively by name)
 // are filtered out so we don't create duplicates.
+// ── EXCEL IMPORT FROM CAPITAL ELECTRIC EXPORT ──
+// Reads the "Most Purchased Items" .xlsx export, matches against the catalog
+// by Capital Electric ID, shows a diff preview, and applies on confirm.
+function openMaterialExcelImport() {
+  const input = document.getElementById('mat-xlsx-input');
+  if (!input) { toast('Excel import not available — try refreshing the page', 'error'); return; }
+  if (typeof XLSX === 'undefined') { toast('Excel parser not loaded — refresh the page and try again', 'error'); return; }
+  input.value = ''; // reset so onchange fires even if same file is picked again
+  input.click();
+}
+
+async function onMaterialExcelFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    // Capital Electric exports have a single "Products" sheet but accept any sheet.
+    const sheetName = wb.SheetNames.find(n => /product|item|purchas/i.test(n)) || wb.SheetNames[0];
+    if (!sheetName) { toast('No sheets found in file', 'error'); return; }
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+    if (!rows.length) { toast('Sheet is empty', 'warning'); return; }
+    const parsed = _parseCapitalElectricRows(rows);
+    if (!parsed.length) { toast('No recognizable items found — does the spreadsheet have a "Capital Electric Id" column?', 'warning'); return; }
+    _showMaterialImportPreview(parsed);
+  } catch (e) {
+    console.error('[GK] Excel import failed:', e);
+    toast('Failed to parse spreadsheet: ' + e.message, 'error');
+  }
+}
+
+// Convert a Capital Electric row into a normalized {ceId, name, unitCost,
+// unit, manufacturer, ...} record. Returns null on rows we can't parse.
+function _parseCapitalElectricRow(row) {
+  // Tolerate column-name variations
+  const ceId = String(row['Capital Electric Id'] || row['CE Id'] || row['CE ID'] || row['Id'] || '').trim();
+  const name = String(row['Product Name'] || row['Name'] || '').trim();
+  if (!ceId || !name) return null;
+  const priceStr = String(row['Price'] || '').replace(/[$,]/g,'').trim();
+  const price = parseFloat(priceStr);
+  if (!isFinite(price)) return null;
+  const uom = String(row['Price UOM'] || '').trim().toLowerCase();
+  const perQty = parseFloat(row['Price Per Quantity']) || 1;
+  // Map distributor units to CRM units
+  // 'm' = per 1000 (Roman numeral); 'c' = per 100; 'ea' = each; 'ft' = per foot
+  let unit = 'each';
+  let unitCost = price / (perQty || 1);
+  if (uom === 'm' || uom === '1000') {
+    // Determine whether the underlying item is per-foot or per-thousand-pieces
+    // Heuristic: wire/cable products are sold per linear foot.
+    if (/wire|cable|nm-?b|seu|ser|thhn|thwn|xhhw|romex|conduit|emt|pvc/i.test(name)) {
+      unit = 'per foot';
+      unitCost = price / 1000;
+    } else {
+      unit = 'each';
+      unitCost = price / 1000;
+    }
+  } else if (uom === 'c' || uom === '100') {
+    unit = 'each';
+    unitCost = price / 100;
+  } else if (uom === 'ft') {
+    unit = 'per foot';
+    unitCost = price / (perQty || 1);
+  } else if (uom === 'bx' || uom === 'box') {
+    unit = 'per box';
+    unitCost = price;
+  } else {
+    unit = 'each';
+    unitCost = price / (perQty || 1);
+  }
+  return {
+    ceId,
+    name,
+    unitCost: Math.round(unitCost * 10000) / 10000,
+    unit,
+    manufacturer: String(row['Manufacturer'] || '').trim(),
+    catalogNum: String(row['Catalog #'] || row['Catalog #'] || '').trim()
+  };
+}
+
+function _parseCapitalElectricRows(rows) {
+  return rows.map(_parseCapitalElectricRow).filter(Boolean);
+}
+
+// Diff parsed rows against the catalog. Returns {updates, additions, unchanged}.
+function _diffMaterialImport(parsed) {
+  const mats = getMaterials();
+  const byCe = {};
+  mats.forEach(m => { if (m.ceId) byCe[m.ceId] = m; });
+  const updates = [];     // { existing, parsed, oldCost, newCost }
+  const additions = [];   // parsed
+  const unchanged = [];   // existing
+  parsed.forEach(p => {
+    const existing = byCe[p.ceId];
+    if (!existing) { additions.push(p); return; }
+    if (Math.abs((existing.unitCost||0) - (p.unitCost||0)) < 0.0005) {
+      unchanged.push(existing);
+    } else {
+      updates.push({ existing, parsed: p, oldCost: existing.unitCost, newCost: p.unitCost });
+    }
+  });
+  return { updates, additions, unchanged };
+}
+
+function _showMaterialImportPreview(parsed) {
+  const diff = _diffMaterialImport(parsed);
+  // Stash on the window for the Apply handler — small payload, single-use.
+  window._matImportPending = parsed;
+  // Build modal
+  const old = document.getElementById('mat-imp-overlay'); if (old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'mat-imp-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const updateRows = diff.updates.map(u =>
+    `<div class="srow" style="font-size:12.5px"><div style="flex:1"><div class="srl">${escHtml(u.existing.name)}</div><div class="srd">CE #${u.existing.ceId}</div></div>
+      <span style="font-family:var(--mono);color:var(--text-muted);text-decoration:line-through;margin-right:8px">$${u.oldCost}</span>
+      <span style="font-family:var(--mono);color:var(--green);font-weight:600">$${u.newCost}</span></div>`
+  ).join('');
+  const addRows = diff.additions.slice(0,30).map(p =>
+    `<div class="srow" style="font-size:12.5px"><div style="flex:1"><div class="srl">${escHtml(p.name)}</div><div class="srd">CE #${p.ceId} · ${p.unit}${p.manufacturer?' · '+escHtml(p.manufacturer):''}</div></div>
+      <span style="font-family:var(--mono);color:var(--green);font-weight:600">$${p.unitCost.toFixed(4)}</span></div>`
+  ).join('');
+  const moreAdds = diff.additions.length > 30 ? `<div style="font-size:11px;color:var(--text-muted);padding:6px 14px">… and ${diff.additions.length - 30} more new items</div>` : '';
+  overlay.innerHTML = `
+    <div class="card" style="padding:24px;max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;background:var(--bg-elevated);box-shadow:var(--shadow-drop)">
+      <div style="font-size:18px;font-weight:600;margin-bottom:6px">Import Capital Electric Pricing</div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">
+        Found ${parsed.length} items in the spreadsheet.
+        <strong style="color:var(--green)">${diff.updates.length} prices to update</strong>,
+        <strong style="color:var(--blue)">${diff.additions.length} new items to add</strong>,
+        ${diff.unchanged.length} unchanged. Items in your catalog without a matching CE ID won't be touched.
+      </div>
+      <div style="overflow-y:auto;flex:1;border:1px solid var(--border);border-radius:var(--r);padding:8px 0">
+        ${diff.updates.length ? `<div class="fsec-title" style="padding:0 14px;margin-bottom:6px">Price updates (${diff.updates.length})</div>${updateRows}` : ''}
+        ${diff.additions.length ? `<div class="fsec-title" style="padding:0 14px;margin:14px 0 6px">New items (${diff.additions.length}) — added with default 30% markup, manual category review recommended</div>${addRows}${moreAdds}` : ''}
+        ${!diff.updates.length && !diff.additions.length ? '<div style="padding:18px 14px;color:var(--text-muted);font-size:13px">Catalog is already up to date — nothing to apply.</div>' : ''}
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-g" onclick="document.getElementById('mat-imp-overlay').remove()">Cancel</button>
+        ${(diff.updates.length || diff.additions.length) ? `<button class="btn btn-p" onclick="applyMaterialImport()">Apply ${diff.updates.length + diff.additions.length} change${(diff.updates.length + diff.additions.length)===1?'':'s'}</button>` : ''}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function applyMaterialImport() {
+  const parsed = window._matImportPending;
+  if (!Array.isArray(parsed)) { toast('No pending import to apply', 'error'); return; }
+  const diff = _diffMaterialImport(parsed);
+  const mats = getMaterials();
+  const today = new Date().toISOString().slice(0,10);
+  // Apply price updates
+  diff.updates.forEach(u => {
+    const idx = mats.findIndex(m => m.id === u.existing.id);
+    if (idx >= 0) {
+      mats[idx] = { ...mats[idx], unitCost: u.newCost, lastUpdated: today, source: 'Capital Electric' };
+    }
+  });
+  // Add new items — default category is heuristic, user can re-categorize manually
+  diff.additions.forEach(p => {
+    const cat = _guessCategoryFromName(p.name);
+    mats.push({
+      id: 'm-ce-' + p.ceId,           // stable ID derived from CE id
+      name: p.name,
+      category: cat,
+      subcategory: '',
+      unit: p.unit,
+      unitCost: p.unitCost,
+      markup: 30,
+      ceId: p.ceId,
+      manufacturer: p.manufacturer || '',
+      lastUpdated: today,
+      source: 'Capital Electric'
+    });
+  });
+  saveMaterials(mats);
+  delete window._matImportPending;
+  const overlay = document.getElementById('mat-imp-overlay'); if (overlay) overlay.remove();
+  toast(`Applied ${diff.updates.length} update${diff.updates.length===1?'':'s'} and added ${diff.additions.length} new item${diff.additions.length===1?'':'s'}`, 'success');
+  // Re-render Materials Library
+  if (typeof showSec === 'function') showSec(null, 'Materials Library');
+}
+
+// Heuristic category assignment from product name. Falls back to "Other".
+function _guessCategoryFromName(name) {
+  const n = (name || '').toLowerCase();
+  if (/(nm-?b|romex|seu|ser|thhn|thwn|xhhw|wire|cable|conductor)/.test(n)) return 'Wire';
+  if (/(emt|pvc|conduit|sweep|elbow|coupling)/.test(n)) return 'Conduit';
+  if (/(breaker|gfi|gfci|afci|circuit\s*break)/.test(n)) return 'Breakers';
+  if (/(outlet|receptacle|gfci\s*outlet)/.test(n)) return 'Devices';
+  if (/(panel|load\s*center|service\s*disconnect)/.test(n)) return 'Panels';
+  if (/(connector|bushing|locknut|strap|clamp|fitting|sweep)/.test(n)) return 'Fittings';
+  if (/(screw|washer|anchor|tape|hardware)/.test(n)) return 'Hardware';
+  return 'Other';
+}
+
 async function openMaterialImport(){
   let seed;
   try {
@@ -8269,10 +9518,10 @@ function estimateJobDuration(lead) {
     const qq = q.qq || {};
     // Panel location
     if (qq.panelLocation === 'interior') hrs = 2.5;
-    // Additional run distance
+    // Additional run distance — wire-run length beyond the 5 ft included in the base
     const segs = qq.runSegs || [];
     segs.forEach(seg => {
-      const extra = Math.max(0, (seg.distance||0) - 10) / 10;
+      const extra = Math.max(0, (seg.distance||0) - 5) / 10;
       if (seg.type === 'hand-dig') hrs += extra * 0.75;
       else if (seg.type === 'machine-trench') { hrs += 1.5; hrs += extra * 0.4; }
       else hrs += extra * 0.3;
@@ -9347,6 +10596,43 @@ function seedImportData() {
   }
 }
 /* ─── End seed ─── */
+
+// Auto-seed B2B referrer customer records (AF1 etc.) so the Bill-To dropdown
+// has them as options out of the box. Idempotent — only adds if the record
+// doesn't already exist (matched by stable id like 'cust-ref-af1').
+function seedReferrerCustomers() {
+  const REFERRERS = [
+    {
+      id: 'cust-ref-af1',
+      isReferrer: true,                   // marks this as a B2B billing party, not a homeowner
+      propertyType: 'commercial',
+      businessName: 'Air Force One Heating & Air, LLC',
+      firstName: 'Trevor',                // sales/ops contact (placeholder until verified)
+      lastName: '',
+      email: '',
+      phone: '804-821-8783',
+      street: '',
+      city: 'Chesterfield',
+      state: 'VA',
+      zip: '',
+      paymentTerms: 'Net 30',
+      poRequired: false,
+      taxExempt: false,
+      notes: 'Referral partner — HVAC company that calls us for circuit / panel work on their installs. Sometimes AF1 pays direct (most common); sometimes they have us bill the homeowner. Field contact: Nico LaBoy. Legal name and AP contact are placeholders — verify on first invoice.'
+    }
+  ];
+  try {
+    const existing = getCustomers();
+    let added = 0;
+    REFERRERS.forEach(ref => {
+      if (!existing.find(c => c.id === ref.id)) {
+        existing.push({ ...ref, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        added++;
+      }
+    });
+    if (added > 0) { saveCustomers(existing); console.log('[GreenKey CRM] Seeded ' + added + ' referrer customer(s).'); }
+  } catch (e) { console.warn('[GreenKey CRM] seedReferrerCustomers failed:', e); }
+}
 
 // ════════════════════════════════════════════════════════════
 // AZURE / MSAL / SHAREPOINT INTEGRATION
@@ -10967,6 +12253,12 @@ function archiveOldLeads() {
 async function init() {
   archiveOldLeads();
   seedImportData();
+  // Run materials migrations / catalog seed on every boot so existing users
+  // pick up new SKUs and refreshed Capital Electric prices without having to
+  // open the Materials Library or quote builder first.
+  try { initMaterials(); } catch (e) { console.warn('[GK] initMaterials failed:', e); }
+  // Seed B2B referrer customer records (AF1 etc.) on every boot — idempotent.
+  try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] seedReferrerCustomers failed:', e); }
   // Login is now Microsoft 365 only — no password inputs to wire up.
 
   // Try MSAL auto-login first (resumes existing Microsoft session)
