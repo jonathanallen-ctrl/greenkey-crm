@@ -1807,6 +1807,7 @@ const ICONS = {
 const NAV_DEF = [
   { sec:'Main', items:[
     {page:'dashboard',label:'Dashboard',roles:['admin','tech','sales'],icon:'grid'},
+    {page:'tech',label:'Tech Mode',roles:['admin','tech'],icon:'brief'},
     {page:'jobs',label:'Pipeline',roles:['admin','tech','sales'],icon:'brief'},
     {page:'leads',label:'Leads',roles:['admin','sales'],icon:'star',badge:'0',bc:'a'},
     {page:'customers',label:'Customers',roles:['admin','sales'],icon:'user'},
@@ -1851,12 +1852,22 @@ function buildApp(user) {
 }
 
 // Parse location.hash for supported deep-links and route to the target page.
-// Supported: #tech=LEAD_ID → Tech Mode; #job-LEAD_ID → job detail (legacy).
+// Supported:
+//   #tech            → Tech Mode landing (My Jobs Today list)
+//   #tech=LEAD_ID    → Tech Mode for a specific job (calendar deep-link)
+//   #job-LEAD_ID     → job detail (legacy)
 function _handleDeepLinkHash() {
   const h = (location.hash || '').replace(/^#/,'');
   if (!h) return;
-  const techMatch = h.match(/^tech=(.+)$/);
-  if (techMatch) { openTechMode(decodeURIComponent(techMatch[1])); return; }
+  // #tech=LEAD_ID — drill into a specific job
+  const techWithId = h.match(/^tech=(.+)$/);
+  if (techWithId) { openTechMode(decodeURIComponent(techWithId[1])); return; }
+  // #tech or #tech= — landing page (My Jobs Today)
+  if (h === 'tech' || h === 'tech=') {
+    S.techLeadId = null;
+    navigate('tech');
+    return;
+  }
   const jobMatch = h.match(/^job-(.+)$/);
   if (jobMatch) {
     const id = decodeURIComponent(jobMatch[1]);
@@ -1871,6 +1882,12 @@ window.addEventListener('hashchange', () => { if (S.user) _handleDeepLinkHash();
 function navEl(el) {
   document.querySelectorAll('.ni').forEach(i=>i.classList.remove('active'));
   el.classList.add('active');
+  // When the user clicks the Tech Mode sidebar button, drop any retained
+  // deep-link lead so they land on the My Jobs Today list, not on a stale job.
+  if (el.dataset.page === 'tech') {
+    S.techLeadId = null;
+    if (location.hash !== '#tech') location.hash = 'tech';
+  }
   showPage(el.dataset.page);
   closeSidebar();
 }
@@ -1965,7 +1982,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Scheduling','Users & Access','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Users & Access','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2017,6 +2034,7 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Materials Library':null,
+  'Tech Mode':null,
   'Scheduling':`<div class="stitle">Scheduling</div><div class="sdesc">Settings used by the Scheduler to calculate drive times and build optimal day routes.</div>
     <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
       <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139'}">
@@ -2056,9 +2074,105 @@ function showSec(el, sec) {
   if (el) el.classList.add('active');
   if (sec==='Materials Library') {
     document.getElementById('spanel').innerHTML = renderMaterialsLibrary();
+  } else if (sec==='Tech Mode') {
+    document.getElementById('spanel').innerHTML = renderTechModeSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
   }
+}
+
+function renderTechModeSettings() {
+  const prefs = getPrefs();
+  const commonIds = Array.isArray(prefs.commonMaterialsTech) ? prefs.commonMaterialsTech : [];
+  const allMats = getMaterials();
+  const selected = commonIds.map(id => allMats.find(m => m.id === id)).filter(Boolean);
+  const unselected = allMats.filter(m => !commonIds.includes(m.id))
+                            .sort((a,b) => (a.category||'').localeCompare(b.category||'') || (a.name||'').localeCompare(b.name||''));
+
+  const selectedRows = selected.length ? selected.map((m, i) => `
+    <div class="srow" style="gap:8px">
+      <div style="flex:1"><div class="srl">${escHtml(m.name)}</div><div class="srd">${escHtml(m.category||'')} · ${escHtml(m.unit||'each')} · $${m.unitCost}</div></div>
+      <button class="btn btn-g" style="padding:4px 8px;font-size:11px" onclick="techModeReorderCommon('${m.id}',-1)" title="Move up">↑</button>
+      <button class="btn btn-g" style="padding:4px 8px;font-size:11px" onclick="techModeReorderCommon('${m.id}',1)" title="Move down">↓</button>
+      <button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="techModeRemoveCommon('${m.id}')">Remove</button>
+    </div>
+  `).join('') : `<div style="padding:12px 14px;font-size:12.5px;color:var(--text-muted)">No common materials configured yet. Add some below.</div>`;
+
+  return `<div class="stitle">Tech Mode — Common Materials</div>
+    <div class="sdesc">These show up as one-tap quick-add buttons in the Tech Mode "Materials Used" block. Add the SKUs your techs reach for most often (wire nuts, breakers, common boxes, etc.). Order matters — top items show first.</div>
+
+    <div style="margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Currently configured (${selected.length})</div>
+    ${selectedRows}
+
+    <div style="margin:22px 0 6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Add from catalog</div>
+    <input type="text" id="tm-mat-search" placeholder="Search the materials catalog…" oninput="renderTechModeAddPicker(this.value)"
+      style="width:100%;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-family:var(--font);font-size:14px;color:var(--text-primary);outline:none;box-sizing:border-box;margin-bottom:8px">
+    <div id="tm-mat-picker" style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r)">
+      ${_renderTechModePickerRows(unselected.slice(0,40))}
+    </div>
+    ${unselected.length > 40 ? `<div style="font-size:11px;color:var(--text-muted);padding:6px 0">Showing first 40 — type in the search box above to find specific items.</div>` : ''}`;
+}
+function _renderTechModePickerRows(mats) {
+  if (!mats.length) return `<div style="padding:14px;font-size:12.5px;color:var(--text-muted);text-align:center">No matches.</div>`;
+  return mats.map(m => `
+    <div class="srow" style="gap:8px;padding:8px 12px;border-bottom:1px solid var(--border)">
+      <div style="flex:1"><div class="srl" style="font-size:13px">${escHtml(m.name)}</div><div class="srd">${escHtml(m.category||'')} · ${escHtml(m.unit||'each')} · $${m.unitCost}</div></div>
+      <button class="btn btn-p" style="padding:4px 12px;font-size:11px" onclick="techModeAddCommon('${m.id}')">Add</button>
+    </div>
+  `).join('');
+}
+function renderTechModeAddPicker(query) {
+  const wrap = document.getElementById('tm-mat-picker');
+  if (!wrap) return;
+  const prefs = getPrefs();
+  const commonIds = Array.isArray(prefs.commonMaterialsTech) ? prefs.commonMaterialsTech : [];
+  const allMats = getMaterials();
+  const term = (query||'').trim().toLowerCase();
+  let mats = allMats.filter(m => !commonIds.includes(m.id));
+  if (term) {
+    mats = mats.filter(m =>
+      (m.name||'').toLowerCase().includes(term) ||
+      (m.category||'').toLowerCase().includes(term) ||
+      (m.subcategory||'').toLowerCase().includes(term)
+    );
+  } else {
+    mats = mats.sort((a,b) => (a.category||'').localeCompare(b.category||'') || (a.name||'').localeCompare(b.name||'')).slice(0,40);
+  }
+  wrap.innerHTML = _renderTechModePickerRows(mats.slice(0,80));
+}
+function techModeAddCommon(materialId) {
+  const prefs = getPrefs();
+  const ids = Array.isArray(prefs.commonMaterialsTech) ? prefs.commonMaterialsTech.slice() : [];
+  if (!ids.includes(materialId)) ids.push(materialId);
+  prefs.commonMaterialsTech = ids;
+  savePrefs(prefs);
+  showSec(null, 'Tech Mode');
+  // Re-highlight the Tech Mode tab in the settings nav
+  const tab = [...document.querySelectorAll('.sni')].find(el => el.textContent === 'Tech Mode');
+  if (tab) tab.classList.add('active');
+}
+function techModeRemoveCommon(materialId) {
+  const prefs = getPrefs();
+  prefs.commonMaterialsTech = (prefs.commonMaterialsTech || []).filter(id => id !== materialId);
+  savePrefs(prefs);
+  showSec(null, 'Tech Mode');
+  const tab = [...document.querySelectorAll('.sni')].find(el => el.textContent === 'Tech Mode');
+  if (tab) tab.classList.add('active');
+}
+function techModeReorderCommon(materialId, delta) {
+  const prefs = getPrefs();
+  const ids = (prefs.commonMaterialsTech || []).slice();
+  const idx = ids.indexOf(materialId);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= ids.length) return;
+  ids.splice(idx, 1);
+  ids.splice(newIdx, 0, materialId);
+  prefs.commonMaterialsTech = ids;
+  savePrefs(prefs);
+  showSec(null, 'Tech Mode');
+  const tab = [...document.querySelectorAll('.sni')].find(el => el.textContent === 'Tech Mode');
+  if (tab) tab.classList.add('active');
 }
 
 function renderUsers() {
@@ -7545,6 +7659,17 @@ async function initFilesCache() {
 function getFiles()       { return _filesCache; }
 function getJobFiles(jid) { return _filesCache.filter(f => f.jobId === jid); }
 
+// Returns the best <img src> value for a file record. Falls back through:
+//   1. Local base64 dataUrl (fastest, works offline) — typical for files this device uploaded
+//   2. SharePoint downloadUrl (signed direct link, ~1 hr expiry) — typical for cross-device hydrated stubs
+//   3. SharePoint webUrl (browser link, NOT directly embeddable but works for documents)
+function _imgSrc(f) {
+  if (!f) return '';
+  if (f.dataUrl) return f.dataUrl;
+  if (f.downloadUrl) return f.downloadUrl;
+  return ''; // webUrl is a browser landing page, not safe to use as <img src>
+}
+
 const FM_CATS = [
   { id:'site',      label:'Site Photos',    accept:'image/*' },
   { id:'install',   label:'Install Photos', accept:'image/*' },
@@ -9673,12 +9798,7 @@ function renderTechPage(leadId) {
   const pg = document.getElementById('page-tech');
   if (!pg) return;
   if (!leadId) {
-    pg.innerHTML = `<div class="empty" style="padding:60px 20px">
-      <div class="etitle">No job selected</div>
-      <div class="edesc">Open a scheduled job from the dashboard or tap a calendar link.</div>
-      <div style="margin-top:16px"><button class="btn btn-p" onclick="navigate('dashboard')">Back to Dashboard</button></div>
-    </div>`;
-    return;
+    return _renderTechModeLanding(pg);
   }
   const lead = getLead(leadId);
   if (!lead) {
@@ -9796,7 +9916,7 @@ function renderTechPage(leadId) {
   const siteGrid = sitePhotos.length
     ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
         ${sitePhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','site',${sitePhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
-          <img src="${f.dataUrl}" alt="" style="width:100%;height:100%;object-fit:cover">
+          <img src="${_imgSrc(f)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">
         </div>`).join('')}
       </div>`
     : `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">No site photos on file.</div>`;
@@ -9804,18 +9924,22 @@ function renderTechPage(leadId) {
   const installGrid = installPhotos.length
     ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;margin-top:10px">
         ${installPhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','install',${installPhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
-          <img src="${f.dataUrl}" alt="" style="width:100%;height:100%;object-fit:cover">
+          <img src="${_imgSrc(f)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">
         </div>`).join('')}
       </div>`
     : '';
 
   const photosBlock = `<div class="card" style="padding:12px 14px;margin-bottom:10px">
-    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Site Photos</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Site Photos</div>
+      <button onclick="refreshPhotosFromSP('${leadId}')" title="Pull latest photos from SharePoint" style="background:none;border:none;color:var(--text-muted);font-size:11px;cursor:pointer;padding:2px 6px">↻ Sync</button>
+    </div>
     ${siteGrid}
   </div>
   <div class="card" style="padding:12px 14px;margin-bottom:10px;border:2px solid var(--green);background:rgba(46,204,113,0.04)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div style="font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.5px">Install Photos ${installPhotos.length?`(${installPhotos.length})`:''}</div>
+      <button onclick="refreshPhotosFromSP('${leadId}')" title="Pull latest photos from SharePoint" style="background:none;border:none;color:var(--text-muted);font-size:11px;cursor:pointer;padding:2px 6px">↻ Sync</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="fmOpenCamera('${leadId}','install')" style="flex:1;min-width:120px;padding:14px;background:var(--green);color:#0f1117;border:none;border-radius:var(--r);font-weight:600;font-size:14px;cursor:pointer">📷 Take Photo</button>
@@ -9839,23 +9963,386 @@ function renderTechPage(leadId) {
       </div>`
     : '';
 
+  // ── New Tech Mode blocks (Phase 1) ──
+  const milestoneBlock = _renderTechMilestoneBlock(lead);
+  const materialsBlock = _renderTechMaterialsBlock(lead);
+  const addNoteBlock   = _renderTechAddNoteBlock(lead);
+
   // ── Assemble ──
   pg.innerHTML = `<div style="max-width:640px;margin:0 auto;padding:4px">
-    <button onclick="navigate('dashboard')" style="background:none;border:none;color:var(--text-muted);font-size:12.5px;padding:6px 0;cursor:pointer;margin-bottom:8px">← Back to Dashboard</button>
+    <button onclick="navigate('tech')" style="background:none;border:none;color:var(--text-muted);font-size:12.5px;padding:6px 0;cursor:pointer;margin-bottom:8px">← My Jobs Today</button>
     ${hdrBlock}
     ${contactActions}
     ${payBanner}
+    ${milestoneBlock}
     ${scopeBlock}
     ${snapBlock}
     ${wireBlock}
     ${chargerBlock}
+    ${materialsBlock}
     ${photosBlock}
+    ${addNoteBlock}
     ${notesBlock}
     <div style="text-align:center;padding:16px 0;font-size:11px;color:var(--text-muted)">
       Job ID: <span style="font-family:var(--mono)">${escHtml(leadId)}</span>
     </div>
   </div>`;
   document.getElementById('content').scrollTop = 0;
+}
+
+// ── My Jobs Today landing (Tech Mode landing page when no specific job is open) ──
+function _renderTechModeLanding(pg) {
+  const me = S.user || {};
+  const leads = getLeads().filter(l => l.stage !== 'archived' && l.stage !== 'closed-won' && l.stage !== 'closed-lost');
+  const custs = getCustomers();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+  // Today: jobs scheduled today + jobs marked in-progress
+  // Upcoming: jobs scheduled within the next 7 days
+  // Active: anything else still in active pipeline (a backstop for techs without scheduled jobs)
+  function _scheduledDate(l) {
+    return l.milestones?.installScheduled?.date || l.scheduleAt || '';
+  }
+  function _isAssignedToMe(l) {
+    if (!me.id) return true; // before login resolves, show everything
+    const assignedTo = l.assignedTechId || l.assignedTo || l.techId;
+    if (!assignedTo) return true; // unassigned → all techs see it
+    return assignedTo === me.id || assignedTo === me.name;
+  }
+  const todayJobs    = leads.filter(l => _isAssignedToMe(l) && _scheduledDate(l).slice(0,10) === todayStr);
+  const upcomingJobs = leads.filter(l => {
+    if (!_isAssignedToMe(l)) return false;
+    const d = _scheduledDate(l).slice(0,10);
+    if (!d || d === todayStr) return false;
+    const dt = new Date(d); if (isNaN(dt)) return false;
+    const days = Math.round((dt - today) / 86400000);
+    return days > 0 && days <= 7;
+  });
+  const otherActive  = leads.filter(l =>
+    _isAssignedToMe(l) &&
+    !todayJobs.includes(l) && !upcomingJobs.includes(l) &&
+    (l.stage === 'active' || l.stage === 'pre-install' || l.stage === 'install' || l.stage === 'in-progress')
+  );
+
+  function _renderJobCard(l, accent) {
+    const cust = custs.find(c => c.id === l.customerId);
+    const name = cust ? custFullName(cust) : (l.customerName || 'Unknown');
+    const addr = [l.siteStreet, l.siteCity].filter(Boolean).join(', ');
+    const sched = _scheduledDate(l).slice(0,10);
+    const t = (typeof getJobType === 'function') ? getJobType(l.jobType) : null;
+    return `<div onclick="openTechMode('${l.id}')"
+      style="cursor:pointer;background:var(--bg-elevated);border:1px solid var(--border);${accent?`border-left:4px solid ${accent};`:''}border-radius:var(--r);padding:14px;margin-bottom:8px;transition:transform 0.1s">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:600;color:var(--text-primary);line-height:1.3">${escHtml(name)}</div>
+          ${addr?`<div style="font-size:12.5px;color:var(--text-secondary);margin-top:3px">${escHtml(addr)}</div>`:''}
+          <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">
+            ${t?`<span class="chip" style="background:var(--blue-dim);color:var(--blue);font-size:10.5px">${escHtml(t.label)}</span>`:''}
+            ${sourceChip(l.source)}
+            ${sched?`<span class="chip" style="background:var(--bg-surface);border:1px solid var(--border);font-size:10.5px;color:var(--text-muted)">📅 ${escHtml(sched)}</span>`:''}
+          </div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" style="flex-shrink:0;color:var(--text-muted);margin-top:2px"><path d="M6 4l4 4-4 4"/></svg>
+      </div>
+    </div>`;
+  }
+
+  pg.innerHTML = `<div style="max-width:640px;margin:0 auto;padding:4px">
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Tech Mode</div>
+      <div style="font-size:22px;font-weight:600;margin-top:4px;line-height:1.2">My Jobs Today</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-top:4px">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}</div>
+    </div>
+
+    ${todayJobs.length ? `
+      <div style="font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 8px">Scheduled today (${todayJobs.length})</div>
+      ${todayJobs.map(l => _renderJobCard(l, 'var(--green)')).join('')}
+    ` : `
+      <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:18px;text-align:center;margin-bottom:14px">
+        <div style="font-size:14px;color:var(--text-secondary)">No jobs scheduled for today</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Open a job below or check back later</div>
+      </div>
+    `}
+
+    ${upcomingJobs.length ? `
+      <div style="font-size:11px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px">Coming up this week (${upcomingJobs.length})</div>
+      ${upcomingJobs.map(l => _renderJobCard(l, 'var(--blue)')).join('')}
+    ` : ''}
+
+    ${otherActive.length ? `
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px">Other active jobs (${otherActive.length})</div>
+      ${otherActive.slice(0,8).map(l => _renderJobCard(l)).join('')}
+      ${otherActive.length > 8 ? `<div style="text-align:center;font-size:12px;color:var(--text-muted);padding:8px"><a onclick="navigate('jobs')" style="cursor:pointer;color:var(--blue)">View all in Pipeline →</a></div>` : ''}
+    ` : ''}
+
+    ${(!todayJobs.length && !upcomingJobs.length && !otherActive.length) ? `
+      <div class="empty" style="padding:40px 20px">
+        <div class="etitle">No active jobs assigned to you</div>
+        <div class="edesc">When jobs are scheduled to your name, they'll show up here.</div>
+        <div style="margin-top:14px"><button class="btn btn-g" onclick="navigate('jobs')">Browse Pipeline</button></div>
+      </div>
+    ` : ''}
+
+    <div style="text-align:center;font-size:11px;color:var(--text-muted);padding:24px 0 8px;line-height:1.6">
+      Tip: tap your browser's Share button → "Add to Home Screen"<br>to install the CRM as an app on this phone.
+    </div>
+  </div>`;
+  document.getElementById('content').scrollTop = 0;
+}
+
+// ── Milestone toggles for Tech Mode ──
+const TECH_MODE_MILESTONES = [
+  { id: 'arrived',          label: '🚐 On site' },
+  { id: 'installStarted',   label: '🔨 Install started' },
+  { id: 'installComplete',  label: '⚡ Install complete' },
+  { id: 'cleanupDone',      label: '🧹 Cleanup done' }
+];
+function _renderTechMilestoneBlock(lead) {
+  const ms = lead.milestones || {};
+  const tiles = TECH_MODE_MILESTONES.map(m => {
+    const done = !!ms[m.id]?.done;
+    const date = ms[m.id]?.date || '';
+    return `<button onclick="onTechMilestoneToggle('${lead.id}','${m.id}')"
+      style="flex:1;min-width:120px;padding:10px 8px;background:${done?'var(--green-dim)':'var(--bg-elevated)'};border:1px solid ${done?'var(--green)':'var(--border)'};border-radius:var(--r);font-family:var(--font);font-size:13px;font-weight:500;color:${done?'var(--green)':'var(--text-primary)'};cursor:pointer;text-align:center;line-height:1.3">
+        ${done?'✓ ':''}${m.label}
+        ${done && date?`<div style="font-size:10.5px;color:var(--text-muted);font-weight:400;margin-top:3px">${escHtml(date.slice(0,16).replace('T',' '))}</div>`:''}
+      </button>`;
+  }).join('');
+  return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">Job Status</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${tiles}</div>
+  </div>`;
+}
+function onTechMilestoneToggle(leadId, msId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const ms = arr[idx].milestones || {};
+  const cur = ms[msId] || {};
+  const next = !cur.done;
+  ms[msId] = next ? {
+    done: true,
+    date: new Date().toISOString(),
+    by: S.user?.name || 'Tech'
+  } : { done: false };
+  arr[idx].milestones = ms;
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  renderTechPage(leadId);
+}
+
+// ── Materials Used block for Tech Mode ──
+// Three input paths: quick-pick common materials, search the catalog, manual add.
+// Saved to lead.materialsUsed = [{ id, materialId?, name, unit, qty, unitPrice, addedBy, addedAt }]
+function _renderTechMaterialsBlock(lead) {
+  const used = lead.materialsUsed || [];
+  const prefs = (typeof getPrefs === 'function') ? getPrefs() : {};
+  const commonIds = Array.isArray(prefs.commonMaterialsTech) ? prefs.commonMaterialsTech : [];
+  const mats = (typeof getMaterials === 'function') ? getMaterials() : [];
+  const commonMats = commonIds.map(id => mats.find(m => m.id === id)).filter(Boolean);
+
+  const usedRows = used.length ? used.map(u => {
+    const total = (parseFloat(u.qty)||0) * (parseFloat(u.unitPrice)||0);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500">${escHtml(u.name)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">${escHtml(u.unit||'each')} · added by ${escHtml(u.addedBy||'?')}</div>
+      </div>
+      <input type="number" step="0.5" min="0" value="${u.qty}" onchange="updateTechMaterialQty('${lead.id}','${u.id}',this.value)" style="width:60px;padding:6px 8px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-family:var(--mono);font-size:13px;text-align:right">
+      <div style="font-family:var(--mono);font-size:12.5px;color:var(--green);min-width:64px;text-align:right">$${total.toFixed(2)}</div>
+      <button onclick="removeTechMaterial('${lead.id}','${u.id}')" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1">×</button>
+    </div>`;
+  }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No materials added to this job yet.</div>`;
+
+  const usedTotal = used.reduce((s,u)=>s+(parseFloat(u.qty)||0)*(parseFloat(u.unitPrice)||0), 0);
+
+  const commonPicks = commonMats.length ? commonMats.map(m => {
+    return `<button onclick="addTechMaterial('${lead.id}','${m.id}')"
+      style="padding:8px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:20px;font-family:var(--font);font-size:12px;color:var(--text-primary);cursor:pointer;white-space:nowrap">
+      + ${escHtml(m.name)}
+    </button>`;
+  }).join('') : `<div style="font-size:11.5px;color:var(--text-muted);padding:6px 0">
+    No common materials configured. ${(S.user?.role==='admin')?'<a onclick="navigate(\'settings\');setTimeout(()=>showSec&&showSec(null,\'Tech Mode\'),50)" style="cursor:pointer;color:var(--blue)">Configure in Settings →</a>':'Ask the office to set these up.'}
+  </div>`;
+
+  return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Materials Used</div>
+      ${used.length?`<div style="font-family:var(--mono);font-size:12.5px;color:var(--green);font-weight:600">$${usedTotal.toFixed(2)} total</div>`:''}
+    </div>
+
+    <!-- Common materials quick-pick -->
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Quick add</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${commonPicks}</div>
+
+    <!-- Search box -->
+    <div style="position:relative;margin-bottom:8px">
+      <input type="text" id="tech-mat-search-${lead.id}" placeholder="Search materials catalog…" oninput="onTechMaterialSearch('${lead.id}',this.value)"
+        style="width:100%;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-family:var(--font);font-size:14px;color:var(--text-primary);outline:none;box-sizing:border-box">
+      <div id="tech-mat-search-results-${lead.id}" style="position:absolute;top:100%;left:0;right:0;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);margin-top:4px;max-height:240px;overflow-y:auto;z-index:50;display:none;box-shadow:var(--shadow-drop)"></div>
+    </div>
+
+    <!-- Manual add -->
+    <button onclick="openTechManualMaterialForm('${lead.id}')"
+      style="width:100%;padding:10px;background:transparent;border:1px dashed var(--border);border-radius:var(--r);font-family:var(--font);font-size:13px;color:var(--text-muted);cursor:pointer">
+      + Add manual line item (one-off, not in catalog)
+    </button>
+    <div id="tech-mat-manual-${lead.id}"></div>
+
+    <!-- Used list -->
+    <div style="margin-top:14px">${usedRows}</div>
+  </div>`;
+}
+function onTechMaterialSearch(leadId, q) {
+  const resultsEl = document.getElementById('tech-mat-search-results-' + leadId);
+  if (!resultsEl) return;
+  const term = (q||'').trim().toLowerCase();
+  if (!term) { resultsEl.style.display='none'; resultsEl.innerHTML=''; return; }
+  const mats = getMaterials();
+  const hits = mats.filter(m =>
+    (m.name||'').toLowerCase().includes(term) ||
+    (m.category||'').toLowerCase().includes(term) ||
+    (m.subcategory||'').toLowerCase().includes(term)
+  ).slice(0, 12);
+  if (!hits.length) {
+    resultsEl.style.display='block';
+    resultsEl.innerHTML = `<div style="padding:10px 12px;font-size:12.5px;color:var(--text-muted)">No matches. Use "+ Add manual line item" for one-offs.</div>`;
+    return;
+  }
+  resultsEl.style.display='block';
+  resultsEl.innerHTML = hits.map(m => {
+    const sell = (m.unitCost||0) * (1 + (m.markup||0)/100);
+    return `<div onclick="addTechMaterial('${leadId}','${m.id}')"
+      style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500">${escHtml(m.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(m.category||'')} · ${escHtml(m.unit||'each')}</div>
+      </div>
+      <div style="font-family:var(--mono);font-size:12.5px;color:var(--green);font-weight:500">$${sell.toFixed(2)}</div>
+    </div>`;
+  }).join('');
+}
+function addTechMaterial(leadId, materialId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const mat = getMaterials().find(m => m.id === materialId);
+  if (!mat) { toast('Material not found','error'); return; }
+  const sellPrice = (mat.unitCost||0) * (1 + (mat.markup||0)/100);
+  arr[idx].materialsUsed = arr[idx].materialsUsed || [];
+  arr[idx].materialsUsed.push({
+    id: 'tu-' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
+    materialId: mat.id,
+    name: mat.name,
+    unit: mat.unit || 'each',
+    qty: 1,
+    unitPrice: Math.round(sellPrice * 100) / 100,
+    addedBy: S.user?.name || 'Tech',
+    addedAt: new Date().toISOString()
+  });
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  // Clear search box and refresh
+  const searchEl = document.getElementById('tech-mat-search-' + leadId);
+  if (searchEl) searchEl.value = '';
+  const resultsEl = document.getElementById('tech-mat-search-results-' + leadId);
+  if (resultsEl) { resultsEl.style.display='none'; resultsEl.innerHTML=''; }
+  renderTechPage(leadId);
+}
+function updateTechMaterialQty(leadId, rowId, qty) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const used = arr[idx].materialsUsed || [];
+  const ridx = used.findIndex(u => u.id === rowId);
+  if (ridx < 0) return;
+  used[ridx].qty = parseFloat(qty) || 0;
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  renderTechPage(leadId);
+}
+function removeTechMaterial(leadId, rowId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  arr[idx].materialsUsed = (arr[idx].materialsUsed || []).filter(u => u.id !== rowId);
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  renderTechPage(leadId);
+}
+function openTechManualMaterialForm(leadId) {
+  const wrap = document.getElementById('tech-mat-manual-' + leadId);
+  if (!wrap) return;
+  if (wrap.innerHTML) { wrap.innerHTML=''; return; } // toggle off if open
+  wrap.innerHTML = `<div style="margin-top:10px;padding:12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r)">
+    <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:10px">
+      <input type="text" id="tech-mat-mn-${leadId}" placeholder="Material name (e.g. Wago lever nut)" style="padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);font-size:14px;font-family:var(--font);color:var(--text-primary);outline:none">
+      <div style="display:flex;gap:8px">
+        <input type="number" id="tech-mat-mq-${leadId}" placeholder="Qty" min="0" step="0.5" value="1" style="flex:1;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);font-size:14px;font-family:var(--mono);color:var(--text-primary);outline:none">
+        <input type="number" id="tech-mat-mp-${leadId}" placeholder="Unit $" min="0" step="0.01" style="flex:1;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);font-size:14px;font-family:var(--mono);color:var(--text-primary);outline:none">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-p" onclick="saveTechManualMaterial('${leadId}')" style="flex:1">Add to job</button>
+      <button class="btn btn-g" onclick="document.getElementById('tech-mat-manual-${leadId}').innerHTML=''">Cancel</button>
+    </div>
+  </div>`;
+}
+function saveTechManualMaterial(leadId) {
+  const name = (document.getElementById('tech-mat-mn-' + leadId)?.value || '').trim();
+  const qty  = parseFloat(document.getElementById('tech-mat-mq-' + leadId)?.value) || 0;
+  const price= parseFloat(document.getElementById('tech-mat-mp-' + leadId)?.value) || 0;
+  if (!name) { toast('Enter a material name','error'); return; }
+  if (qty <= 0) { toast('Quantity must be > 0','error'); return; }
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  arr[idx].materialsUsed = arr[idx].materialsUsed || [];
+  arr[idx].materialsUsed.push({
+    id: 'tu-' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
+    name, unit: 'each', qty,
+    unitPrice: Math.round(price * 100) / 100,
+    addedBy: S.user?.name || 'Tech',
+    addedAt: new Date().toISOString(),
+    manual: true
+  });
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  renderTechPage(leadId);
+}
+
+// ── Add Note composer for Tech Mode ──
+function _renderTechAddNoteBlock(lead) {
+  return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Add a Note</div>
+    <textarea id="tech-note-${lead.id}" placeholder="What happened? Anything the office should know?" rows="3"
+      style="width:100%;min-height:72px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-family:var(--font);font-size:14px;color:var(--text-primary);outline:none;resize:vertical;line-height:1.4;box-sizing:border-box"></textarea>
+    <button onclick="saveTechNote('${lead.id}')" class="btn btn-p" style="margin-top:8px;width:100%;padding:12px">
+      Save Note
+    </button>
+  </div>`;
+}
+function saveTechNote(leadId) {
+  const ta = document.getElementById('tech-note-' + leadId);
+  if (!ta) return;
+  const text = (ta.value || '').trim();
+  if (!text) { toast('Type something first', 'warning'); return; }
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  arr[idx].jobNotes = arr[idx].jobNotes || [];
+  arr[idx].jobNotes.push({
+    id: 'jn-' + Date.now(),
+    text,
+    authorId: S.user?.id || '',
+    authorName: S.user?.name || 'Tech',
+    timestamp: new Date().toISOString()
+  });
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  ta.value = '';
+  toast('Note saved', 'success');
+  renderTechPage(leadId);
 }
 
 function renderSchedulerPage() {
@@ -10884,6 +11371,19 @@ async function _spInit() {
   _spList = await _spEnsureList();
   _spDrive = await _spEnsureDrive();
   console.log('[GK] SharePoint initialized. Site:', _spSite);
+  // Cross-device photo hydration — pull metadata for any photos uploaded from
+  // other devices (e.g., the user's phone) so they render on this device.
+  // Fire-and-forget; failures are non-fatal.
+  setTimeout(() => {
+    _hydratePhotosFromSP().then(r => {
+      if (r && r.added > 0) {
+        // Refresh the active page to show newly-hydrated photos
+        if (S.page === 'tech' && S.techLeadId) renderTechPage(S.techLeadId);
+        else if (S.page === 'jobs' && S.jobDetailId) renderJobDetail(S.jobDetailId);
+        else if (S.page === 'files') renderFilesPage();
+      }
+    }).catch(e => console.warn('[GK] Boot photo hydration failed:', e));
+  }, 2000); // small delay so the initial UI render isn't blocked
 }
 
 async function _spEnsureList() {
@@ -11048,6 +11548,115 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
     console.warn('[GK] SP photo upload failed:', e);
     return null;
   }
+}
+
+// ── PHOTO LIBRARY HYDRATION FROM SHAREPOINT ──
+// Cross-device gap fix: photos uploaded from one device (e.g., a phone) live in
+// SharePoint but the file *metadata* is in that device's IndexedDB only. Other
+// devices (e.g., the desktop CRM) never see the photo. This function lists the
+// SharePoint photo library and creates stub IndexedDB records for any SP photo
+// not already represented locally. The render path uses the SP-signed
+// downloadUrl (~1 hr expiry) when local dataUrl is missing.
+//
+// Filter scope: pass jobId to limit hydration to that job's folder; omit to
+// hydrate everything (used at boot).
+async function _hydratePhotosFromSP(jobId) {
+  if (!_gToken || !_spDrive) return { added: 0, skipped: 0 };
+  try {
+    // Resolve the photo library folder to its driveItem ID
+    const rootPath = jobId ? `${SP_PHOTO_LIB_NAME}/${jobId}` : SP_PHOTO_LIB_NAME;
+    const folderResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(rootPath)}`, {
+      headers: { 'Authorization': `Bearer ${_gToken}` }
+    });
+    if (folderResp.status === 404) return { added: 0, skipped: 0 }; // folder doesn't exist yet
+    if (!folderResp.ok) throw new Error('Folder lookup failed: ' + folderResp.status);
+    const folder = await folderResp.json();
+
+    // Use children listing recursively (delta would be cleaner but adds state).
+    // Walk: jobId folders → category folders → files.
+    const filesFound = [];
+    async function _walk(itemId, pathSoFar) {
+      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200&$select=id,name,webUrl,size,file,folder,@microsoft.graph.downloadUrl`;
+      while (next) {
+        const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+        if (!r.ok) break;
+        const data = await r.json();
+        for (const item of (data.value||[])) {
+          if (item.folder) {
+            await _walk(item.id, pathSoFar.concat(item.name));
+          } else if (item.file) {
+            filesFound.push({ item, path: pathSoFar });
+          }
+        }
+        next = data['@odata.nextLink'] || null;
+      }
+    }
+    await _walk(folder.id, jobId ? [jobId] : []);
+
+    // Build a fast lookup of existing local records by spDriveItemId AND by name+jobId
+    const existingByDriveId = new Set();
+    const existingByNameJob = new Set();
+    for (const f of _filesCache) {
+      if (f.spDriveItemId) existingByDriveId.add(f.spDriveItemId);
+      if (f.name && f.jobId) existingByNameJob.add(f.jobId + '|' + f.name);
+    }
+
+    let added = 0, skipped = 0;
+    for (const { item, path } of filesFound) {
+      // path = [jobId, category]; if we narrowed to jobId at root, path = [category]
+      const itemJobId  = jobId || path[0] || '';
+      const category   = jobId ? (path[0] || 'site') : (path[1] || 'site');
+      if (!itemJobId) { skipped++; continue; }
+      // Already represented locally?
+      if (existingByDriveId.has(item.id)) { skipped++; continue; }
+      if (existingByNameJob.has(itemJobId + '|' + item.name)) { skipped++; continue; }
+
+      const rec = {
+        id: 'sp-' + item.id,
+        jobId: itemJobId,
+        category,
+        name: item.name,
+        size: item.size || 0,
+        mimeType: (item.file && item.file.mimeType) || 'image/jpeg',
+        uploadedBy: 'SharePoint',                                  // origin tag
+        uploadedAt: new Date().toISOString(),
+        spDriveItemId: item.id,
+        spUrl: item.webUrl || '',
+        downloadUrl: item['@microsoft.graph.downloadUrl'] || '',  // signed direct link
+        downloadUrlFetchedAt: Date.now(),
+        dataUrl: null
+      };
+      _filesCache.push(rec);
+      try { await _idbPut(rec); } catch(_) {}
+      added++;
+    }
+    if (added > 0) console.log('[GK] Hydrated ' + added + ' photo(s) from SharePoint (skipped ' + skipped + ' already local).');
+    return { added, skipped };
+  } catch (e) {
+    console.warn('[GK] _hydratePhotosFromSP failed:', e);
+    return { added: 0, skipped: 0, error: e.message };
+  }
+}
+
+// User-facing "Refresh photos from SharePoint" button handler. Pulls only the
+// requested job's photos (faster), refreshes the page, and toasts the result.
+async function refreshPhotosFromSP(jobId) {
+  if (!_gToken || !_spDrive) {
+    toast('Sign in to Microsoft to sync from SharePoint','warning');
+    return;
+  }
+  toast('Pulling photos from SharePoint…','info');
+  const result = await _hydratePhotosFromSP(jobId);
+  if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
+  if (result.added === 0) {
+    toast('Already up to date','success');
+  } else {
+    toast(`Pulled ${result.added} new photo${result.added===1?'':'s'} from SharePoint`,'success');
+  }
+  // Re-render whichever photo view is active
+  if (S.page === 'tech' && S.techLeadId === jobId) renderTechPage(jobId);
+  if (S.page === 'jobs' && S.jobDetailId === jobId) renderJobDetail(jobId);
+  if (S.page === 'files') renderFilesPage();
 }
 
 // ── AUTO-BACKUP TO SHAREPOINT DRIVE ──
