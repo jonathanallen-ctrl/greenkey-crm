@@ -3387,8 +3387,10 @@ function getQQPricing(){
     hvacDisconnectNonFused:75, hvacDisconnectFused:150,
     // Circuit Replacement — flat fees by amperage tier (no permit)
     circuitReplaceUnder30A:350, circuitReplace30To50A:450, circuitReplace60Plus:600,
-    // Panel Replacement — base labor + per-breaker re-termination
-    panelReplaceBase:1500, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    // Panel Replacement — base labor + per-breaker re-termination + always-included surge protector
+    // Base bumped 2026-05-02: $1500 → $2000 to absorb the typical "we ran into something" overage on swaps.
+    panelReplaceBase:2000, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
     // Existing add-ons
     tandemBreaker:40, post:150,
     // Permits / fees
@@ -3579,9 +3581,16 @@ function initMaterials(){
 function fmt$(n){if(!n&&n!==0)return'—';return'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 
 function quoteStatusChip(s){
-  const m={draft:'chip-draft Draft',delivered:'chip-delivered Delivered',approved:'chip-approved Approved',invoiced:'chip-invoiced Invoiced'};
+  const m={
+    draft:                'chip-draft Draft',
+    delivered:            'chip-delivered Delivered',
+    approved:             'chip-approved Approved',
+    'contingent-approved':'chip-delivered Contingent', // styled like delivered for now
+    declined:             'chip-muted Declined',
+    invoiced:             'chip-invoiced Invoiced'
+  };
   const p=(m[s]||'chip-muted Unknown').split(' ');
-  return `<span class="chip ${p[0]}">${p[1]}</span>`;
+  return `<span class="chip ${p[0]}">${p.slice(1).join(' ')}</span>`;
 }
 
 // ── QUOTES LIST PAGE ──
@@ -3685,6 +3694,19 @@ function startQuoteBuilder(){
   const _prefs = getPrefs();
   const _isPlatformNew = ['Qmerit','Electrum','Treehouse'].includes(lead.source);
   const _defaultBuffer = _isPlatformNew ? 0 : ((typeof _prefs.paymentBuffer === 'number') ? _prefs.paymentBuffer : 3);
+  // Auto-default the contingent-on-utility flag for utility-coordinated job
+  // types. Customer accepts contingently, pays $200 site visit fee, then
+  // gets a final quote with the utility cost included.
+  const _isUtilityNew = (lead.jobType === 'new-service' || lead.jobType === 'service-upgrade');
+  // Auto-set Bill-To to the matching referrer customer when the lead's source
+  // is a B2B referrer (AF1, etc.). This flips the buffer to 0 automatically
+  // and routes the PDF / email to the referrer's billing flow without the
+  // user having to remember to set Bill-To manually.
+  let _autoBillTo = null;
+  if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(lead.source)) {
+    const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
+    if (ref) _autoBillTo = ref.id;
+  }
   const nq={
     id:'qt-'+Date.now(), leadId, customerId:lead.customerId, source:lead.source, jobType:lead.jobType,
     type:qtype, status:'draft', permitFee: lead.permitFee || (lead.source==='Qmerit' ? 250 : 200),
@@ -3693,6 +3715,9 @@ function startQuoteBuilder(){
     lines:[], laborHours:0, laborRate:160, rentals:[],
     scope:'', inclusions:'', exclusions:'', notes:'', quoteTotal:0,
     paymentBuffer:_defaultBuffer,
+    contingentOnUtility: _isUtilityNew,
+    utilityDelayed:      _isUtilityNew,
+    billToCustomerId:    _autoBillTo,
   };
   upsertQuote(nq);
   openQuoteBuilder(nq.id);
@@ -3721,6 +3746,12 @@ function closeQuoteBuilder(){
 
 function renderQuoteBuilder(qid){
   initMaterials();
+  // Fire-and-forget poll for any customer accept/decline action that may
+  // have come in since this quote was last viewed. The result re-renders
+  // the builder if it lands a new state.
+  if (typeof hydrateQuoteStatusFromServer === 'function') {
+    setTimeout(() => { try { hydrateQuoteStatusFromServer(qid); } catch(_){} }, 250);
+  }
   const q=getQuote(qid); if(!q){closeQuoteBuilder();return;}
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
@@ -4294,9 +4325,20 @@ function _renderQQ_PanelReplacement(q) {
     <div class="qq-section">
       <div class="qq-title">Pricing Breakdown</div>
       <div style="font-size:11.5px;color:var(--text-muted);line-height:1.55">
-        Base panel-swap labor: <strong>$${getQQPricing().panelReplaceBase.toLocaleString()}</strong> (full or partial-day work depending on access).<br>
+        Base panel-swap labor: <strong>$${getQQPricing().panelReplaceBase.toLocaleString()}</strong> (covers typical access surprises, full-day work).<br>
         Per-breaker re-termination: <strong>$${getQQPricing().panelReplacePerBreaker}</strong> × ${breakerCount} = $${(getQQPricing().panelReplacePerBreaker * breakerCount).toLocaleString()}.<br>
-        Hardware (panel itself + main breaker + ground bar kit) ships separately as materials.
+        Hardware (panel itself + main breaker + ground bar kit) added as materials with markup.<br>
+        Whole-home surge protector: <strong>$${getQQPricing().panelSurgeProtector}</strong> (default-included; uncheck below to remove).
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Whole-Home Surge Protector</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-panel-surge" ${(qq.panelIncludeSurge !== false) ? 'checked' : ''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Include Type 2 whole-home surge protector — <strong>$${getQQPricing().panelSurgeProtector}</strong></span>
+      </label>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+        Standard practice on every panel replacement. Protects appliances, electronics, HVAC controls, and the panel itself from utility-side surges. Uncheck only if the customer specifically declines.
       </div>
     </div>
     <div class="qq-section">
@@ -4619,7 +4661,8 @@ function _onQQChange_CircuitReplacement(qid) {
   }, permitFee);
 }
 
-// Panel Replacement math: base labor + per-breaker re-termination + panel hardware.
+// Panel Replacement math: base labor + per-breaker re-termination + panel hardware
+// + default-included whole-home surge protector.
 function _onQQChange_PanelReplacement(qid) {
   const q = getQuote(qid); if (!q) return;
   const p = getQQPricing();
@@ -4627,6 +4670,9 @@ function _onQQChange_PanelReplacement(qid) {
   const slots = parseInt(document.getElementById('qq-panel-slots')?.value) || 40;
   const breakerCount = parseInt(document.getElementById('qq-panel-breaker-count')?.value) || 12;
   const serviceAmps = parseInt(document.getElementById('qq-panel-amps')?.value) || 200;
+  // Surge protector — defaults to included; explicit false only when user unchecks
+  const surgeEl = document.getElementById('qq-panel-surge');
+  const includeSurge = surgeEl ? surgeEl.checked : (q.qq?.panelIncludeSurge !== false);
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
   const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
@@ -4643,6 +4689,8 @@ function _onQQChange_PanelReplacement(qid) {
   // Panel hardware — use 200A by default, 100A for smaller services
   const hardwareCost = serviceAmps >= 200 ? p.panelHardware200A : p.panelHardware100A;
   lm += Math.round(hardwareCost * 1.30 * 100) / 100; // 30% markup on hardware
+  // Whole-home surge protector (default-included)
+  if (includeSurge) lm += p.panelSurgeProtector;
 
   lm += difficultyFee;
   lm += travelAdder;
@@ -4655,6 +4703,7 @@ function _onQQChange_PanelReplacement(qid) {
     panelBreakerCount: breakerCount,
     panelServiceAmps: serviceAmps,
     panelHardwareCost: hardwareCost,
+    panelIncludeSurge: includeSurge,
     difficultyFee,
     travelMinutes,
     travelAdder,
@@ -4826,7 +4875,8 @@ function autoScope(q){
     const slots = qq.panelSlots || 40;
     const amps = qq.panelServiceAmps || 200;
     const breakers = qq.panelBreakerCount || 12;
-    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. All ${breakers} existing branch circuits will be re-terminated to the new panel using current NEC standards (AFCI/GFCI breakers as required by code for affected circuits). Includes panel hardware, main breaker, ground bar kit, and labor for swap, re-termination, and rough-in inspection.`;
+    const surge = (qq.panelIncludeSurge !== false) ? ' Includes a Type 2 whole-home surge protector at the panel.' : '';
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. All ${breakers} existing branch circuits will be re-terminated to the new panel using current NEC standards (AFCI/GFCI breakers as required by code for affected circuits). Includes panel hardware, main breaker, ground bar kit, and labor for swap, re-termination, and rough-in inspection.${surge}`;
   }
 
   // Battery / V2H / Service / Generator — fallback (Detailed Quote drives the scope)
@@ -4858,6 +4908,9 @@ function autoInclusions(q){
   if (q.jobType === 'panel-replacement') {
     lines.push('• Re-termination of all existing branch circuits to the new panel');
     lines.push('• Panel hardware, main breaker, ground bar kit, and required AFCI/GFCI breakers');
+    if (q.qq?.panelIncludeSurge !== false) {
+      lines.push('• Whole-home Type 2 surge protector at the panel');
+    }
   }
   if (q.jobType === 'hvac-circuit' && q.qq?.hvacDisconnect && q.qq.hvacDisconnect !== 'none') {
     lines.push('• Disconnect at the HVAC equipment');
@@ -5417,9 +5470,14 @@ function refreshQBSidebar(qid){
   const q=getQuote(qid);if(!q)return;
   const isAdmin=S.user?.role==='admin', isQmerit=q.source==='Qmerit';
   const totals=calcQuoteTotals(q);
-  const children=sb.children;
-  if(children[0]) children[0].outerHTML=renderTotalsBox(q,totals,isAdmin,isQmerit);
-  if(isAdmin&&children[1]&&children[1].classList.contains('margin-box')) children[1].outerHTML=renderMarginBox(q,totals,isQmerit);
+  // Use class-based lookup (not children[0]) so this keeps working as we add
+  // / reorder cards above the totals box (Job Type, Source, Bill-To, etc.).
+  const totalsEl = sb.querySelector('.tot-box');
+  if (totalsEl) totalsEl.outerHTML = renderTotalsBox(q,totals,isAdmin,isQmerit);
+  if (isAdmin) {
+    const marginEl = sb.querySelector('.margin-box');
+    if (marginEl) marginEl.outerHTML = renderMarginBox(q,totals,isQmerit);
+  }
 }
 
 // ── SAVE / STATUS ──
@@ -5470,8 +5528,16 @@ async function emailQuote(qid){
   const q=getQuote(qid);if(!q)return;
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
-  const toEmail=cust?.email||lead?.customerEmail||'';
-  const custFirst=(cust?cust.firstName:lead?.customerName?.split(' ')[0])||'there';
+  // For B2B-referrer-billed quotes, default the recipient to the referrer's
+  // billing email instead of the homeowner's. User can still override in the
+  // modal before sending.
+  const _billTo = (typeof getQuoteBillToCustomer === 'function') ? getQuoteBillToCustomer(q) : null;
+  const _isReferrerBilled = (typeof isQuoteBilledToReferrer === 'function') && isQuoteBilledToReferrer(q);
+  const toEmail = (_isReferrerBilled && _billTo?.email) ? _billTo.email
+                : (cust?.email || lead?.customerEmail || '');
+  const custFirst = _isReferrerBilled
+    ? (((_billTo?.firstName) || (_billTo?.businessName) || 'there').split(/\s+/)[0])
+    : ((cust?cust.firstName:lead?.customerName?.split(' ')[0]) || 'there');
   const total=fmt$(q.quoteTotal||0);
   const addr=lead?.siteStreet?`${lead.siteStreet}, ${lead.siteCity||''}`:'your property';
   // Project phrase derived from job type — used throughout the email copy so
@@ -5708,7 +5774,31 @@ async function sendQuoteEmail(){
   if (!_pendingEmail) return;
   const toEmail  = document.getElementById('em-to').value.trim();
   const subject  = document.getElementById('em-subject').value;
-  const body     = document.getElementById('em-body').value;
+  let   body     = document.getElementById('em-body').value;
+
+  // Mint Accept/Decline tokens for direct-customer emails and append URLs.
+  // Skipped for platform jobs (Qmerit / Electrum / Treehouse handle their own)
+  // and custom ad-hoc emails (no quote tied to it).
+  const _qidForButtons = _pendingEmail && _pendingEmail.qid;
+  const _qForButtons   = _qidForButtons ? getQuote(_qidForButtons) : null;
+  const _isDirectQuote = _qForButtons && !PLATFORM_PAY_SOURCES.includes(_qForButtons.source) && !_pendingEmail.isCustomEmail;
+  if (_isDirectQuote && typeof _smsConfigured === 'function' && _smsConfigured()) {
+    try {
+      const tokenBundle = await _mintQuoteActionToken(_qForButtons);
+      if (tokenBundle && tokenBundle.acceptUrl && tokenBundle.declineUrl) {
+        const _acceptLabel = _qForButtons.contingentOnUtility ? 'Accept (contingent)' : 'Accept Quote';
+        body += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACCEPT OR DECLINE — ONE-CLICK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        body += `  ✓ ${_acceptLabel}:    ${tokenBundle.acceptUrl}\n\n`;
+        body += `  ✗ Decline Quote:  ${tokenBundle.declineUrl}\n\n`;
+        body += `  These links are unique to your quote and expire in 30 days.\n`;
+        body += `  You'll see a confirmation page where you can review the scope before final confirmation.\n`;
+      }
+    } catch (e) {
+      // Non-fatal — send the email without buttons. We'll log so you can see
+      // it in the console, but the customer just gets a slightly older flow.
+      console.warn('[GK] Quote action token mint failed (sending without buttons):', e);
+    }
+  }
 
   if (!toEmail) { toast('Please enter a recipient email', 'warning'); return; }
 
@@ -6247,6 +6337,11 @@ function pdfCustomerBlock(doc,cust,lead,y,q){
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
     doc.text('PO #: '+q.poNumber,36,y);y+=12;
   }
+  // Payment terms (B2B referrer billing only)
+  if (isSplit && billTo && billTo.paymentTerms) {
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
+    doc.text('Terms: '+billTo.paymentTerms,36,y);y+=12;
+  }
 
   // SERVICE LOCATION
   if (isSplit) {
@@ -6289,6 +6384,390 @@ function pdfTable(doc,y,W,items,totalLabel,totalAmt){
   doc.setTextColor(15,17,23);doc.setFont('helvetica','bold');doc.setFontSize(12);
   doc.text(totalLabel,46,y+17);doc.text(fmt$(totalAmt),W-46,y+17,{align:'right'});
   return y+40;
+}
+
+// ── DIRECT-CUSTOMER QUOTE EMAIL — per-job-type templates ──
+//
+// Five timeline patterns map to all ten job types:
+//   - EV-style 4-step             (ev-residential, nema-1450)
+//   - Permit-required 3-step      (hvac-circuit, panel-replacement)
+//   - No-permit 2-step            (circuit-replacement)
+//   - Equipment-required 4-step   (battery-system, v2h-system, generator)
+//   - Utility-coordinated         (new-service, service-upgrade — contingent flow)
+//
+// Returns { subject, body } strings ready to send. Body is plain-text format
+// (newlines, bullet hierarchy with leading whitespace) — same shape the
+// existing platform branches use, so the email modal renders consistently.
+function _buildDirectQuoteEmail(ctx) {
+  const { q, lead } = ctx;
+  // Utility-coordinated jobs use a totally different "contingent acceptance"
+  // story regardless of the deposit schedule.
+  if ((typeof isUtilityDelayedJob === 'function' && isUtilityDelayedJob(q)) ||
+      q.contingentOnUtility) {
+    return _buildUtilityCoordinatedEmail(ctx);
+  }
+  // EV-style — for ev-residential and nema-1450
+  if (q.jobType === 'ev-residential' || q.jobType === 'nema-1450') {
+    return _buildEVStyleQuoteEmail(ctx);
+  }
+  // Equipment-required — battery, V2H, generator
+  if (q.jobType === 'battery-system' || q.jobType === 'v2h-system' || q.jobType === 'generator') {
+    return _buildEquipmentRequiredEmail(ctx);
+  }
+  // No-permit — circuit replacement
+  if (q.jobType === 'circuit-replacement') {
+    return _buildNoPermitEmail(ctx);
+  }
+  // Default — permit-required-standard (HVAC circuit, panel replacement, anything else)
+  return _buildPermitStandardEmail(ctx);
+}
+
+// Build the "PAYMENT SCHEDULE" section as plain text. Returns an empty string
+// if there's nothing meaningful to say (sub-$1K direct jobs, platform jobs).
+// For B2B-referrer-billed quotes (AF1 etc.), shows Net-X payment terms
+// instead of a deposit schedule.
+function _buildPaymentScheduleText(q) {
+  // B2B referrer billing — show payment terms, no deposit
+  if (typeof isQuoteBilledToReferrer === 'function' && isQuoteBilledToReferrer(q)) {
+    const billTo = (typeof getQuoteBillToCustomer === 'function') ? getQuoteBillToCustomer(q) : null;
+    const terms = (billTo && billTo.paymentTerms) ? billTo.paymentTerms : 'Net 30';
+    const billToName = billTo ? (billTo.businessName || custFullName(billTo) || 'the bill-to party') : 'the bill-to party';
+    let txt = `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nBILLING & PAYMENT TERMS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    txt += `\n  Bill-to:  ${billToName}\n`;
+    txt += `  Terms:    ${terms}\n\n`;
+    txt += `Invoice will be sent via Intuit / QuickBooks upon job completion. Payment by check, ACH, or card per ${billToName}'s preference.\n`;
+    return txt;
+  }
+
+  // Direct customer with deposit
+  if (typeof calcDepositSchedule !== 'function') return '';
+  const sched = calcDepositSchedule(q);
+  if (!sched.length || (sched.length === 1 && sched[0].key === 'completion' && !q.contingentOnUtility)) {
+    // Skip when the only milestone is "pay at completion" (sub-$1K jobs) —
+    // that's the default expectation, no need for a callout.
+    return '';
+  }
+  let txt = `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPAYMENT SCHEDULE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  sched.forEach(m => {
+    txt += `\n  ${m.label}: ${fmt$(m.amount)}\n     ${m.timing}\n`;
+    if (m.detail) txt += `     ${m.detail}\n`;
+  });
+  txt += `\nWe'll send a separate invoice via Intuit / QuickBooks for each milestone — pay online by card, ACH, or check.\n`;
+  // Customer-facing rationale — heads off the "why am I paying upfront?"
+  // objection before it lands. Skipped on contingent-utility quotes since
+  // those already explain the $200 fee in the body copy.
+  if (!q.contingentOnUtility) {
+    txt += `\nA note on the deposit: this covers the materials we order specifically for your project and reserves your spot on our schedule. It's standard practice for licensed contractors and protects both of us if scope changes mid-project. If anything comes up during the work that affects the price, we'll always discuss it with you before adding to the total.\n`;
+  }
+  return txt;
+}
+
+// Standard sign-off used across all direct emails.
+const _DIRECT_QUOTE_SIGNOFF = `Best regards,
+Jonathan Allen
+Cofounder & President | GreenKey
+Class A Electrical Contractor | Licensed & Insured
+(804) 770-2210 | (804) 310-5368
+jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+
+// EV charger / NEMA 14-50 — original 4-step flow that Jonathan likes.
+function _buildEVStyleQuoteEmail({ q, custFirst, projectPhrase, total, addr, isEVProject, chargerRecs }) {
+  const subject = `Your GreenKey Quote — ${q.id}`;
+  const evChargerBlock = (q.jobType === 'ev-residential') ? `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ABOUT YOUR EV CHARGER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your quote covers the electrical installation only — the EV charger itself is purchased separately by you. The good news is there are some great options at every price point! Here are our top recommendations:
+
+${chargerRecs}
+` : '';
+  const orderStep = (q.jobType === 'ev-residential') ? `
+  3. YOU ORDER YOUR CHARGER
+     While we're waiting on the permit, go ahead and order your charger using
+     one of the recommendations above. Remember — hardwired version!
+
+  4. WE GET YOU SCHEDULED
+     Once we have your permit in hand AND you've received your charger,
+     we'll get you on the calendar for installation day.` : `
+  3. WE GET YOU SCHEDULED
+     Once the permit is in hand, we'll reach out to get you on the calendar
+     for installation day.`;
+  const body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+${evChargerBlock}${_buildPaymentScheduleText(q)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's exactly how the process works once you're ready to go:
+
+  1. APPROVE YOUR QUOTE
+     Use the Accept button below — or reply to this email / give us a call.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once approved, we submit your electrical permit application to the local jurisdiction.
+     Permit approval typically takes 1–2 weeks.
+${orderStep}
+
+Total timeline from start to finish: typically 2–4 weeks.
+
+We'll keep you updated every step of the way!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+  return { subject, body };
+}
+
+// HVAC circuit / panel replacement — permit required, no equipment to deliver.
+function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const subject = `Your GreenKey Quote — ${q.id}`;
+  const projectNote = (q.jobType === 'hvac-circuit') ?
+    `We coordinate directly with your HVAC contractor on equipment placement and timing.` :
+    (q.jobType === 'panel-replacement') ?
+    `Includes the new panel, main breaker, ground bar kit, and re-termination of all existing branch circuits per current code.` :
+    `All work performed to NEC standards with permits and inspections.`;
+  const body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
+
+${projectNote}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+${_buildPaymentScheduleText(q)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's how the process works:
+
+  1. APPROVE YOUR QUOTE
+     Use the Accept button below — or reply to this email / give us a call.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once approved, we submit your electrical permit application to the local jurisdiction.
+     Permit approval typically takes 1–2 weeks.
+
+  3. WE GET YOU SCHEDULED
+     Once the permit is in hand, we'll reach out to get you on the calendar
+     for installation day.
+
+Total timeline from start to finish: typically 2–3 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+  return { subject, body };
+}
+
+// Circuit replacement — no permit, fast turnaround.
+function _buildNoPermitEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const subject = `Your GreenKey Quote — ${q.id}`;
+  const body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
+
+This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+${_buildPaymentScheduleText(q)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. APPROVE YOUR QUOTE
+     Use the Accept button below — or reply to this email / give us a call.
+
+  2. WE GET YOU SCHEDULED
+     Once approved, we'll reach out to schedule. Typical turnaround is just a few days.
+
+Total timeline: typically 1 week or less.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+  return { subject, body };
+}
+
+// Battery / V2H / generator — equipment delivery is a gating step.
+function _buildEquipmentRequiredEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const subject = `Your GreenKey Quote — ${q.id}`;
+  const equipNote = (q.jobType === 'battery-system') ?
+    `Battery systems involve equipment lead times — typically 2–6 weeks depending on brand availability (Powerwall, Enphase, FranklinWH, Generac PWRcell).` :
+    (q.jobType === 'v2h-system') ?
+    `V2H systems are still relatively new equipment — lead times can be 4–8 weeks depending on the bidirectional charger brand.` :
+    `Standby generator equipment typically has a 2–4 week lead time depending on size and configuration.`;
+  const body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
+
+${equipNote}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+${_buildPaymentScheduleText(q)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. APPROVE YOUR QUOTE
+     Use the Accept button below — or reply to this email / give us a call.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once approved, we submit your electrical permit application to the local jurisdiction.
+     Permit approval typically takes 1–2 weeks.
+
+  3. EQUIPMENT ORDER & DELIVERY
+     We order the equipment and coordinate delivery to your property.
+     Lead time varies by equipment — see note above.
+
+  4. WE GET YOU SCHEDULED
+     Once the equipment is on site and the permit is in hand, we'll get you
+     on the calendar for installation day.
+
+Total timeline from start to finish: typically 4–8 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+  return { subject, body };
+}
+
+// New service / service upgrade / any quote flagged contingent on utility.
+// Customer accepts contingently, pays $200 utility coordination fee, GreenKey
+// gets utility cost, then issues final non-contingent quote.
+function _buildUtilityCoordinatedEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const isContingent = q.contingentOnUtility !== false; // default true for utility-delayed jobs
+  if (isContingent) {
+    const subject = `Your GreenKey Quote (contingent) — ${q.id}`;
+    const body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey for your ${projectPhrase}! Please find the attached quote.
+
+A quick note on the process — because this work involves the utility company, a small portion of the cost is unknown until we coordinate with them directly. Here's how it works:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY (contingent on utility cost)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total} (GreenKey work — utility company cost separate)
+
+This quote is valid for 30 days.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HOW WE PROCEED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. CONTINGENT ACCEPTANCE — UTILITY COORDINATION FEE: $200
+     Use the Accept button below to authorize us to begin coordination with
+     the utility on your behalf. We'll send a $200 invoice via Intuit /
+     QuickBooks for the utility coordination fee.
+
+     • If you proceed after we get the utility cost, the $200 is credited
+       against your final invoice — you don't pay it twice.
+     • If you decide not to proceed after seeing the utility cost, the $200
+       covers our discovery work and is non-refundable.
+
+  2. WE COORDINATE WITH THE UTILITY
+     We'll reach out to the utility, schedule a site visit if needed, and
+     get the utility's cost (often free, occasionally a small fee).
+
+  3. FINAL QUOTE WITH UTILITY COST INCLUDED
+     We send you an updated quote with the now-known utility cost added in
+     and the $200 credit applied. You either accept and we proceed, or you
+     decline with no additional charge.
+
+  4. PERMIT, INSTALL, INSPECTION
+     After your final acceptance, we apply for the permit, do the physical
+     installation work, and get the AHJ service inspection. At this point
+     about 90% of the work is complete — we are waiting on the utility to
+     make the final connection (typically 4–6 weeks).
+
+  5. UTILITY CONNECTS, JOB COMPLETE
+     Once the utility makes the new connection, your job is fully complete.
+
+Total timeline from start to finish: typically 6–10 weeks (most of which is utility waiting).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+    return { subject, body };
+  }
+  // Final (non-contingent) quote after utility cost is known
+  const subject = `Updated Quote — Utility Cost Confirmed — ${q.id}`;
+  const body = `Hi ${custFirst},
+
+Thanks for your patience while we coordinated with the utility. Here is your final quote for your ${projectPhrase}.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days. Utility coordination fee already paid is credited on the attached PDF.
+${_buildPaymentScheduleText(q)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. APPROVE YOUR QUOTE
+     Use the Accept button below — or reply to this email / give us a call.
+     Once approved, the deposit invoice is sent via Intuit / QuickBooks.
+
+  2. WE APPLY FOR YOUR PERMIT
+     We submit your electrical permit application to the local jurisdiction.
+
+  3. WE DO THE PHYSICAL WORK
+     About 90% of the install is completed and we get the AHJ service inspection.
+     A milestone payment is due at this point — see the schedule above.
+
+  4. WE WAIT FOR UTILITY CONNECTION (4–6 weeks)
+     The utility makes the new connection. Once they're done, we close out the job.
+
+  5. FINAL PAYMENT AT JOB COMPLETION
+     The remaining $1,000 is due once everything is fully connected.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+${_DIRECT_QUOTE_SIGNOFF}`;
+  return { subject, body };
 }
 
 function generateQuotePDF(q,cust,lead,returnDataUrl=false){
@@ -6374,6 +6853,16 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
       _sy += 28;
     });
     y += _boxH + 10;
+    // Customer-facing rationale — heads off pushback before it lands.
+    // Skipped on contingent-utility quotes since the $200 fee is explained
+    // in the email body copy already.
+    if (!q.contingentOnUtility) {
+      const _rationale = 'A note on the deposit: this covers the materials we order specifically for your project and reserves your spot on our schedule. It\'s standard practice for licensed contractors and protects both of us if scope changes mid-project. If anything comes up during the work that affects the price, we\'ll always discuss it with you before adding to the total.';
+      doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
+      const _rl = doc.splitTextToSize(_rationale, W-72);
+      doc.text(_rl, 36, y);
+      y += _rl.length * 10 + 8;
+    }
   }
   // inclusions/exclusions
   if(q.inclusions||q.exclusions){
@@ -11405,7 +11894,7 @@ function seedReferrerCustomers() {
       city: 'Chesterfield',
       state: 'VA',
       zip: '',
-      paymentTerms: 'Net 30',
+      paymentTerms: 'Net 7',
       poRequired: false,
       taxExempt: false,
       notes: 'Referral partner — HVAC company that calls us for circuit / panel work on their installs. Sometimes AF1 pays direct (most common); sometimes they have us bill the homeowner. Field contact: Nico LaBoy. Legal name and AP contact are placeholders — verify on first invoice.'
@@ -11414,13 +11903,28 @@ function seedReferrerCustomers() {
   try {
     const existing = getCustomers();
     let added = 0;
+    let migrated = 0;
     REFERRERS.forEach(ref => {
-      if (!existing.find(c => c.id === ref.id)) {
+      const existingIdx = existing.findIndex(c => c.id === ref.id);
+      if (existingIdx < 0) {
         existing.push({ ...ref, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         added++;
+      } else {
+        // One-time migration: bump AF1's old Net-30 default to Net-7. Only
+        // touches records that still match the old seeded value, never
+        // overrides a manual customization.
+        if (existing[existingIdx].paymentTerms === 'Net 30' && ref.paymentTerms === 'Net 7') {
+          existing[existingIdx].paymentTerms = 'Net 7';
+          existing[existingIdx].updatedAt = new Date().toISOString();
+          migrated++;
+        }
       }
     });
-    if (added > 0) { saveCustomers(existing); console.log('[GreenKey CRM] Seeded ' + added + ' referrer customer(s).'); }
+    if (added > 0 || migrated > 0) {
+      saveCustomers(existing);
+      if (added > 0) console.log('[GreenKey CRM] Seeded ' + added + ' referrer customer(s).');
+      if (migrated > 0) console.log('[GreenKey CRM] Migrated ' + migrated + ' referrer record(s) to Net 7.');
+    }
   } catch (e) { console.warn('[GreenKey CRM] seedReferrerCustomers failed:', e); }
 }
 
@@ -12842,6 +13346,90 @@ Class A Electrical Contractor · Richmond, VA · Licensed & Insured`;
 // Calls GET /consent/status?customerId=... and mirrors server records into
 // local state when the server has newer authoritative data (e.g. STOP sent
 // via SMS after we last rendered the banner). Called on banner render.
+// Request an Accept/Decline action token for a quote from the Worker.
+// Returns { acceptUrl, declineUrl, token, expiresAt } on success.
+async function _mintQuoteActionToken(q) {
+  if (!_smsConfigured()) throw new Error('SMS Worker not configured');
+  const lead = q.leadId ? getLead(q.leadId) : null;
+  const cust = q.customerId ? getCustomer(q.customerId) : (lead ? getCustomer(lead.customerId) : null);
+  const projectPhrase = (typeof getProjectPhrase === 'function') ? getProjectPhrase(lead) : 'electrical project';
+  const totals = (typeof calcQuoteTotals === 'function') ? calcQuoteTotals(q) : { quoteTotal: q.quoteTotal || 0 };
+  const bearer = await _acquireSMSToken();
+  const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/quote/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearer },
+    body: JSON.stringify({
+      quoteId:       q.id,
+      customerId:    q.customerId || lead?.customerId || '',
+      customerName:  cust ? custFullName(cust) : '',
+      leadId:        q.leadId || '',
+      quoteTotal:    totals.quoteTotal || 0,
+      projectPhrase,
+      isContingent:  !!q.contingentOnUtility
+    })
+  });
+  if (!resp.ok) {
+    const errTxt = await resp.text().catch(() => '');
+    throw new Error('Worker returned ' + resp.status + ' ' + errTxt.slice(0,200));
+  }
+  return await resp.json();
+}
+
+// Poll the Worker for the latest accept/decline action on a quote and reflect
+// it into local state. Called when opening the quote builder. Returns the
+// detected action ('accepted' | 'declined' | 'contingent_accepted') if a new
+// one was applied; null otherwise.
+async function hydrateQuoteStatusFromServer(qid) {
+  if (!qid) return null;
+  if (!_smsConfigured()) return null;
+  try {
+    const bearer = await _acquireSMSToken();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/quote/status?quoteId=' + encodeURIComponent(qid),
+      { headers: { 'Authorization': 'Bearer ' + bearer } }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data || !data.action) return null;
+
+    const q = getQuote(qid); if (!q) return null;
+    // Map server action to local quote.status. We use the existing status
+    // values where possible; introduce 'declined' and 'contingent-approved'
+    // for the new states.
+    let newStatus = q.status;
+    if      (data.action === 'accepted')              newStatus = 'approved';
+    else if (data.action === 'declined')              newStatus = 'declined';
+    else if (data.action === 'contingent_accepted')   newStatus = 'contingent-approved';
+
+    // Idempotency — only update if something changed
+    if (q.status === newStatus &&
+        q.customerActionAt === data.actedAt &&
+        q.customerDeclineReason === (data.reason || null)) return null;
+
+    upsertQuote({
+      ...q,
+      status: newStatus,
+      customerActionAt: data.actedAt,
+      customerActionAction: data.action,
+      customerActionIp: data.ip || null,
+      customerActionUA: data.userAgent || null,
+      customerDeclineReason: data.reason || null
+    });
+    // Toast + re-render if the builder is open on this quote
+    try {
+      const labels = { accepted:'accepted', declined:'declined', contingent_accepted:'contingent-accepted' };
+      toast(`Customer ${labels[data.action] || data.action} this quote`, data.action === 'declined' ? 'warning' : 'success');
+    } catch(_){}
+    if (typeof renderQuoteBuilder === 'function' && S.quoteBuilderId === qid) {
+      try { renderQuoteBuilder(qid); } catch(_){}
+    }
+    return data.action;
+  } catch (e) {
+    console.warn('[GK] hydrateQuoteStatusFromServer failed:', e);
+    return null;
+  }
+}
+
 async function hydrateConsentFromServer(customerId) {
   if (!customerId) return;
   if (!_smsConfigured()) return;
