@@ -5342,6 +5342,11 @@ async function emailQuote(qid){
   const custFirst=(cust?cust.firstName:lead?.customerName?.split(' ')[0])||'there';
   const total=fmt$(q.quoteTotal||0);
   const addr=lead?.siteStreet?`${lead.siteStreet}, ${lead.siteCity||''}`:'your property';
+  // Project phrase derived from job type — used throughout the email copy so
+  // platform jobs that aren't EV chargers (HVAC, panel replacement, etc.)
+  // read correctly to the customer.
+  const projectPhrase = (typeof getProjectPhrase === 'function') ? getProjectPhrase(lead) : 'electrical project';
+  const isEVProject = (lead && (lead.jobType === 'ev-residential' || lead.jobType === 'nema-1450'));
 
   if(!toEmail){
     toast('No email address on file for this customer — add one in their profile first','warning');
@@ -5385,7 +5390,7 @@ async function emailQuote(qid){
     subject = `Update on your GreenKey installation via Qmerit — ${q.id}`;
     body = `Hi ${custFirst},
 
-I wanted to personally let you know that we've prepared the quote for your EV charger installation and uploaded it to Qmerit. Qmerit will send the quote to you through their platform shortly.
+I wanted to personally let you know that we've prepared the quote for your ${projectPhrase} and uploaded it to Qmerit. Qmerit will send the quote to you through their platform shortly.
 
 Property: ${addr}
 
@@ -5401,7 +5406,7 @@ Here's what to expect from here:
      Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
 
   3. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
 
 Total timeline from approval to install: typically 2–4 weeks.
 
@@ -5419,7 +5424,7 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
     subject = `Update on your GreenKey installation via Electrum — ${q.id}`;
     body = `Hi ${custFirst},
 
-I wanted to let you know that we've completed our pricing for your EV charger installation directly on the Electrum platform. Electrum will present the quote to you through their system.
+I wanted to let you know that we've completed our pricing for your ${projectPhrase} directly on the Electrum platform. Electrum will present the quote to you through their system.
 
 Property: ${addr}
 
@@ -5435,7 +5440,7 @@ Here's what to expect from here:
      Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
 
   3. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
 
 Total timeline from approval to install: typically 2–4 weeks.
 
@@ -5450,10 +5455,10 @@ Class A Electrical Contractor | Licensed & Insured
 (804) 770-2210 | (804) 310-5368
 jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   } else if (q.source === 'Treehouse') {
-    subject = `Confirming your GreenKey EV charger installation via Treehouse — ${q.id}`;
+    subject = `Confirming your GreenKey ${projectPhrase} via Treehouse — ${q.id}`;
     body = `Hi ${custFirst},
 
-I wanted to let you know that we've accepted your EV charger installation job through Treehouse and are ready to get started. All pricing and paperwork for the installation are handled through Treehouse directly.
+I wanted to let you know that we've accepted your ${projectPhrase} job through Treehouse and are ready to get started. All pricing and paperwork for the installation are handled through Treehouse directly.
 
 Property: ${addr}
 
@@ -5465,7 +5470,7 @@ WHAT HAPPENS NEXT
      We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
 
   2. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand (and your charger has arrived, if you're supplying one), we'll reach out directly to get you on the calendar for installation day.
+     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
 
 Total timeline from here to install: typically 2–4 weeks.
 
@@ -5481,30 +5486,18 @@ Class A Electrical Contractor | Licensed & Insured
 jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   } else {
     subject = `Your GreenKey Quote — ${q.id}`;
-    body = `Hi ${custFirst},
-
-Thank you for choosing GreenKey! Please find your quote attached to this email.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUOTE SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
-
-This quote is valid for 30 days.
-
+    // EV-charger jobs get an extra recommendations block + a step-3 "order
+    // your charger" reminder. Other project types (HVAC circuits, panel
+    // replacements, etc.) skip those — there's no charger to recommend.
+    const _evChargerBlock = isEVProject ? `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ABOUT YOUR EV CHARGER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Your quote covers the electrical installation only — the EV charger itself is purchased separately by you. The good news is there are some great options at every price point! Here are our top recommendations:
 
 ${chargerRecs}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT HAPPENS NEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Here's exactly how the process works once you're ready to go:
+` : '';
+    const _whatHappensNext = isEVProject ? `Here's exactly how the process works once you're ready to go:
 
   1. APPROVE YOUR QUOTE
      Reply to this email or give us a call to confirm you'd like to move forward.
@@ -5521,7 +5514,38 @@ Here's exactly how the process works once you're ready to go:
      Once we have your permit in hand AND you've received your charger,
      we'll get you on the calendar for installation day.
 
-Total timeline from start to finish: typically 2–4 weeks.
+Total timeline from start to finish: typically 2–4 weeks.`
+    : `Here's exactly how the process works once you're ready to go:
+
+  1. APPROVE YOUR QUOTE
+     Reply to this email or give us a call to confirm you'd like to move forward.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once approved, we submit your electrical permit application to the local jurisdiction.
+     Permit approval typically takes 1–2 weeks.
+
+  3. WE GET YOU SCHEDULED
+     Once we have your permit in hand, we'll reach out to get you on the calendar
+     for installation day.
+
+Total timeline from start to finish: typically 2–4 weeks.`;
+    body = `Hi ${custFirst},
+
+Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached to this email.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUOTE SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quote #:   ${q.id}
+Property:  ${addr}
+Total:     ${total}
+
+This quote is valid for 30 days.
+${_evChargerBlock}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${_whatHappensNext}
 We'll keep you updated every step of the way!
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -12303,8 +12327,8 @@ let _consentEmail = null; // { leadId, customerId, toEmail, phone, name }
 
 function _consentEmailBrandBlock() {
   // Generic brand header — a green rounded "G" mark next to the company name.
-  // No website URL, since greenkey-usa.com is scheduled for a rebuild and we
-  // don't want to bake the old URL into outgoing customer-facing templates.
+  // No subtitle / no website URL, so the header stays neutral across all
+  // project types (HVAC, panel replacements, EV chargers, etc.).
   return `
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
       <tr>
@@ -12315,8 +12339,7 @@ function _consentEmailBrandBlock() {
                 <div style="display:inline-block;width:36px;height:36px;background:#3aaa35;border-radius:8px;color:#ffffff;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:700;font-size:20px;line-height:36px;text-align:center">G</div>
               </td>
               <td style="vertical-align:middle;padding-left:12px">
-                <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:17px;color:#0f1115;letter-spacing:-0.01em">GreenKey</div>
-                <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:500;font-size:11px;color:#5a6270;letter-spacing:0.04em;text-transform:uppercase;margin-top:1px">EV Charger Installation</div>
+                <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:700;font-size:20px;line-height:1;color:#0f1115;letter-spacing:-0.01em">GreenKey</div>
               </td>
             </tr>
           </table>
