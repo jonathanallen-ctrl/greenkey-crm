@@ -5221,6 +5221,138 @@ function calcQuoteTotals(q){
     quoteTotal: finalTotal
   };
 }
+
+// ── DEPOSIT / PAYMENT SCHEDULE ──
+//
+// Tiered deposits for direct-customer-pay jobs only. Platform jobs and
+// referrer-billed (AF1 etc.) jobs skip this entirely — those are handled by
+// the platform or a Net 30 invoice respectively.
+//
+//   Quote total          Upfront deposit     Final at completion
+//   < $1,000             $0                  full amount
+//   $1,000 – $1,999      $500                balance
+//   $2,000 – $3,999      $1,000              balance
+//   $4,000 +             $1,500              balance
+//
+// For utility-delayed jobs (new-service / service-upgrade auto-flag, manual
+// override per quote), the schedule splits into three milestones:
+//   - Deposit upfront
+//   - All but $1,000 of the balance after AHJ service inspection complete
+//   - Final $1,000 at full completion (utility connection done)
+const DEPOSIT_TIERS = [
+  { minTotal: 4000, deposit: 1500 },
+  { minTotal: 2000, deposit: 1000 },
+  { minTotal: 1000, deposit: 500  },
+  { minTotal: 0,    deposit: 0    }
+];
+function calcDepositAmount(quoteTotal) {
+  const t = Math.max(0, parseFloat(quoteTotal) || 0);
+  for (const tier of DEPOSIT_TIERS) {
+    if (t >= tier.minTotal) return tier.deposit;
+  }
+  return 0;
+}
+// Should this quote use the deposit / progress-billing schedule? True only
+// for direct-customer-pay jobs (homeowner billed directly, not platform,
+// not B2B referrer).
+function quoteRequiresDeposit(q) {
+  if (!q) return false;
+  if (typeof shouldZeroBuffer === 'function' && shouldZeroBuffer(q)) return false;
+  return true;
+}
+// Auto-flag for utility-delayed work. Job types that almost always involve
+// a multi-week wait for the utility default to true; manual override on the
+// quote (q.utilityDelayed === false) lets you turn it off case by case.
+function isUtilityDelayedJob(q) {
+  if (!q) return false;
+  if (typeof q.utilityDelayed === 'boolean') return q.utilityDelayed;
+  return q.jobType === 'new-service' || q.jobType === 'service-upgrade';
+}
+// Build the milestone schedule for a quote. Returns an array of payment
+// milestones with amounts and human-readable timing copy. Empty array if
+// the quote doesn't require a deposit.
+function calcDepositSchedule(q) {
+  if (!quoteRequiresDeposit(q)) return [];
+  const totals = calcQuoteTotals(q);
+  const total = totals.quoteTotal || 0;
+  const deposit = calcDepositAmount(total);
+  if (total <= 0) return [];
+
+  const milestones = [];
+  // Utility-coordinated discovery fee — only on the FIRST contingent quote
+  // (when q.contingentOnUtility is true). $200 sits as a credit on the
+  // final non-contingent quote so it doesn't double-charge.
+  if (q.contingentOnUtility) {
+    milestones.push({
+      key: 'utility-discovery',
+      amount: 200,
+      label: 'Utility coordination & site visit fee',
+      timing: 'Due upon contingent acceptance of this quote',
+      detail: 'Non-refundable. Credited against the final invoice if you proceed after the utility coordination is complete.'
+    });
+    return milestones;
+  }
+
+  if (deposit === 0) {
+    // Sub-$1,000 jobs — pay at completion only
+    milestones.push({
+      key: 'completion',
+      amount: total,
+      label: 'Total due',
+      timing: 'Due at job completion'
+    });
+    return milestones;
+  }
+
+  // Apply utility-coordination credit if it's been paid on a prior contingent quote
+  const utilCredit = (q.utilityFeeCredit && q.utilityFeeCredit > 0) ? q.utilityFeeCredit : 0;
+  const adjustedTotal = Math.max(0, total - utilCredit);
+
+  if (isUtilityDelayedJob(q)) {
+    // 3-milestone schedule for utility-delayed work
+    const finalRetained = 1000;
+    const middlePayment = Math.max(0, adjustedTotal - deposit - finalRetained);
+    milestones.push({
+      key: 'deposit',
+      amount: deposit,
+      label: 'Deposit',
+      timing: 'Due upon quote acceptance',
+      detail: utilCredit ? `Net of $${utilCredit} utility coordination credit already paid.` : ''
+    });
+    if (middlePayment > 0) {
+      milestones.push({
+        key: 'service-inspection',
+        amount: middlePayment,
+        label: 'Post-inspection payment',
+        timing: 'Due once the AHJ service inspection is complete',
+        detail: 'Most physical work is finished by this point — we are waiting on the utility connection.'
+      });
+    }
+    milestones.push({
+      key: 'final',
+      amount: finalRetained,
+      label: 'Final payment',
+      timing: 'Due at full completion (utility connection complete)'
+    });
+  } else {
+    // 2-milestone schedule for standard direct-customer jobs
+    const balance = Math.max(0, adjustedTotal - deposit);
+    milestones.push({
+      key: 'deposit',
+      amount: deposit,
+      label: 'Deposit',
+      timing: 'Due upon quote acceptance',
+      detail: utilCredit ? `Net of $${utilCredit} utility coordination credit already paid.` : ''
+    });
+    milestones.push({
+      key: 'completion',
+      amount: balance,
+      label: 'Balance',
+      timing: 'Due at job completion'
+    });
+  }
+  return milestones;
+}
 function renderTotalsBox(q,totals,isAdmin,isQmerit){
   const rows=[];
   const lmBaked = (totals.laborAndMaterials||0) + (isQmerit ? (totals.qmeritFee||0) : 0);
@@ -5485,79 +5617,10 @@ Class A Electrical Contractor | Licensed & Insured
 (804) 770-2210 | (804) 310-5368
 jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   } else {
-    subject = `Your GreenKey Quote — ${q.id}`;
-    // EV-charger jobs get an extra recommendations block + a step-3 "order
-    // your charger" reminder. Other project types (HVAC circuits, panel
-    // replacements, etc.) skip those — there's no charger to recommend.
-    const _evChargerBlock = isEVProject ? `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ABOUT YOUR EV CHARGER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your quote covers the electrical installation only — the EV charger itself is purchased separately by you. The good news is there are some great options at every price point! Here are our top recommendations:
-
-${chargerRecs}
-` : '';
-    const _whatHappensNext = isEVProject ? `Here's exactly how the process works once you're ready to go:
-
-  1. APPROVE YOUR QUOTE
-     Reply to this email or give us a call to confirm you'd like to move forward.
-
-  2. WE APPLY FOR YOUR PERMIT
-     Once approved, we submit your electrical permit application to the local jurisdiction.
-     Permit approval typically takes 1–2 weeks.
-
-  3. YOU ORDER YOUR CHARGER
-     While we're waiting on the permit, go ahead and order your charger using
-     one of the recommendations above. Remember — hardwired version!
-
-  4. WE GET YOU SCHEDULED
-     Once we have your permit in hand AND you've received your charger,
-     we'll get you on the calendar for installation day.
-
-Total timeline from start to finish: typically 2–4 weeks.`
-    : `Here's exactly how the process works once you're ready to go:
-
-  1. APPROVE YOUR QUOTE
-     Reply to this email or give us a call to confirm you'd like to move forward.
-
-  2. WE APPLY FOR YOUR PERMIT
-     Once approved, we submit your electrical permit application to the local jurisdiction.
-     Permit approval typically takes 1–2 weeks.
-
-  3. WE GET YOU SCHEDULED
-     Once we have your permit in hand, we'll reach out to get you on the calendar
-     for installation day.
-
-Total timeline from start to finish: typically 2–4 weeks.`;
-    body = `Hi ${custFirst},
-
-Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached to this email.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUOTE SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
-
-This quote is valid for 30 days.
-${_evChargerBlock}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT HAPPENS NEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${_whatHappensNext}
-We'll keep you updated every step of the way!
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
-
-Best regards,
-Jonathan Allen
-Cofounder & President | GreenKey
-Class A Electrical Contractor | Licensed & Insured
-(804) 770-2210 | (804) 310-5368
-jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+    // Direct-customer email — body and subject are project-specific.
+    const _direct = _buildDirectQuoteEmail({ q, lead, cust, projectPhrase, total, addr, custFirst, isEVProject, chargerRecs });
+    subject = _direct.subject;
+    body = _direct.body;
   }
 
   // Stash the payload and open the preview/edit modal
@@ -6284,6 +6347,32 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     doc.text(fmt$(_discTotal),W-46,y+45,{align:'right'});
     doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
     doc.text(`Save ${fmt$(_discAmt)} (${_ncPctPDF}%) by paying via ACH, check, or Zelle`,46,y+57);
+    y += _boxH + 10;
+  }
+  // payment schedule — direct-customer-pay only
+  const _schedule = (typeof calcDepositSchedule === 'function') ? calcDepositSchedule(q) : [];
+  if (_schedule.length > 0) {
+    // Compute box height — title (16) + each milestone (~28) + bottom padding (8)
+    const _boxH = 22 + _schedule.length * 28 + 8;
+    doc.setFillColor(248,250,252);
+    doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
+    doc.setDrawColor(...LGRAY);doc.setLineWidth(0.5);
+    doc.roundedRect(36,y,W-72,_boxH,4,4,'S');
+    doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);
+    doc.text('PAYMENT SCHEDULE',46,y+14);
+    let _sy = y + 28;
+    _schedule.forEach(m => {
+      doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(...DARK);
+      doc.text(m.label,46,_sy);
+      doc.text(fmt$(m.amount),W-46,_sy,{align:'right'});
+      doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
+      doc.text(m.timing, 46, _sy + 11);
+      if (m.detail) {
+        const _dl = doc.splitTextToSize(m.detail, W-200);
+        doc.text(_dl, 46, _sy + 21);
+      }
+      _sy += 28;
+    });
     y += _boxH + 10;
   }
   // inclusions/exclusions
