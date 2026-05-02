@@ -3388,8 +3388,8 @@ function getQQPricing(){
     // Circuit Replacement — flat fees by amperage tier (no permit)
     circuitReplaceUnder30A:350, circuitReplace30To50A:450, circuitReplace60Plus:600,
     // Panel Replacement — base labor + per-breaker re-termination + always-included surge protector
-    // Base bumped 2026-05-02: $1500 → $2000 to absorb the typical "we ran into something" overage on swaps.
-    panelReplaceBase:2000, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    // 2026-05-02: settled at $1800 — typical 200A swap with 12 breakers + surge + permit lands ~$3023, on target.
+    panelReplaceBase:1800, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
     panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
     // Existing add-ons
     tandemBreaker:40, post:150,
@@ -12115,6 +12115,13 @@ async function _onMSALSuccess(account) {
   try {
     await _spInit();
     await _syncFromSP();
+    // _syncFromSP() overwrites localStorage with the latest copy from
+    // SharePoint, which can wipe any seed records that init() added before
+    // login completed (e.g., the AF1 referrer customer). Re-run the seed
+    // here so referrer records are present *after* the pull. The seed is
+    // idempotent — if AF1 already came down from SP, this is a no-op. If it
+    // didn't, this adds it locally and queues a push back to SP.
+    try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] post-sync seedReferrerCustomers failed:', e); }
     // Start the periodic JSON backup to the Documents drive once SP is ready.
     // Safe to call multiple times — internal guard prevents duplicate timers.
     _startBackupTimer();
