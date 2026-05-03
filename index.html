@@ -14187,7 +14187,9 @@ async function submitAIDraft() {
     if (submitBtn) submitBtn.disabled = false;
     if (pullBtn) pullBtn.style.display = '';
     if (errBox) {
-      errBox.textContent = 'AI estimator failed: ' + (e.message || String(e));
+      // Don't double-prefix when the worker already returned "AI estimator failed: ..."
+      const rawMsg = e.message || String(e);
+      errBox.textContent = /^AI estimator failed:/i.test(rawMsg) ? rawMsg : ('AI estimator failed: ' + rawMsg);
       errBox.style.display = 'block';
     }
   }
