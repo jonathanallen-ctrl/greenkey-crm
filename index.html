@@ -957,6 +957,20 @@
           <input class="fi" type="number" id="ai-distance" placeholder="e.g. 25" min="0" step="1">
         </div>
       </div>
+      <div class="frow2" style="margin-bottom:14px">
+        <div class="fg"><div class="fl">Round-trip drive time (min, optional)</div>
+          <input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 60 — first 30 min is free" min="0" step="5">
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4">Adds travel labor at $160/hr beyond the first 30 min. Leave blank for local jobs (under 30 min round trip).</div>
+        </div>
+        <div class="fg"><div class="fl">Routing difficulty (optional)</div>
+          <select class="fsel" id="ai-difficulty-tier">
+            <option value="">— let AI decide —</option>
+            <option value="tier1">Tier 1 — exterior / unfinished / mild attic</option>
+            <option value="tier2">Tier 2 — finished walls, 1–2 access cuts, finished basement ceiling</option>
+            <option value="tier3">Tier 3 — multiple finished cuts, peak-summer attic, dense insulation</option>
+          </select>
+        </div>
+      </div>
       <div style="margin-bottom:8px">
         <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Notes for the AI (optional)</div>
         <textarea id="ai-notes-input" placeholder="Anything that's not in the scope but useful — site quirks, customer preferences, must-have brands, etc."
@@ -14049,6 +14063,11 @@ function openAIDraftModal(qid) {
   if (panelEl) panelEl.value = (q.qq && q.qq.panelLocation) || '';
   const distEl = document.getElementById('ai-distance');
   if (distEl) distEl.value = '';
+  // Pre-fill drive time and difficulty if previously stamped on the quote
+  const driveEl = document.getElementById('ai-drive-time');
+  if (driveEl) driveEl.value = (q.qq && q.qq.travelMinutes) || '';
+  const diffEl = document.getElementById('ai-difficulty-tier');
+  if (diffEl) diffEl.value = q.aiDifficultyTier || '';
   const notesEl = document.getElementById('ai-notes-input');
   if (notesEl) notesEl.value = '';
   document.getElementById('ai-draft-modal').classList.add('show');
@@ -14100,6 +14119,8 @@ async function submitAIDraft() {
   const notes = (document.getElementById('ai-notes-input')?.value || '').trim();
   const panelLoc = document.getElementById('ai-panel-loc')?.value || '';
   const dist = parseFloat(document.getElementById('ai-distance')?.value || '');
+  const driveMin = parseFloat(document.getElementById('ai-drive-time')?.value || '');
+  const difficulty = document.getElementById('ai-difficulty-tier')?.value || '';
   const errBox = document.getElementById('ai-draft-error');
   if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
 
@@ -14132,6 +14153,8 @@ async function submitAIDraft() {
       specialJurisdiction: !!q.specialJurisdiction,
       panelLocation: panelLoc || null,
       measuredDistanceFt: !isNaN(dist) ? dist : null,
+      driveTimeRoundTripMin: !isNaN(driveMin) ? driveMin : null,
+      difficultyTier: difficulty || null,
       siteAddress: lead?.siteAddress || cust?.address || null,
       propertyType: cust?.propertyType || null,
       isVeteran: !!q.isVeteran,
@@ -14328,6 +14351,7 @@ function applyAIDraft() {
     aiAssumptions: Array.isArray(draft.assumptions) ? draft.assumptions : [],
     aiSanityCheck: draft.sanityCheck || null,
     aiJobTypeGuess: draft.jobTypeGuess || null,
+    aiDifficultyTier: (document.getElementById('ai-difficulty-tier')?.value) || null,
     aiDraftedAt: new Date().toISOString()
   });
 
