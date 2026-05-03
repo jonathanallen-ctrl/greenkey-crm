@@ -4034,6 +4034,7 @@ function renderQuickQuoteForm(q){
         </div>
       </div>`}
     </div>
+    ${_renderAdditionalTasksSection(q)}
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
@@ -4278,6 +4279,7 @@ function _renderQQ_CircuitReplacement(q) {
         </div>
       </div>`}
     </div>
+    ${_renderAdditionalTasksSection(q)}
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
         Scope of Work
@@ -4414,6 +4416,7 @@ function _renderQQ_PanelReplacement(q) {
         </div>
       </div>`}
     </div>
+    ${_renderAdditionalTasksSection(q)}
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
         Scope of Work
@@ -4535,6 +4538,226 @@ function onQQChange(qid){
 // Shared helper — totals up labor+materials with the existing buffer/permit/
 // veteran/Qmerit logic, then upserts the quote. Used by all type-specific
 // onQQChange handlers so the buffer + Qmerit math stays consistent.
+// ────────────────────────────────────────────────────────────────────────
+// ADDITIONAL TASKS — multi-item quotes
+// ────────────────────────────────────────────────────────────────────────
+//
+// A Quote can include one or more "additional tasks" alongside its primary
+// job type. Example: panel replacement (primary) + HVAC mini-split circuit
+// (additional). Each additional task has its own job-type-specific config
+// and contributes to the combined L&M, scope text, and inclusions list.
+//
+// Pricing model: additional tasks charge INCREMENTAL costs only (no base
+// install fee, no permit) since the truck-roll, panel access, and permit
+// are already covered by the primary task. The customer effectively gets a
+// fair discount vs. having both jobs quoted separately.
+//
+// Initial sub-task type supported: hvac-circuit. Framework is extensible —
+// add new types by writing a _calcAdditionalTask_<type> helper and a render
+// function for the mini-form, then wiring them into the dispatcher below.
+
+// Compute L&M for a single additional task. Returns 0 for unknown types.
+// If task.amountOverride is set, it takes precedence — used when contractor
+// has agreed a specific number with the customer/AF1 verbally.
+function _calcAdditionalTaskLM(task) {
+  if (!task) return 0;
+  if (task.amountOverride != null && task.amountOverride !== '') {
+    const ov = parseFloat(task.amountOverride);
+    if (!isNaN(ov)) return ov;
+  }
+  return _calcAdditionalTaskCalculated(task);
+}
+// Auto-calculated L&M (ignores override) — used to display the calculated
+// reference value when an override is in effect.
+function _calcAdditionalTaskCalculated(task) {
+  if (!task) return 0;
+  if (task.jobType === 'hvac-circuit') return _calcAdditionalTask_HVAC(task);
+  return 0;
+}
+function _calcAdditionalTask_HVAC(task) {
+  const p = getQQPricing();
+  const runFt = Math.max(parseInt(task.runFt) || 0, 0);
+  const runType = task.runType || 'surface';
+  const wireId = task.wireId || 'm-001'; // 10/2 default
+  const disconnect = task.disconnect || 'none';
+  // Run labor (surface / hand-trench / machine-trench rates from HVAC pricing)
+  let labor = 0;
+  if (runType === 'surface')           labor = (runFt / 10) * p.hvacAddl10Surface;
+  else if (runType === 'hand-trench')  labor = (runFt / 10) * p.hvacHandDig10;
+  else if (runType === 'machine-trench') {
+    const mft = Math.max(runFt, 50);
+    labor = p.hvacMachineTrenchBase + Math.max(0, Math.ceil((mft - 50) / 10)) * p.hvacMachineTrench10;
+  }
+  // Wire materials
+  const wireMat = getMaterials().find(m => m.id === wireId);
+  let wireCost = 0;
+  if (wireMat && wireMat.unitCost != null) {
+    const sellPerFt = wireMat.unitCost * (1 + (wireMat.markup||0)/100);
+    wireCost = Math.round(sellPerFt * runFt * 100) / 100;
+  }
+  // Disconnect
+  let disc = 0;
+  if (disconnect === 'non-fused') disc = p.hvacDisconnectNonFused;
+  else if (disconnect === 'fused') disc = p.hvacDisconnectFused;
+
+  return Math.round((labor + wireCost + disc) * 100) / 100;
+}
+
+// Sum of all additional tasks on a quote
+function _additionalTasksLM(q) {
+  if (!q || !Array.isArray(q.additionalTasks)) return 0;
+  return q.additionalTasks.reduce((sum, t) => sum + _calcAdditionalTaskLM(t), 0);
+}
+
+// Generate scope-of-work text for an additional task. Returns a sentence.
+function _additionalTaskScope(task) {
+  if (!task) return '';
+  if (task.jobType === 'hvac-circuit') {
+    const wireMat = task.wireId ? getMaterials().find(m => m.id === task.wireId) : null;
+    const wireDesc = wireMat ? wireMat.name.replace(/ Cable$/, '') : 'NM-B';
+    const disc = task.disconnect || 'none';
+    const discDesc = disc === 'fused' ? ' with a fused disconnect at the unit'
+                   : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
+                   : '';
+    const ft = task.runFt || 0;
+    const runDesc = ft > 0
+      ? `${ft} ft of ${task.runType === 'hand-trench' ? 'hand-dug trench' : task.runType === 'machine-trench' ? 'machine trench' : 'surface conduit'}`
+      : 'wire run';
+    return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the HVAC equipment disconnect${discDesc}.`;
+  }
+  return '';
+}
+
+// Generate inclusions list entries for an additional task
+function _additionalTaskInclusions(task) {
+  if (!task) return [];
+  if (task.jobType === 'hvac-circuit') {
+    const lines = ['• Additional dedicated branch circuit for HVAC equipment'];
+    if (task.disconnect && task.disconnect !== 'none') {
+      lines.push(`• ${task.disconnect === 'fused' ? 'Fused' : 'Non-fused'} disconnect at the HVAC unit`);
+    }
+    return lines;
+  }
+  return [];
+}
+
+// Render compact form card for an additional task (HVAC variant for now)
+function _renderAdditionalTaskCard(qid, task, idx) {
+  const calculated = _calcAdditionalTaskCalculated(task);
+  const effective  = _calcAdditionalTaskLM(task);
+  const overrideActive = (task.amountOverride != null && task.amountOverride !== '' && !isNaN(parseFloat(task.amountOverride)));
+  const wireOptions = (typeof HVAC_WIRE_OPTIONS !== 'undefined') ? HVAC_WIRE_OPTIONS : [
+    {id:'m-001', label:'10/2 NM-B (30 A)'},
+    {id:'m-026', label:'6/2 NM-B (50-60 A)'},
+    {id:'m-003', label:'6/3 NM-B (60 A w/ neutral)'}
+  ];
+  return `<div class="qq-row" id="addtask-card-${task.id}" style="flex-direction:column;align-items:stretch;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div style="font-size:13px;font-weight:600">Task ${idx + 2}: HVAC Circuit</div>
+      <button class="li-del" onclick="removeAdditionalTask('${qid}', '${task.id}')">×</button>
+    </div>
+    <div class="frow2">
+      <div class="fg"><div class="fl">Wire Size</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'wireId', this.value)">
+          ${wireOptions.map(opt => `<option value="${opt.id}"${task.wireId === opt.id ? ' selected' : ''}>${opt.label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fg"><div class="fl">Disconnect</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'disconnect', this.value)">
+          <option value="none"${(task.disconnect || 'none') === 'none' ? ' selected' : ''}>None</option>
+          <option value="non-fused"${task.disconnect === 'non-fused' ? ' selected' : ''}>Non-fused (+$75)</option>
+          <option value="fused"${task.disconnect === 'fused' ? ' selected' : ''}>Fused (+$150)</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow2">
+      <div class="fg"><div class="fl">Run Type</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runType', this.value)">
+          <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface / crawl / attic — $115/10 ft</option>
+          <option value="hand-trench"${task.runType === 'hand-trench' ? ' selected' : ''}>Hand-dig trench — $170/10 ft</option>
+          <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Machine trench — $620 base + $115/10 ft beyond 50</option>
+        </select>
+      </div>
+      <div class="fg"><div class="fl">Run Length (ft of wire run)</div>
+        <input class="fi" type="number" min="0" step="10" value="${task.runFt || 25}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runFt', parseInt(this.value)||0)">
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
+        <span style="color:var(--text-muted)">Calculated subtotal</span>
+        <span style="font-family:var(--mono);color:${overrideActive?'var(--text-muted)':'var(--green)'};${overrideActive?'text-decoration:line-through':'font-weight:600'}">${fmt$(calculated)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;gap:8px">
+        <span style="color:var(--text-muted);flex-shrink:0">Override subtotal ($)</span>
+        <input class="fi" type="number" min="0" step="0.01" placeholder="auto" value="${(task.amountOverride!=null&&task.amountOverride!=='')?task.amountOverride:''}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'amountOverride', this.value)" style="width:120px;text-align:right;font-family:var(--mono)">
+      </div>
+      ${overrideActive ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 2px 0;border-top:1px dashed var(--border);margin-top:4px">
+        <span style="font-weight:600">Effective subtotal</span>
+        <span style="font-family:var(--mono);color:var(--green);font-weight:600">${fmt$(effective)}</span>
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+// Render the entire Additional Tasks section (called from each Quick Quote form)
+function _renderAdditionalTasksSection(q) {
+  const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks : [];
+  return `<div class="qq-section">
+    <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+      Additional Tasks
+      <button class="li-add" onclick="addAdditionalTask_HVAC('${q.id}')" style="padding:5px 12px;font-size:12px">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+        + HVAC Circuit
+      </button>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
+      Add additional circuits or work that should be quoted alongside the primary task. Pricing for additional tasks excludes base install and permit (those are already covered by the primary task) — the customer gets a fair discount vs. quoting separately.
+    </div>
+    ${tasks.length ? tasks.map((t, i) => _renderAdditionalTaskCard(q.id, t, i)).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No additional tasks. Click "+ HVAC Circuit" above to add one.</div>`}
+  </div>`;
+}
+
+// Add a new HVAC Circuit additional task with sensible defaults
+function addAdditionalTask_HVAC(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks.slice() : [];
+  tasks.push({
+    id: 'at-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    jobType: 'hvac-circuit',
+    wireId: 'm-001',          // 10/2 default — most common HVAC
+    disconnect: 'non-fused',   // most installs need one
+    runType: 'surface',
+    runFt: 25                  // typical mini-split run
+  });
+  upsertQuote({ ...q, additionalTasks: tasks });
+  // Recompute primary totals so combined L&M reflects the new task
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+// Update a single field on an additional task
+function updateAdditionalTaskField(qid, taskId, field, value) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = (q.additionalTasks || []).map(t => t.id === taskId ? { ...t, [field]: value } : t);
+  upsertQuote({ ...q, additionalTasks: tasks });
+  // Re-render just this card so subtotal updates, plus refresh primary totals
+  const cardEl = document.getElementById('addtask-card-' + taskId);
+  if (cardEl) {
+    const updated = getQuote(qid);
+    const idx = updated.additionalTasks.findIndex(t => t.id === taskId);
+    if (idx >= 0) cardEl.outerHTML = _renderAdditionalTaskCard(qid, updated.additionalTasks[idx], idx);
+  }
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+// Remove an additional task
+function removeAdditionalTask(qid, taskId) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = (q.additionalTasks || []).filter(t => t.id !== taskId);
+  upsertQuote({ ...q, additionalTasks: tasks });
+  // Re-render the whole additional tasks section so the card disappears
+  if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+
 // Live-refresh the auto-generated scope / inclusions / exclusions textareas.
 // Only updates them when the user has NOT manually edited (q.scope etc. is
 // empty) — we don't want to clobber user customizations. Called at the end
@@ -4576,6 +4799,11 @@ function resetExclusionsToAuto(qid) {
 
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
+  // Roll any additional tasks (HVAC circuit add-ons, etc.) into the L&M.
+  // Pricing for each sub-task is computed via _calcAdditionalTaskLM and
+  // already excludes base install / permit since those are covered here.
+  const additionalLM = (typeof _additionalTasksLM === 'function') ? _additionalTasksLM(q) : 0;
+  lm = lm + additionalLM;
   const isVeteran = !!qqPatch.isVeteran;
   const veteranDiscount = isVeteran ? Math.round(lm * (p.veteranDiscountPct||0.10) * 100) / 100 : 0;
   const lmAfterDiscount = lm - veteranDiscount;
@@ -4920,7 +5148,17 @@ function onQQExcChange(qid){const v=document.getElementById('qq-exc')?.value||''
 
 // ── AUTO SCOPE TEXT ──
 // ── AUTO SCOPE / INCLUSIONS / EXCLUSIONS (dispatcher by job type) ──
-function autoScope(q){
+// Wrapper that adds any additional task scope text after the primary scope.
+// The base function `_autoScopePrimary` does the per-job-type rendering.
+function autoScope(q) {
+  const primary = _autoScopePrimary(q);
+  const tasks = (q && Array.isArray(q.additionalTasks)) ? q.additionalTasks : [];
+  if (!tasks.length) return primary;
+  const subScopes = tasks.map(t => _additionalTaskScope(t)).filter(Boolean);
+  if (!subScopes.length) return primary;
+  return primary + '\n\nADDITIONAL WORK INCLUDED IN THIS QUOTE:\n\n' + subScopes.join('\n\n');
+}
+function _autoScopePrimary(q){
   const qq = q.qq || {};
   const loc = qq.panelLocation==='garage' ? 'garage' : 'interior/basement';
   const segs = qq.runSegs || [];
@@ -5026,6 +5264,13 @@ function autoInclusions(q){
   }
   if (q.jobType === 'hvac-circuit' && q.qq?.hvacDisconnect && q.qq.hvacDisconnect !== 'none') {
     lines.push('• Disconnect at the HVAC equipment');
+  }
+  // Append per-additional-task inclusion lines
+  if (Array.isArray(q.additionalTasks) && q.additionalTasks.length > 0) {
+    q.additionalTasks.forEach(t => {
+      const taskLines = _additionalTaskInclusions(t) || [];
+      taskLines.forEach(l => lines.push(l));
+    });
   }
   return lines.join('\n');
 }
@@ -5143,6 +5388,7 @@ function renderDetailedQuoteForm(q){
         </div>
       </div>
     </div>`:''}
+    ${_renderAdditionalTasksSection(q)}
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
