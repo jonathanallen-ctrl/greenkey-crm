@@ -3391,6 +3391,19 @@ function getQQPricing(){
     // 2026-05-02: settled at $1800 — typical 200A swap with 12 breakers + surge + permit lands ~$3023, on target.
     panelReplaceBase:1800, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
     panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
+    // AFCI/GFCI dual-function breaker upgrade — optional add-on for panel swaps.
+    // $100 per upgraded circuit. The math (Capital Electric pricing data):
+    //   HOM120 standard:    $7.61  wholesale  →  $10.65 sell @ 40% markup
+    //   HOM120GFI:          $75.43 wholesale  →  $105.60 sell @ 40% markup
+    //   HOM120DF (combo):   ~$75-80 wholesale (similar to GFI; not in CE catalog yet)
+    // On a like-for-like panel swap, existing breakers are REUSED (no new
+    // breaker material cost — the $35/breaker line covers re-termination
+    // labor only). Upgrading to AFCI/GFCI means buying brand-new dual-function
+    // breakers, so the upcharge has to cover the FULL breaker cost, not a
+    // differential. $100 covers wholesale ($75) + ~$25 margin + ~$5 testing
+    // labor — slightly under standard 40% but reasonable for a customer-
+    // facing upgrade option.
+    panelAFCIUpgradePerBreaker:100,
     // Existing add-ons
     tandemBreaker:40, post:150,
     // Permits / fees
@@ -4025,6 +4038,7 @@ function renderQuickQuoteForm(q){
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
         <div style="display:flex;gap:6px">
+          ${q.scope ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetScopeToAuto('${q.id}')" title="Throw away your edits and regenerate from current quote inputs">↻ Reset to auto</button>` : ''}
           ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Job</button>` : ''}
           <button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pushQuoteScope('${q.id}')" title="Copy this quote's scope into the job's Scope of Work">↗ Push to Job</button>
         </div>
@@ -4265,7 +4279,10 @@ function _renderQQ_CircuitReplacement(q) {
       </div>`}
     </div>
     <div class="qq-section">
-      <div class="qq-title">Scope of Work</div>
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+        Scope of Work
+        ${q.scope ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetScopeToAuto('${q.id}')" title="Throw away your edits and regenerate from current quote inputs">↻ Reset to auto</button>` : ''}
+      </div>
       <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
@@ -4342,6 +4359,24 @@ function _renderQQ_PanelReplacement(q) {
       </div>
     </div>
     <div class="qq-section">
+      <div class="qq-title">AFCI / GFCI Code Upgrade <span style="font-size:11px;color:var(--text-muted);font-weight:400">(optional)</span></div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="qq-panel-afci" ${qq.panelUpgradeAFCI ? 'checked' : ''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Upgrade circuits to combination AFCI / GFCI breakers per current NEC code</span>
+      </label>
+      <div class="frow2" style="margin-top:10px;${qq.panelUpgradeAFCI ? '' : 'opacity:0.55'}">
+        <div class="fg"><div class="fl">Circuits to Upgrade</div>
+          <input class="fi" type="number" id="qq-panel-afci-count" min="0" max="${breakerCount}" value="${(typeof qq.panelAFCICount === 'number') ? qq.panelAFCICount : breakerCount}" oninput="onQQChange('${q.id}')" ${qq.panelUpgradeAFCI ? '' : 'disabled'}>
+        </div>
+        <div class="fg"><div class="fl">Per-Breaker Upgrade Cost</div>
+          <input class="fi" type="text" value="$${getQQPricing().panelAFCIUpgradePerBreaker} each" readonly style="opacity:0.7">
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5">
+        Default GreenKey practice is <strong>like-for-like breaker replacement</strong> — the original protection level is preserved, which is standard industry interpretation of NEC for panel swaps where conductors aren't modified. Toggle this on if the customer wants the modernization, or if your local AHJ inspector requires AFCI/GFCI on a panel swap. Typical breakdown: bedrooms, living areas, kitchens, bathrooms (most 15/20A 1-pole circuits in a dwelling). 240V circuits like dryers, ranges, HVAC, and EV chargers usually stay standard. Adjust the count if only some circuits need upgrading.
+      </div>
+    </div>
+    <div class="qq-section">
       <div class="qq-title">Add-Ons</div>
       <div class="qq-row">
         <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Stucco / brick exterior, attic feeders, AFCI/GFCI breaker upgrades, etc.</div></div>
@@ -4380,7 +4415,10 @@ function _renderQQ_PanelReplacement(q) {
       </div>`}
     </div>
     <div class="qq-section">
-      <div class="qq-title">Scope of Work</div>
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+        Scope of Work
+        ${q.scope ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetScopeToAuto('${q.id}')" title="Throw away your edits and regenerate from current quote inputs">↻ Reset to auto</button>` : ''}
+      </div>
       <textarea class="fta" id="qq-scope" rows="4" style="min-height:100px" oninput="onQQScopeChange('${q.id}')">${q.scope||autoScope(q)}</textarea>
       <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
         <textarea class="fta" id="qq-inc" rows="3" style="min-height:72px" oninput="onQQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
@@ -4489,11 +4527,53 @@ function onQQChange(qid){
   };
   upsertQuote(updated);
   refreshQBSidebar(qid);
+  // Live-refresh auto-generated scope text so panel-location, run-segments,
+  // mount type, NEMA outlet location, etc. reflect immediately in the textarea.
+  if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
 }
 
 // Shared helper — totals up labor+materials with the existing buffer/permit/
 // veteran/Qmerit logic, then upserts the quote. Used by all type-specific
 // onQQChange handlers so the buffer + Qmerit math stays consistent.
+// Live-refresh the auto-generated scope / inclusions / exclusions textareas.
+// Only updates them when the user has NOT manually edited (q.scope etc. is
+// empty) — we don't want to clobber user customizations. Called at the end
+// of every onQQChange variant so any field change instantly reflects in
+// the displayed scope.
+function _refreshAutoTextareas(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const sEl = document.getElementById('qq-scope');
+  if (sEl && !q.scope)      sEl.value = autoScope(q);
+  const iEl = document.getElementById('qq-inc');
+  if (iEl && !q.inclusions) iEl.value = autoInclusions(q);
+  const eEl = document.getElementById('qq-exc');
+  if (eEl && !q.exclusions) eEl.value = autoExclusions(q);
+}
+
+// Reset a customized scope/inclusions/exclusions textarea back to the
+// auto-generated version. Triggered by the "↻ Reset to auto" link.
+function resetScopeToAuto(qid) {
+  const q = getQuote(qid); if (!q) return;
+  upsertQuote({ ...q, scope: '' });
+  const sEl = document.getElementById('qq-scope');
+  if (sEl) sEl.value = autoScope(getQuote(qid));
+  toast('Scope regenerated from quote inputs', 'success');
+}
+function resetInclusionsToAuto(qid) {
+  const q = getQuote(qid); if (!q) return;
+  upsertQuote({ ...q, inclusions: '' });
+  const iEl = document.getElementById('qq-inc');
+  if (iEl) iEl.value = autoInclusions(getQuote(qid));
+  toast('Inclusions regenerated', 'success');
+}
+function resetExclusionsToAuto(qid) {
+  const q = getQuote(qid); if (!q) return;
+  upsertQuote({ ...q, exclusions: '' });
+  const eEl = document.getElementById('qq-exc');
+  if (eEl) eEl.value = autoExclusions(getQuote(qid));
+  toast('Exclusions regenerated', 'success');
+}
+
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
   const isVeteran = !!qqPatch.isVeteran;
@@ -4519,6 +4599,10 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
     quoteTotal
   });
   refreshQBSidebar(q.id);
+  // Live-refresh auto-generated scope text so changes to form fields (slot
+  // count, wire size, breaker count, etc.) reflect immediately. Only fires
+  // when the textarea hasn't been manually edited.
+  _refreshAutoTextareas(q.id);
 }
 
 // HVAC Circuit math: base + decomposed labor segments + wire materials + disconnect.
@@ -4673,6 +4757,13 @@ function _onQQChange_PanelReplacement(qid) {
   // Surge protector — defaults to included; explicit false only when user unchecks
   const surgeEl = document.getElementById('qq-panel-surge');
   const includeSurge = surgeEl ? surgeEl.checked : (q.qq?.panelIncludeSurge !== false);
+  // AFCI / GFCI code upgrade — opt-in; defaults to false (like-for-like).
+  // afciCount defaults to breakerCount but can be lower if only some circuits
+  // need upgrading.
+  const afciEl = document.getElementById('qq-panel-afci');
+  const upgradeAFCI = afciEl ? afciEl.checked : !!(q.qq?.panelUpgradeAFCI);
+  const afciCountRaw = parseInt(document.getElementById('qq-panel-afci-count')?.value);
+  const afciCount = upgradeAFCI ? (isNaN(afciCountRaw) ? breakerCount : Math.max(0, Math.min(breakerCount, afciCountRaw))) : 0;
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
   const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
@@ -4691,6 +4782,8 @@ function _onQQChange_PanelReplacement(qid) {
   lm += Math.round(hardwareCost * 1.30 * 100) / 100; // 30% markup on hardware
   // Whole-home surge protector (default-included)
   if (includeSurge) lm += p.panelSurgeProtector;
+  // AFCI / GFCI dual-function breaker upgrade (opt-in)
+  if (upgradeAFCI && afciCount > 0) lm += afciCount * p.panelAFCIUpgradePerBreaker;
 
   lm += difficultyFee;
   lm += travelAdder;
@@ -4704,6 +4797,8 @@ function _onQQChange_PanelReplacement(qid) {
     panelServiceAmps: serviceAmps,
     panelHardwareCost: hardwareCost,
     panelIncludeSurge: includeSurge,
+    panelUpgradeAFCI: upgradeAFCI,
+    panelAFCICount: afciCount,
     difficultyFee,
     travelMinutes,
     travelAdder,
@@ -4876,7 +4971,15 @@ function autoScope(q){
     const amps = qq.panelServiceAmps || 200;
     const breakers = qq.panelBreakerCount || 12;
     const surge = (qq.panelIncludeSurge !== false) ? ' Includes a Type 2 whole-home surge protector at the panel.' : '';
-    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. All ${breakers} existing branch circuits will be re-terminated to the new panel using current NEC standards (AFCI/GFCI breakers as required by code for affected circuits). Includes panel hardware, main breaker, ground bar kit, and labor for swap, re-termination, and rough-in inspection.${surge}`;
+    // AFCI/GFCI choice — like-for-like by default, full upgrade only if opted in
+    const afciCount = qq.panelAFCICount || 0;
+    let breakerSentence;
+    if (qq.panelUpgradeAFCI && afciCount > 0) {
+      breakerSentence = `${afciCount === breakers ? `All ${breakers}` : `${afciCount} of ${breakers}`} existing branch circuits will be re-terminated using combination AFCI / GFCI breakers per current NEC standards${afciCount < breakers ? `; the remaining ${breakers - afciCount} circuits will be re-terminated like-for-like` : ''}.`;
+    } else {
+      breakerSentence = `All ${breakers} existing branch circuits will be re-terminated to the new panel using equivalent breaker types (like-for-like replacement). The original protection level is preserved. AFCI / GFCI breaker upgrades are available as an add-on if desired.`;
+    }
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}`;
   }
 
   // Battery / V2H / Service / Generator — fallback (Detailed Quote drives the scope)
@@ -4907,7 +5010,16 @@ function autoInclusions(q){
   if ((q.qq?.extras||[]).find(e => e.id==='emporia')) lines.push('• Emporia Vue energy monitor installation');
   if (q.jobType === 'panel-replacement') {
     lines.push('• Re-termination of all existing branch circuits to the new panel');
-    lines.push('• Panel hardware, main breaker, ground bar kit, and required AFCI/GFCI breakers');
+    if (q.qq?.panelUpgradeAFCI && (q.qq?.panelAFCICount || 0) > 0) {
+      const cnt = q.qq.panelAFCICount;
+      const total = q.qq.panelBreakerCount || cnt;
+      lines.push(cnt === total
+        ? '• All circuits upgraded to combination AFCI / GFCI breakers per current code'
+        : `• ${cnt} of ${total} circuits upgraded to combination AFCI / GFCI breakers per current code`);
+    } else {
+      lines.push('• Like-for-like breaker replacement — original protection level preserved');
+    }
+    lines.push('• Panel hardware, main breaker, and ground bar kit');
     if (q.qq?.panelIncludeSurge !== false) {
       lines.push('• Whole-home Type 2 surge protector at the panel');
     }
@@ -5035,6 +5147,7 @@ function renderDetailedQuoteForm(q){
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
         <div style="display:flex;gap:6px">
+          ${q.scope ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetScopeToAuto('${q.id}')" title="Throw away your edits and regenerate from current quote inputs">↻ Reset to auto</button>` : ''}
           ${lead?.scopeOfWork ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pullLeadScope('${q.id}')">↙ Pull from Job</button>` : ''}
           <button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="pushQuoteScope('${q.id}')" title="Copy this quote's scope into the job's Scope of Work">↗ Push to Job</button>
         </div>
@@ -5224,6 +5337,8 @@ function onDQChange(qid){
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
+  // Live-refresh auto-generated scope text on the Detailed Quote form too.
+  if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
 }
 function onDQScopeChange(qid){
   const v=document.getElementById('dq-scope')?.value||'';
