@@ -12329,7 +12329,7 @@ function seedReferrerCustomers() {
       firstName: '',                      // no specific contact name yet (greeting uses salutation)
       lastName: '',
       salutation: 'AF1 team',             // used in email greeting ("Hi AF1 team,")
-      email: '',
+      email: 'info@airforce1ne.com',      // AF1 quote-receiving inbox (confirmed 2026-05-02)
       phone: '804-821-8783',
       street: '',
       city: 'Chesterfield',
@@ -12368,6 +12368,13 @@ function seedReferrerCustomers() {
         }
         if (!existing[existingIdx].salutation && ref.salutation) {
           existing[existingIdx].salutation = ref.salutation;
+          touched = true;
+        }
+        // 4. Backfill AF1 quote-receiving email (was unknown until 2026-05-02).
+        //    Only fill when the existing record has no email — never overwrite
+        //    a value the user has typed in manually.
+        if (!existing[existingIdx].email && ref.email) {
+          existing[existingIdx].email = ref.email;
           touched = true;
         }
         if (touched) {
