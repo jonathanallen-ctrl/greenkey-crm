@@ -1840,11 +1840,11 @@ const ICONS = {
 const NAV_DEF = [
   { sec:'Main', items:[
     {page:'dashboard',label:'Dashboard',roles:['admin','tech','sales'],icon:'grid'},
-    {page:'tech',label:'Tech Mode',roles:['admin','tech'],icon:'brief'},
     {page:'jobs',label:'Pipeline',roles:['admin','tech','sales'],icon:'brief'},
     {page:'leads',label:'Leads',roles:['admin','sales'],icon:'star',badge:'0',bc:'a'},
     {page:'customers',label:'Customers',roles:['admin','sales'],icon:'user'},
     {page:'quotes',label:'Quotes',roles:['admin','tech','sales'],icon:'file'},
+    {page:'tech',label:'Tech Mode',roles:['admin','tech'],icon:'brief'},
   ]},
   { sec:'Manage', items:[
     {page:'tasks',label:'Tasks',roles:['admin','tech'],icon:'check',badge:'0'},
@@ -1885,8 +1885,11 @@ function buildApp(user) {
 }
 
 // Parse location.hash for supported deep-links and route to the target page.
+// Only auto-routes for hashes that include a SPECIFIC payload (e.g.
+// #tech=LEAD_ID for a calendar deep-link). Plain #tech is treated as stale
+// URL state from in-app nav and ignored — refresh always lands on Dashboard.
+//
 // Supported:
-//   #tech            → Tech Mode landing (My Jobs Today list)
 //   #tech=LEAD_ID    → Tech Mode for a specific job (calendar deep-link)
 //   #job-LEAD_ID     → job detail (legacy)
 function _handleDeepLinkHash() {
@@ -1895,12 +1898,10 @@ function _handleDeepLinkHash() {
   // #tech=LEAD_ID — drill into a specific job
   const techWithId = h.match(/^tech=(.+)$/);
   if (techWithId) { openTechMode(decodeURIComponent(techWithId[1])); return; }
-  // #tech or #tech= — landing page (My Jobs Today)
-  if (h === 'tech' || h === 'tech=') {
-    S.techLeadId = null;
-    navigate('tech');
-    return;
-  }
+  // Plain #tech / #tech= — stale URL state from clicking the sidebar tab.
+  // Don't auto-route: refresh should land on Dashboard, user can click the
+  // sidebar Tech Mode item again if they want.
+  if (h === 'tech' || h === 'tech=') return;
   const jobMatch = h.match(/^job-(.+)$/);
   if (jobMatch) {
     const id = decodeURIComponent(jobMatch[1]);
@@ -1917,9 +1918,15 @@ function navEl(el) {
   el.classList.add('active');
   // When the user clicks the Tech Mode sidebar button, drop any retained
   // deep-link lead so they land on the My Jobs Today list, not on a stale job.
+  // We deliberately do NOT set location.hash here — keeps the URL clean so a
+  // page refresh always lands on Dashboard. Calendar deep-links (with a
+  // specific lead ID, e.g. #tech=LEAD_ID) still work via _handleDeepLinkHash.
   if (el.dataset.page === 'tech') {
     S.techLeadId = null;
-    if (location.hash !== '#tech') location.hash = 'tech';
+    // Clear any stale #tech / #tech=ID hash so refresh doesn't re-route.
+    if ((location.hash || '').match(/^#tech/)) {
+      try { history.replaceState(null, '', location.pathname + location.search); } catch(_) {}
+    }
   }
   showPage(el.dataset.page);
   closeSidebar();
@@ -4556,6 +4563,30 @@ function onQQChange(qid){
 // add new types by writing a _calcAdditionalTask_<type> helper and a render
 // function for the mini-form, then wiring them into the dispatcher below.
 
+// Breaker options for HVAC additional tasks. Customer-facing prices are
+// wholesale cost (Capital Electric data) × ~40% markup, rounded.
+//   HOM115 / HOM120 standard 1-pole:    $7.61 wholesale → $11 sell
+//   HOM230 - HOM260 standard 2-pole:    $18.04 wholesale → $25 sell
+//   HOM280 standard 2-pole:             $89.11 wholesale → $125 sell
+//   HOM2100 standard 2-pole:            $79.61 wholesale → $111 sell
+const HVAC_BREAKER_OPTIONS = [
+  {key: 'none',   label: 'None — already in panel or customer-supplied', price: 0},
+  {key: '1p-15',  label: '15 A 1-pole',  price: 11},
+  {key: '1p-20',  label: '20 A 1-pole',  price: 11},
+  {key: '2p-30',  label: '30 A 2-pole',  price: 25},
+  {key: '2p-40',  label: '40 A 2-pole',  price: 25},
+  {key: '2p-50',  label: '50 A 2-pole',  price: 25},
+  {key: '2p-60',  label: '60 A 2-pole',  price: 25},
+  {key: '2p-80',  label: '80 A 2-pole',  price: 125},
+  {key: '2p-100', label: '100 A 2-pole', price: 111}
+];
+// Human-friendly amperage label for scope text (e.g. "30-amp")
+function _hvacBreakerAmpLabel(key) {
+  if (!key || key === 'none') return '';
+  const m = (key || '').match(/(\d+)$/);
+  return m ? `${m[1]}-amp` : '';
+}
+
 // Compute L&M for a single additional task. Returns 0 for unknown types.
 // If task.amountOverride is set, it takes precedence — used when contractor
 // has agreed a specific number with the customer/AF1 verbally.
@@ -4599,8 +4630,12 @@ function _calcAdditionalTask_HVAC(task) {
   let disc = 0;
   if (disconnect === 'non-fused') disc = p.hvacDisconnectNonFused;
   else if (disconnect === 'fused') disc = p.hvacDisconnectFused;
+  // Breaker (looked up from HVAC_BREAKER_OPTIONS — wholesale × markup)
+  const breakerKey = task.breakerKey || 'none';
+  const brk = HVAC_BREAKER_OPTIONS.find(b => b.key === breakerKey);
+  const breakerCost = brk ? brk.price : 0;
 
-  return Math.round((labor + wireCost + disc) * 100) / 100;
+  return Math.round((labor + wireCost + disc + breakerCost) * 100) / 100;
 }
 
 // Sum of all additional tasks on a quote
@@ -4623,7 +4658,9 @@ function _additionalTaskScope(task) {
     const runDesc = ft > 0
       ? `${ft} ft of ${task.runType === 'hand-trench' ? 'hand-dug trench' : task.runType === 'machine-trench' ? 'machine trench' : 'surface conduit'}`
       : 'wire run';
-    return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the HVAC equipment disconnect${discDesc}.`;
+    const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
+    const brkDesc = ampLabel ? ` protected by a new ${ampLabel} breaker installed in the existing panel` : '';
+    return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the HVAC equipment disconnect${discDesc}${brkDesc}.`;
   }
   return '';
 }
@@ -4633,6 +4670,10 @@ function _additionalTaskInclusions(task) {
   if (!task) return [];
   if (task.jobType === 'hvac-circuit') {
     const lines = ['• Additional dedicated branch circuit for HVAC equipment'];
+    const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
+    if (ampLabel) {
+      lines.push(`• New ${ampLabel} breaker installed in existing panel`);
+    }
     if (task.disconnect && task.disconnect !== 'none') {
       lines.push(`• ${task.disconnect === 'fused' ? 'Fused' : 'Non-fused'} disconnect at the HVAC unit`);
     }
@@ -4662,6 +4703,13 @@ function _renderAdditionalTaskCard(qid, task, idx) {
           ${wireOptions.map(opt => `<option value="${opt.id}"${task.wireId === opt.id ? ' selected' : ''}>${opt.label}</option>`).join('')}
         </select>
       </div>
+      <div class="fg"><div class="fl">Breaker</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'breakerKey', this.value)">
+          ${HVAC_BREAKER_OPTIONS.map(opt => `<option value="${opt.key}"${(task.breakerKey || 'none') === opt.key ? ' selected' : ''}>${opt.label}${opt.price > 0 ? ` (+$${opt.price})` : ''}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="frow2">
       <div class="fg"><div class="fl">Disconnect</div>
         <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'disconnect', this.value)">
           <option value="none"${(task.disconnect || 'none') === 'none' ? ' selected' : ''}>None</option>
@@ -4669,8 +4717,6 @@ function _renderAdditionalTaskCard(qid, task, idx) {
           <option value="fused"${task.disconnect === 'fused' ? ' selected' : ''}>Fused (+$150)</option>
         </select>
       </div>
-    </div>
-    <div class="frow2">
       <div class="fg"><div class="fl">Run Type</div>
         <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runType', this.value)">
           <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface / crawl / attic — $115/10 ft</option>
@@ -4678,9 +4724,9 @@ function _renderAdditionalTaskCard(qid, task, idx) {
           <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Machine trench — $620 base + $115/10 ft beyond 50</option>
         </select>
       </div>
-      <div class="fg"><div class="fl">Run Length (ft of wire run)</div>
-        <input class="fi" type="number" min="0" step="10" value="${task.runFt || 25}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runFt', parseInt(this.value)||0)">
-      </div>
+    </div>
+    <div class="fg"><div class="fl">Run Length (ft of wire run)</div>
+      <input class="fi" type="number" min="0" step="10" value="${task.runFt || 25}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runFt', parseInt(this.value)||0)">
     </div>
     <div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
@@ -4729,6 +4775,7 @@ function addAdditionalTask_HVAC(qid) {
     jobType: 'hvac-circuit',
     wireId: 'm-001',          // 10/2 default — most common HVAC
     disconnect: 'non-fused',   // most installs need one
+    breakerKey: '2p-30',       // 30 A 2-pole pairs with 10/2 wire — most common
     runType: 'surface',
     runFt: 25                  // typical mini-split run
   });
