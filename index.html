@@ -74,6 +74,8 @@
   .mtitle{font-size:16px;font-weight:600;margin-bottom:8px;letter-spacing:-0.3px}
   .mdesc{font-size:13.5px;color:var(--text-secondary);line-height:1.6;margin-bottom:20px}
   .mact{display:flex;gap:10px;justify-content:flex-end}
+  /* Used by AI Estimator modal spinner + sync status indicator */
+  @keyframes spin{to{transform:rotate(360deg)}}
 
   /* CONSENT MODAL TABS */
   .consent-tab.active{color:var(--green)!important;border-bottom-color:var(--green)!important;font-weight:600}
@@ -916,6 +918,74 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M20 7h-3.5L15 5H9L7.5 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
         Capture
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- AI DRAFT MODAL — paste a scope of work, get an AI-drafted quote -->
+<!-- Two-pane layout: left side is the input (scope + context), right side fills with the result. -->
+<!-- Bound to a single quote at a time via _aiDraftQuoteId; closing reverts the modal back to input view. -->
+<div class="moverlay" id="ai-draft-modal">
+  <div class="modal" style="max-width:900px;width:100%;max-height:92vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:10px">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2">
+        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+      </svg>
+      AI Estimator — draft a quote from a scope of work
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.55">
+      Paste the customer's scope below. The AI estimator will pick a job type, propose materials and labor, list its assumptions, and run a sanity check against the deterministic formula. <strong>Always review before sending</strong> — this is a draft, not a final quote.
+    </div>
+
+    <div id="ai-draft-input" style="overflow-y:auto;flex:1;padding-right:4px">
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Scope of work</div>
+        <textarea id="ai-scope-input" placeholder="Paste the scope here. Plain English is fine — describe what the customer wants, where the panel is, distances, special conditions, etc."
+          style="width:100%;min-height:200px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Tip — if you've already filled in the job's scope, click <em>Pull from Job</em> below to copy it in.</div>
+      </div>
+      <div class="frow2" style="margin-bottom:14px">
+        <div class="fg"><div class="fl">Panel location (optional)</div>
+          <select class="fsel" id="ai-panel-loc">
+            <option value="">— unknown —</option>
+            <option value="garage">Garage</option>
+            <option value="interior">Interior / basement</option>
+            <option value="exterior">Exterior wall</option>
+          </select>
+        </div>
+        <div class="fg"><div class="fl">Measured distance (ft, optional)</div>
+          <input class="fi" type="number" id="ai-distance" placeholder="e.g. 25" min="0" step="1">
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Notes for the AI (optional)</div>
+        <textarea id="ai-notes-input" placeholder="Anything that's not in the scope but useful — site quirks, customer preferences, must-have brands, etc."
+          style="width:100%;min-height:60px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none"></textarea>
+      </div>
+      <div id="ai-draft-error" style="display:none;background:#3a1d1d;border:1px solid #b34a4a;border-radius:var(--r);padding:10px 12px;font-size:12px;color:#fecaca;margin-top:10px"></div>
+    </div>
+
+    <div id="ai-draft-loading" style="display:none;flex:1;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:40px 20px">
+      <svg width="40" height="40" viewBox="0 0 50 50" style="animation:spin 1.2s linear infinite">
+        <circle cx="25" cy="25" r="20" fill="none" stroke="var(--green)" stroke-width="4" stroke-dasharray="80 30" stroke-linecap="round"/>
+      </svg>
+      <div style="font-size:13px;color:var(--text-muted)">Drafting quote — this usually takes 10–25 seconds…</div>
+    </div>
+
+    <div id="ai-draft-result" style="display:none;overflow-y:auto;flex:1;padding-right:4px"></div>
+
+    <div class="mact" style="flex-shrink:0;padding-top:10px;border-top:1px solid var(--border);margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-g" onclick="closeAIDraftModal()">Cancel</button>
+      <button class="btn btn-g" id="ai-draft-pull-btn" onclick="pullAIScopeFromJob()" style="margin-left:auto">↙ Pull from Job</button>
+      <button class="btn btn-p" id="ai-draft-submit-btn" onclick="submitAIDraft()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        Draft with AI
+      </button>
+      <button class="btn btn-p" id="ai-draft-apply-btn" onclick="applyAIDraft()" style="display:none">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        Apply to Quote
+      </button>
+      <button class="btn btn-g" id="ai-draft-back-btn" onclick="resetAIDraftToInput()" style="display:none">← Edit scope</button>
     </div>
   </div>
 </div>
@@ -5239,7 +5309,11 @@ function _autoScopePrimary(q){
   // Circuit Replacement (no permit)
   if (q.jobType === 'circuit-replacement') {
     const wireMat = (qq.hvacWireId && getMaterials().find(m => m.id === qq.hvacWireId)) || null;
-    const wireDesc = wireMat ? wireMat.name.replace(/ Cable$/,'') : 'correctly-sized cable';
+    // wireDesc is the wire/cable type prefix — e.g. "10/2 NM-B" — and the
+    // template below appends the literal " cable" after it. The fallback
+    // must NOT contain the word "cable" or it doubles ("correctly-sized
+    // cable cable"). Use just "correctly-sized" here.
+    const wireDesc = wireMat ? wireMat.name.replace(/ Cable$/,'') : 'correctly-sized';
     const targetAmps = qq.targetAmps || 30;
     const existingAmps = qq.existingAmps || 0;
     const existingNote = existingAmps ? ` (replacing the existing ${existingAmps}-amp circuit)` : '';
@@ -5376,6 +5450,24 @@ function renderDetailedQuoteForm(q){
     <button class="li-del" onclick="removeRental('${q.id}',${i})">×</button>
   </div>`).join('');
   wrap.innerHTML=`
+    <div class="qq-section" style="background:linear-gradient(135deg,var(--bg-surface) 0%,var(--green-dim) 100%);border:1px solid var(--green)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            AI Estimator
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;line-height:1.5">Paste a complex scope and let Claude draft the line items, labor, and permit — useful when Quick Quote can't capture all the variables. <strong>You'll review the draft before it touches the quote.</strong></div>
+        </div>
+        <button class="btn btn-p" onclick="openAIDraftModal('${q.id}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Draft with AI
+        </button>
+      </div>
+      ${q.aiDraftedAt ? `<div style="font-size:11px;color:var(--text-muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+        Last AI draft applied ${new Date(q.aiDraftedAt).toLocaleString()}${q.aiJobTypeGuess?` · type guess: <strong>${q.aiJobTypeGuess}</strong>`:''}${(q.aiSanityCheck && q.aiSanityCheck.warn)?' · <span style="color:#fca5a5">⚠ sanity check flagged</span>':''}
+      </div>` : ''}
+    </div>
     <div class="qq-section">
       <div class="qq-title">Materials</div>
       <div style="overflow-x:auto">
@@ -13899,6 +13991,361 @@ async function hydrateQuoteStatusFromServer(qid) {
     return null;
   }
 }
+
+// ═════════════════════════════════════════════════════════════
+// AI ESTIMATOR — open modal, send scope to Worker, apply draft
+// ═════════════════════════════════════════════════════════════
+//
+// The Worker endpoint POST /quote/estimate (cloudflare-worker/src/index.js)
+// builds a Claude system prompt with these pricing rules + the materials
+// catalog + the user's scope, calls the Anthropic API, and returns a
+// validated JSON draft (lines, labor, permit, assumptions, sanityCheck).
+//
+// We bind the modal to a single quote at a time via _aiDraftQuoteId.
+// On Apply, we map the draft into q.lines / q.laborHours / q.laborRate /
+// q.rentals / q.permitFee / q.scope / q.aiAssumptions, then re-render the
+// detailed quote form so the user can review and tweak before sending.
+//
+// Pricing rules — kept in lockstep with quote_pricing_rules.json. Updating
+// either source requires updating both. The worker uses these to compute a
+// deterministic formula price for the sanity check.
+const AI_ESTIMATOR_PRICING_RULES = {
+  base: { garageInstallNoPermit: 500, interiorInstallNoPermit: 750 },
+  permit: { standard: 200, qmerit: 250, specialJurisdiction: 500 },
+  perFootBeyond10ft: { tier1Standard: 150, tier2Moderate: 195, tier3Hard: 240 },
+  nemaOutletAdder: { indoor: 85, outdoor: 100, wireSurchargePerFootBeyond20ft: 1.0 },
+  eatonBrPanelAdder: { addedToStandardBreaker: 50 },
+  trenching: {
+    handDig6inch: { perFoot: 20 },
+    machine6inch: { base: 650, perFootBeyondBase: 15 },
+    machinePvc18inch: { base: 750, perFootBeyondBase: 20 }
+  },
+  travel: { freeMinutesRoundTrip: 60, ratePerHour: 160 },
+  irrigation: { contingencyLineItem: 75, tripCharge: 75 },
+  minimumMargin: { floorPercent: 15 },
+  distanceBuffer: { percent: 15 },
+  aiSanityCheck: { deltaWarnPercent: 25 }
+};
+
+// Quote currently bound to the modal (set by openAIDraftModal, cleared on close).
+let _aiDraftQuoteId = null;
+// Latest draft response held in memory until Apply or Cancel.
+let _aiDraftResponse = null;
+
+// Open the AI Estimator modal for a specific quote. If the lead has a
+// scope-of-work already set, pre-fill the textarea with it.
+function openAIDraftModal(qid) {
+  const q = getQuote(qid); if (!q) { toast('Quote not found', 'error'); return; }
+  _aiDraftQuoteId = qid;
+  _aiDraftResponse = null;
+  resetAIDraftToInput();
+  // Pre-fill scope: prefer the quote's existing scope, then fall back to lead's.
+  const lead = q.leadId ? getLead(q.leadId) : null;
+  const seed = q.scope || lead?.scopeOfWork || '';
+  const scopeEl = document.getElementById('ai-scope-input');
+  if (scopeEl) scopeEl.value = seed;
+  // Pre-fill panel location if previously captured on the quote.
+  const panelEl = document.getElementById('ai-panel-loc');
+  if (panelEl) panelEl.value = (q.qq && q.qq.panelLocation) || '';
+  const distEl = document.getElementById('ai-distance');
+  if (distEl) distEl.value = '';
+  const notesEl = document.getElementById('ai-notes-input');
+  if (notesEl) notesEl.value = '';
+  document.getElementById('ai-draft-modal').classList.add('show');
+}
+
+function closeAIDraftModal() {
+  document.getElementById('ai-draft-modal').classList.remove('show');
+  _aiDraftQuoteId = null;
+  _aiDraftResponse = null;
+}
+
+// Reset the modal back to the input view (used initially and on "← Edit scope").
+function resetAIDraftToInput() {
+  const inputPane = document.getElementById('ai-draft-input');
+  const loadingPane = document.getElementById('ai-draft-loading');
+  const resultPane = document.getElementById('ai-draft-result');
+  const submitBtn = document.getElementById('ai-draft-submit-btn');
+  const applyBtn = document.getElementById('ai-draft-apply-btn');
+  const backBtn = document.getElementById('ai-draft-back-btn');
+  const pullBtn = document.getElementById('ai-draft-pull-btn');
+  const errBox = document.getElementById('ai-draft-error');
+  if (inputPane) inputPane.style.display = '';
+  if (loadingPane) loadingPane.style.display = 'none';
+  if (resultPane) { resultPane.style.display = 'none'; resultPane.innerHTML = ''; }
+  if (submitBtn) submitBtn.style.display = '';
+  if (applyBtn) applyBtn.style.display = 'none';
+  if (backBtn) backBtn.style.display = 'none';
+  if (pullBtn) pullBtn.style.display = '';
+  if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+}
+
+// Pull the lead's Scope of Work into the textarea (overwrites whatever's there).
+function pullAIScopeFromJob() {
+  if (!_aiDraftQuoteId) return;
+  const q = getQuote(_aiDraftQuoteId); if (!q) return;
+  const lead = q.leadId ? getLead(q.leadId) : null;
+  const text = lead?.scopeOfWork || '';
+  if (!text) { toast('No Scope of Work on this job yet', 'warning'); return; }
+  const el = document.getElementById('ai-scope-input');
+  if (el) el.value = text;
+}
+
+// Submit the scope to the Worker. Shows the loading spinner, calls
+// /quote/estimate, then renders the result panel (or an error message).
+async function submitAIDraft() {
+  if (!_aiDraftQuoteId) { toast('No quote bound to AI estimator', 'error'); return; }
+  const q = getQuote(_aiDraftQuoteId); if (!q) { toast('Quote not found', 'error'); return; }
+  const scope = (document.getElementById('ai-scope-input')?.value || '').trim();
+  const notes = (document.getElementById('ai-notes-input')?.value || '').trim();
+  const panelLoc = document.getElementById('ai-panel-loc')?.value || '';
+  const dist = parseFloat(document.getElementById('ai-distance')?.value || '');
+  const errBox = document.getElementById('ai-draft-error');
+  if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+
+  if (!scope) {
+    if (errBox) { errBox.textContent = 'Paste a scope of work before drafting.'; errBox.style.display = 'block'; }
+    return;
+  }
+  if (!_smsConfigured()) {
+    if (errBox) { errBox.textContent = 'AI estimator requires the Worker to be configured (same Worker as SMS).'; errBox.style.display = 'block'; }
+    return;
+  }
+
+  // Flip to loading view
+  const inputPane = document.getElementById('ai-draft-input');
+  const loadingPane = document.getElementById('ai-draft-loading');
+  const submitBtn = document.getElementById('ai-draft-submit-btn');
+  const pullBtn = document.getElementById('ai-draft-pull-btn');
+  if (inputPane) inputPane.style.display = 'none';
+  if (loadingPane) loadingPane.style.display = 'flex';
+  if (submitBtn) submitBtn.disabled = true;
+  if (pullBtn) pullBtn.style.display = 'none';
+
+  try {
+    const lead = q.leadId ? getLead(q.leadId) : null;
+    const cust = q.customerId ? getCustomer(q.customerId) : (lead ? getCustomer(lead.customerId) : null);
+    const ctx = {
+      jobType: q.jobType || null,
+      source: q.source || lead?.source || null,
+      jurisdiction: q.jurisdiction || null,
+      specialJurisdiction: !!q.specialJurisdiction,
+      panelLocation: panelLoc || null,
+      measuredDistanceFt: !isNaN(dist) ? dist : null,
+      siteAddress: lead?.siteAddress || cust?.address || null,
+      propertyType: cust?.propertyType || null,
+      isVeteran: !!q.isVeteran,
+      notes: notes || null
+    };
+    const bearer = await _acquireSMSToken();
+    const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/quote/estimate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearer },
+      body: JSON.stringify({
+        scope,
+        context: ctx,
+        pricingRules: AI_ESTIMATOR_PRICING_RULES,
+        materials: getMaterials()
+      })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      const msg = data.error || ('Worker returned ' + resp.status);
+      throw new Error(msg);
+    }
+    _aiDraftResponse = data.draft;
+    _aiDraftResponse._meta = data.meta || {};
+    _renderAIDraftResult(_aiDraftResponse);
+  } catch (e) {
+    console.error('[AI Estimator] submit failed:', e);
+    // Flip back to input view with error visible
+    if (inputPane) inputPane.style.display = '';
+    if (loadingPane) loadingPane.style.display = 'none';
+    if (submitBtn) submitBtn.disabled = false;
+    if (pullBtn) pullBtn.style.display = '';
+    if (errBox) {
+      errBox.textContent = 'AI estimator failed: ' + (e.message || String(e));
+      errBox.style.display = 'block';
+    }
+  }
+}
+
+// Render the result panel. Shown after a successful Worker response.
+function _renderAIDraftResult(draft) {
+  const loadingPane = document.getElementById('ai-draft-loading');
+  const resultPane = document.getElementById('ai-draft-result');
+  const submitBtn = document.getElementById('ai-draft-submit-btn');
+  const applyBtn = document.getElementById('ai-draft-apply-btn');
+  const backBtn = document.getElementById('ai-draft-back-btn');
+  const pullBtn = document.getElementById('ai-draft-pull-btn');
+  if (loadingPane) loadingPane.style.display = 'none';
+  if (submitBtn) { submitBtn.style.display = 'none'; submitBtn.disabled = false; }
+  if (pullBtn) pullBtn.style.display = 'none';
+  if (applyBtn) applyBtn.style.display = '';
+  if (backBtn) backBtn.style.display = '';
+  if (!resultPane) return;
+
+  const lines = Array.isArray(draft.lines) ? draft.lines : [];
+  const rentals = Array.isArray(draft.rentals) ? draft.rentals : [];
+  const assumptions = Array.isArray(draft.assumptions) ? draft.assumptions : [];
+  const sc = draft.sanityCheck || {};
+  const labor = (parseFloat(draft.laborHours) || 0) * (parseFloat(draft.laborRate) || 160);
+  const matsTotal = lines.reduce((s, ln) => s + (parseFloat(ln.qty)||0) * (parseFloat(ln.unitCost)||0) * (1 + (parseFloat(ln.markup)||0)/100), 0);
+  const rentalsTotal = rentals.reduce((s, r) => s + (parseFloat(r.cost)||0), 0);
+  const permit = parseFloat(draft.permitFee) || 0;
+  const total = matsTotal + labor + rentalsTotal + permit;
+
+  const jobTypeLabel = (draft.jobTypeGuess || 'other').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const sanityWarn = !!sc.warn;
+
+  const linesRows = lines.map(ln => {
+    const qty = parseFloat(ln.qty) || 0;
+    const cost = parseFloat(ln.unitCost) || 0;
+    const markup = parseFloat(ln.markup) || 0;
+    const ext = qty * cost * (1 + markup / 100);
+    return `<tr>
+      <td style="padding:4px 6px;font-size:12px">${(ln.desc||'').replace(/</g,'&lt;')}</td>
+      <td style="padding:4px 6px;font-size:12px;text-align:right;font-family:var(--mono)">${qty}</td>
+      <td style="padding:4px 6px;font-size:12px;color:var(--text-muted)">${(ln.unit||'each').replace(/</g,'&lt;')}</td>
+      <td style="padding:4px 6px;font-size:12px;text-align:right;font-family:var(--mono)">${fmt$(cost)}</td>
+      <td style="padding:4px 6px;font-size:12px;text-align:right;font-family:var(--mono);color:var(--text-muted)">${markup}%</td>
+      <td style="padding:4px 6px;font-size:12px;text-align:right;font-family:var(--mono);color:var(--green);font-weight:600">${fmt$(ext)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" style="padding:10px;text-align:center;color:var(--text-muted);font-size:12px">No materials line items proposed</td></tr>`;
+
+  const rentalsHtml = rentals.length ? `<div style="margin-top:14px">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">Rentals</div>
+    ${rentals.map(r => `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px">
+      <span>${(r.desc||'').replace(/</g,'&lt;')}</span>
+      <span style="font-family:var(--mono);color:var(--green)">${fmt$(parseFloat(r.cost)||0)}</span>
+    </div>`).join('')}
+  </div>` : '';
+
+  const assumptionsHtml = assumptions.length ? `<div style="margin-top:14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:12px">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-secondary)">Assumptions the AI made</div>
+    <ul style="margin:0;padding-left:18px;font-size:12px;color:var(--text-secondary);line-height:1.6">
+      ${assumptions.map(a => `<li>${String(a).replace(/</g,'&lt;')}</li>`).join('')}
+    </ul>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5">Verify each before sending. Anything unfamiliar is a flag — re-prompt with corrections, or apply and edit by hand.</div>
+  </div>` : '';
+
+  const scopeRewriteHtml = draft.scopeRewrite ? `<div style="margin-top:14px">
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">Scope rewrite (will replace quote scope on Apply)</div>
+    <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px;font-size:12.5px;line-height:1.6;white-space:pre-wrap">${String(draft.scopeRewrite).replace(/</g,'&lt;')}</div>
+  </div>` : '';
+
+  const sanityHtml = `<div style="margin-top:14px;background:${sanityWarn?'#3a1d1d':'var(--bg-elevated)'};border:1px solid ${sanityWarn?'#b34a4a':'var(--border)'};border-radius:var(--r);padding:12px;font-size:12px;color:${sanityWarn?'#fecaca':'var(--text-secondary)'};line-height:1.55">
+    <div style="font-weight:600;margin-bottom:4px">${sanityWarn ? '⚠ Sanity check — review carefully' : '✓ Sanity check passed'}</div>
+    AI total: <strong style="font-family:var(--mono)">${fmt$(sc.aiTotal||total)}</strong> · Formula total: <strong style="font-family:var(--mono)">${fmt$(sc.formulaTotal||0)}</strong> · Δ <strong>${(sc.deltaPercent||0).toFixed(1)}%</strong>
+    ${draft.sanityCheckNote ? `<div style="margin-top:6px;font-style:italic">${String(draft.sanityCheckNote).replace(/</g,'&lt;')}</div>` : ''}
+  </div>`;
+
+  const tokensHtml = (draft._meta && (draft._meta.promptTokens || draft._meta.completionTokens))
+    ? `<div style="font-size:11px;color:var(--text-muted);margin-top:10px">Model: ${draft._meta.model || 'claude'} · ${draft._meta.promptTokens||0} in / ${draft._meta.completionTokens||0} out tokens</div>`
+    : '';
+
+  resultPane.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="background:var(--green-dim);color:var(--green);border:1px solid var(--green);border-radius:999px;padding:3px 12px;font-size:11px;font-weight:600;letter-spacing:0.3px">${jobTypeLabel.toUpperCase()}</div>
+      <div style="font-size:13px;color:var(--text-muted)">Estimated total: <strong style="color:var(--green);font-family:var(--mono)">${fmt$(total)}</strong> (L&amp;M ${fmt$(matsTotal+labor+rentalsTotal)} + permit ${fmt$(permit)})</div>
+    </div>
+    ${scopeRewriteHtml}
+    <div style="margin-top:14px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px">Materials</div>
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+        <table style="width:100%;border-collapse:collapse;min-width:520px">
+          <thead><tr style="background:var(--bg-elevated)">
+            <th style="padding:6px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Description</th>
+            <th style="padding:6px;text-align:right;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Qty</th>
+            <th style="padding:6px;text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Unit</th>
+            <th style="padding:6px;text-align:right;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Cost</th>
+            <th style="padding:6px;text-align:right;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Markup</th>
+            <th style="padding:6px;text-align:right;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Extended</th>
+          </tr></thead>
+          <tbody>${linesRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px;text-align:center">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Labor</div>
+        <div style="font-size:14px;font-weight:600;color:var(--green);font-family:var(--mono);margin-top:2px">${fmt$(labor)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${(parseFloat(draft.laborHours)||0).toFixed(1)} hrs × $${parseFloat(draft.laborRate)||160}/hr</div>
+      </div>
+      <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px;text-align:center">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Permit</div>
+        <div style="font-size:14px;font-weight:600;color:var(--green);font-family:var(--mono);margin-top:2px">${fmt$(permit)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">&nbsp;</div>
+      </div>
+      <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px;text-align:center">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Wire run</div>
+        <div style="font-size:14px;font-weight:600;color:var(--text-primary);font-family:var(--mono);margin-top:2px">${(parseFloat(draft.wireRunFt)||0).toFixed(0)} ft</div>
+        <div style="font-size:11px;color:var(--text-muted)">${draft.wireRunFt ? 'AI estimated' : 'not specified'}</div>
+      </div>
+    </div>
+    ${rentalsHtml}
+    ${assumptionsHtml}
+    ${sanityHtml}
+    ${tokensHtml}
+  `;
+  resultPane.style.display = '';
+}
+
+// Apply the AI draft to the bound quote. Maps draft fields onto q.lines etc.,
+// upserts, and re-renders the detailed quote form so the user can review.
+function applyAIDraft() {
+  if (!_aiDraftQuoteId || !_aiDraftResponse) { toast('Nothing to apply', 'warning'); return; }
+  const q = getQuote(_aiDraftQuoteId); if (!q) { toast('Quote not found', 'error'); return; }
+  const draft = _aiDraftResponse;
+
+  // Map AI line items into q.lines. Stamp each with a fresh id and default
+  // unit if the AI omitted one.
+  const lines = (draft.lines || []).map((ln, i) => ({
+    id: 'ln-' + Date.now() + '-' + i,
+    desc: ln.desc || '',
+    qty: parseFloat(ln.qty) || 1,
+    unit: ln.unit || 'each',
+    unitCost: parseFloat(ln.unitCost) || 0,
+    markup: parseFloat(ln.markup) || 30,
+    aiSource: 'ai-suggested',
+    aiMaterialId: ln.materialId || null
+  }));
+  const rentals = (draft.rentals || []).map((r, i) => ({
+    id: 'ren-' + Date.now() + '-' + i,
+    desc: r.desc || '',
+    cost: parseFloat(r.cost) || 0,
+    aiSource: 'ai-suggested'
+  }));
+
+  upsertQuote({
+    ...q,
+    lines,
+    rentals,
+    laborHours: parseFloat(draft.laborHours) || 0,
+    laborRate: parseFloat(draft.laborRate) || 160,
+    permitFee: parseFloat(draft.permitFee) || 200,
+    scope: draft.scopeRewrite || q.scope,
+    aiAssumptions: Array.isArray(draft.assumptions) ? draft.assumptions : [],
+    aiSanityCheck: draft.sanityCheck || null,
+    aiJobTypeGuess: draft.jobTypeGuess || null,
+    aiDraftedAt: new Date().toISOString()
+  });
+
+  // Recompute totals via existing detailed-quote pipeline
+  if (typeof onDQChange === 'function') {
+    try { onDQChange(_aiDraftQuoteId); } catch(_){}
+  }
+  // Re-render the form so the new lines, labor, permit etc. are visible
+  if (typeof renderQBForm === 'function') {
+    try { renderQBForm(getQuote(_aiDraftQuoteId)); } catch(_){}
+  }
+
+  toast('AI draft applied — review before sending', 'success');
+  closeAIDraftModal();
+}
+// ════════════════════════════════════════════════════════════
+// END AI ESTIMATOR
+// ════════════════════════════════════════════════════════════
 
 async function hydrateConsentFromServer(customerId) {
   if (!customerId) return;
