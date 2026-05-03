@@ -4718,7 +4718,9 @@ function _renderAdditionalTasksSection(q) {
   </div>`;
 }
 
-// Add a new HVAC Circuit additional task with sensible defaults
+// Add a new HVAC Circuit additional task with sensible defaults.
+// Re-renders the form after adding so the new card is visible — without
+// this, clicks silently stack tasks behind the scenes.
 function addAdditionalTask_HVAC(qid) {
   const q = getQuote(qid); if (!q) return;
   const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks.slice() : [];
@@ -4731,6 +4733,10 @@ function addAdditionalTask_HVAC(qid) {
     runFt: 25                  // typical mini-split run
   });
   upsertQuote({ ...q, additionalTasks: tasks });
+  // Re-render the entire quote form so the new task card appears.
+  // (Just calling onQQChange would update totals but leave the new card
+  // invisible — the form would need a full re-render to show the card.)
+  if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
   // Recompute primary totals so combined L&M reflects the new task
   if (typeof onQQChange === 'function') onQQChange(qid);
 }
@@ -5892,13 +5898,26 @@ async function emailQuote(qid){
   // For B2B-referrer-billed quotes, default the recipient to the referrer's
   // billing email instead of the homeowner's. User can still override in the
   // modal before sending.
+  // IMPORTANT: greeting name must align with the recipient. If the referrer
+  // has no email on file, the email goes to the homeowner — in that case use
+  // the homeowner's name, not the referrer contact's name (otherwise the
+  // homeowner gets an email greeting them as "Trevor").
   const _billTo = (typeof getQuoteBillToCustomer === 'function') ? getQuoteBillToCustomer(q) : null;
   const _isReferrerBilled = (typeof isQuoteBilledToReferrer === 'function') && isQuoteBilledToReferrer(q);
-  const toEmail = (_isReferrerBilled && _billTo?.email) ? _billTo.email
+  const _useReferrerContact = !!(_isReferrerBilled && _billTo?.email);
+  const toEmail = _useReferrerContact ? _billTo.email
                 : (cust?.email || lead?.customerEmail || '');
-  const custFirst = _isReferrerBilled
-    ? (((_billTo?.firstName) || (_billTo?.businessName) || 'there').split(/\s+/)[0])
-    : ((cust?cust.firstName:lead?.customerName?.split(' ')[0]) || 'there');
+  // Greeting: prefer the explicit salutation (e.g. "AF1 team") if set on the
+  // bill-to record, then firstName, then a generic "team" form derived from
+  // businessName, then "there". For homeowner-billed quotes, just first name.
+  const custFirst = _useReferrerContact
+    ? (
+        _billTo?.salutation
+        || _billTo?.firstName
+        || (_billTo?.businessName ? _billTo.businessName.replace(/,?\s*(LLC|Inc|Corp|Co)\.?$/i,'').trim() + ' team' : '')
+        || 'there'
+      )
+    : ((cust?.firstName) || (lead?.customerName?.split(' ')[0]) || 'there');
   const total=fmt$(q.quoteTotal||0);
   const addr=lead?.siteStreet?`${lead.siteStreet}, ${lead.siteCity||''}`:'your property';
   // Project phrase derived from job type — used throughout the email copy so
@@ -6783,6 +6802,15 @@ function _buildDirectQuoteEmail(ctx) {
   return _buildPermitStandardEmail(ctx);
 }
 
+// Build the "SCOPE OF WORK" block as plain text for inclusion in direct
+// customer emails. Falls back to autoScope() when q.scope hasn't been
+// manually edited (matches the PDF behavior).
+function _buildScopeText(q) {
+  const scope = (q && q.scope) ? q.scope : ((typeof autoScope === 'function') ? autoScope(q) : '');
+  if (!scope) return '';
+  return `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSCOPE OF WORK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${scope}\n`;
+}
+
 // Build the "PAYMENT SCHEDULE" section as plain text. Returns an empty string
 // if there's nothing meaningful to say (sub-$1K direct jobs, platform jobs).
 // For B2B-referrer-billed quotes (AF1 etc.), shows Net-X payment terms
@@ -6865,7 +6893,7 @@ Property:  ${addr}
 Total:     ${total}
 
 This quote is valid for 30 days.
-${evChargerBlock}${_buildPaymentScheduleText(q)}
+${_buildScopeText(q)}${evChargerBlock}${_buildPaymentScheduleText(q)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -6913,7 +6941,7 @@ Property:  ${addr}
 Total:     ${total}
 
 This quote is valid for 30 days.
-${_buildPaymentScheduleText(q)}
+${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -6957,7 +6985,7 @@ Property:  ${addr}
 Total:     ${total}
 
 This quote is valid for 30 days.
-${_buildPaymentScheduleText(q)}
+${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -6998,7 +7026,7 @@ Property:  ${addr}
 Total:     ${total}
 
 This quote is valid for 30 days.
-${_buildPaymentScheduleText(q)}
+${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -7047,7 +7075,7 @@ Property:  ${addr}
 Total:     ${total} (GreenKey work — utility company cost separate)
 
 This quote is valid for 30 days.
-
+${_buildScopeText(q)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HOW WE PROCEED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -7145,11 +7173,15 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   doc.text('Valid for 30 days from date above',W-108,126,{align:'center'});
   y=Math.max(y,148)+12;
   doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
-  // scope
-  if(q.scope){
+  // scope — fall back to autoScope() when q.scope hasn't been manually edited
+  // (textarea shows auto-gen by default but doesn't save to q.scope until the
+  // user types). Without this fallback, an unedited quote prints with no
+  // SCOPE OF WORK section even though the customer can see it in the form.
+  const _pdfScope = q.scope || (typeof autoScope === 'function' ? autoScope(q) : '');
+  if(_pdfScope){
     doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SCOPE OF WORK',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...DARK);
-    const sl=doc.splitTextToSize(q.scope,W-72);doc.text(sl,36,y);y+=sl.length*12+10;
+    const sl=doc.splitTextToSize(_pdfScope,W-72);doc.text(sl,36,y);y+=sl.length*12+10;
     doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
   doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('QUOTE SUMMARY',36,y);y+=12;
@@ -12247,8 +12279,9 @@ function seedReferrerCustomers() {
       isReferrer: true,                   // marks this as a B2B billing party, not a homeowner
       propertyType: 'commercial',
       businessName: 'Air Force One Heating & Air, LLC',
-      firstName: 'Trevor',                // sales/ops contact (placeholder until verified)
+      firstName: '',                      // no specific contact name yet (greeting uses salutation)
       lastName: '',
+      salutation: 'AF1 team',             // used in email greeting ("Hi AF1 team,")
       email: '',
       phone: '804-821-8783',
       street: '',
@@ -12271,11 +12304,26 @@ function seedReferrerCustomers() {
         existing.push({ ...ref, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         added++;
       } else {
-        // One-time migration: bump AF1's old Net-30 default to Net-7. Only
-        // touches records that still match the old seeded value, never
-        // overrides a manual customization.
+        // One-time migrations on the AF1 record:
+        //   1. Bump old Net-30 default to Net-7 (only if still seeded value)
+        //   2. Clear "Trevor" placeholder firstName (was a guess; user
+        //      doesn't have actual AF1 contact name yet)
+        //   3. Add the "AF1 team" salutation so emails read "Hi AF1 team,"
+        //      instead of "Hi Trevor,"
+        let touched = false;
         if (existing[existingIdx].paymentTerms === 'Net 30' && ref.paymentTerms === 'Net 7') {
           existing[existingIdx].paymentTerms = 'Net 7';
+          touched = true;
+        }
+        if (existing[existingIdx].firstName === 'Trevor' && ref.firstName === '') {
+          existing[existingIdx].firstName = '';
+          touched = true;
+        }
+        if (!existing[existingIdx].salutation && ref.salutation) {
+          existing[existingIdx].salutation = ref.salutation;
+          touched = true;
+        }
+        if (touched) {
           existing[existingIdx].updatedAt = new Date().toISOString();
           migrated++;
         }
