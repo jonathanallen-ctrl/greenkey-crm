@@ -9163,14 +9163,14 @@ function renderFMPhotos(jobId, cat) {
   }
 
   const thumbs = files.map((f,i) => `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer">
-    <img src="${f.dataUrl}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
     <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>
     <div class="plabel">${escHtml(f.name)}</div>
     <button class="prem" onclick="event.stopPropagation();fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button>
   </div>`).join('');
 
   const listRows = files.map((f,i) => `<tr>
-    <td><div class="fm-mini-thumb" onclick="openLightbox('${jobId}','${cat}',${i})"><img src="${f.dataUrl}" alt=""></div></td>
+    <td><div class="fm-mini-thumb" onclick="openLightbox('${jobId}','${cat}',${i})"><img src="${_imgSrc(f)}" alt=""></div></td>
     <td style="font-size:12.5px">${escHtml(f.name)}</td>
     <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
     <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
@@ -9208,13 +9208,13 @@ function renderFMDocuments(jobId) {
     const ext = (f.mimeType||'').split('/')[1]?.split(';')[0]?.toUpperCase() || f.name.split('.').pop()?.toUpperCase() || 'FILE';
     const isImg = (f.mimeType||'').startsWith('image/');
     const preview = isImg
-      ? `<div class="fm-mini-thumb" onclick="openFMDocPreview('${jobId}',${files.indexOf(f)})"><img src="${f.dataUrl}" alt=""></div>`
+      ? `<div class="fm-mini-thumb" onclick="openFMDocPreview('${jobId}',${files.indexOf(f)})"><img src="${_imgSrc(f)}" alt=""></div>`
       : `<div class="fm-mini-thumb" style="display:flex;align-items:center;justify-content:center;background:var(--blue-dim);border-color:var(--blue)">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" stroke-width="1.5">${ICONS.file}</svg>
         </div>`;
     return `<tr>
       <td>${preview}</td>
-      <td><a href="${f.dataUrl}" download="${escHtml(f.name)}" style="color:var(--blue);font-size:12.5px;text-decoration:none">${escHtml(f.name)}</a></td>
+      <td><a href="javascript:void(0)" onclick="openFMFile('${f.id}')" style="color:var(--blue);font-size:12.5px;text-decoration:none;cursor:pointer">${escHtml(f.name)}</a></td>
       <td style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted)">${ext}</td>
       <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
       <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
@@ -9399,7 +9399,7 @@ function renderLB() {
   const imgEl  = document.getElementById('lb-img');
   const infoEl = document.getElementById('lb-info');
   const ctrEl  = document.getElementById('lb-ctr');
-  if (imgEl)  imgEl.src = f.dataUrl;
+  if (imgEl)  imgEl.src = _imgSrc(f);
   if (infoEl) infoEl.innerHTML = `
     <span style="font-weight:500;color:white;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(f.name)}</span>
     <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${f.uploadedAt?.slice(0,10)||'—'} · ${escHtml(f.uploadedBy||'—')}</span>`;
@@ -9479,7 +9479,7 @@ function renderFMJobCat(jobId, cat) {
   if (!files.length) return dzone;
 
   const thumbs = files.map((f,i) => `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer">
-    <img src="${f.dataUrl}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
     <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>
     <div class="plabel">${escHtml(f.name)}</div>
     <button class="prem" onclick="event.stopPropagation();fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button>
@@ -13165,6 +13165,62 @@ function _dataUrlToBlob(dataUrl) {
   const u8arr = new Uint8Array(bstr.length);
   for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
   return new Blob([u8arr], { type: mime });
+}
+
+// ── FILE OPENERS ──────────────────────────────────────────────────────────
+// Files in the CRM come from two sources:
+//   1. Locally uploaded   → has base64 dataUrl
+//   2. SharePoint-hydrated → dataUrl=null, has downloadUrl (~1hr signed) + spUrl (browser landing)
+// Picks the best available URL for *opening* the file in a new tab.
+// (For <img src> use _imgSrc which has the same fallback order.)
+function _fileBestUrl(f) {
+  if (!f) return '';
+  if (f.dataUrl)     return f.dataUrl;
+  if (f.downloadUrl) return f.downloadUrl;
+  if (f.spUrl)       return f.spUrl;
+  return '';
+}
+
+// Open a stored file (PDF, doc, image, anything) in a new browser tab.
+// Why this exists: <a href="dataUrl" download> silently fails in Chrome for
+// large base64 PDFs, AND it doesn't work at all for SharePoint-hydrated files
+// where dataUrl is null. This routes through the right mechanism for each
+// source: Blob+ObjectURL for local dataUrls, direct window.open for SP URLs.
+function openFMFile(fileId) {
+  const f = _filesCache.find(x => x.id === fileId);
+  if (!f) { toast('File not found', 'error'); return; }
+
+  // Local file with base64 payload — convert to Blob so big PDFs render reliably.
+  if (f.dataUrl) {
+    try {
+      const blob = _dataUrlToBlob(f.dataUrl);
+      const url  = URL.createObjectURL(blob);
+      const win  = window.open(url, '_blank');
+      // Revoke after a delay so the new tab has time to load it.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (!win) toast('Pop-up blocked — allow pop-ups for this site', 'warning');
+      return;
+    } catch(e) {
+      console.warn('[GK] openFMFile: blob open failed, falling through:', e);
+      // fall through to SP URLs
+    }
+  }
+
+  // SharePoint signed direct link — opens the raw file inline.
+  if (f.downloadUrl) {
+    const win = window.open(f.downloadUrl, '_blank');
+    if (!win) toast('Pop-up blocked — allow pop-ups for this site', 'warning');
+    return;
+  }
+
+  // Last resort: SharePoint browser landing page (lets the user view in SP UI).
+  if (f.spUrl) {
+    const win = window.open(f.spUrl, '_blank');
+    if (!win) toast('Pop-up blocked — allow pop-ups for this site', 'warning');
+    return;
+  }
+
+  toast('No openable URL for this file — try refreshing from SharePoint', 'error');
 }
 
 // ── SYNC STATUS INDICATOR ──
