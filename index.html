@@ -9373,7 +9373,10 @@ function fmOpenCamera(jobId, cat) {
 let LBFiles = []; let LBIdx = 0;
 
 function openLightbox(jobId, cat, idx) {
-  const files = getJobFiles(jobId).filter(f => f.category === cat && (f.dataUrl||'').startsWith('data:image'));
+  // Filter on mimeType (not dataUrl) so SharePoint-hydrated photos (dataUrl=null
+  // but downloadUrl/spUrl populated) aren't excluded. Must match the same
+  // filter the calling thumbnail grids use, otherwise the click index drifts.
+  const files = getJobFiles(jobId).filter(f => f.category === cat && (f.mimeType||'').startsWith('image/'));
   if (!files.length) return;
   LBFiles = files;
   LBIdx   = Math.max(0, Math.min(idx, files.length-1));
