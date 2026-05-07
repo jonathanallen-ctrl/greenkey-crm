@@ -686,6 +686,50 @@
   </div>
 </div>
 
+<!-- SCHEDULE IN OUTLOOK MODAL -->
+<div class="moverlay" id="sched-modal">
+  <div class="modal" style="max-width:600px">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#f39c12" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
+      Schedule in Outlook
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.5">
+      Pick the type of appointment — subject and body will pre-fill from this job's data. Edit anything before opening Outlook. You'll pick the date, time, and target calendar in Outlook itself.
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Appointment Type</div>
+      <select id="sched-type" onchange="onSchedTypeChange()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        <option value="installation">Installation / Job Day</option>
+        <option value="walkdown">Walkdown / Site Visit (pre-quote)</option>
+        <option value="troubleshoot">Troubleshooting / Service Call</option>
+        <option value="inspection">Final Inspection</option>
+        <option value="quote-review">Quote Review with Customer</option>
+        <option value="material-pickup">Material Pickup</option>
+        <option value="follow-up">Follow-Up Visit</option>
+        <option value="other">Other / Custom</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Subject</div>
+      <input id="sched-subject" type="text" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Body / Description</div>
+      <textarea id="sched-body" rows="12" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
+    </div>
+    <div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--r);line-height:1.5">
+      <strong>Location:</strong> <span id="sched-loc-preview"></span>
+    </div>
+    <div class="mact">
+      <button class="btn btn-g" onclick="closeSchedModal()">Cancel</button>
+      <button class="btn btn-p" style="background:#f39c12;border-color:#f39c12" onclick="openSchedInOutlook()">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
+        Open in Outlook
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- CAPTURE CONSENT MODAL -->
 <div class="moverlay" id="consent-modal">
   <div class="modal" style="max-width:620px;max-height:92vh;display:flex;flex-direction:column">
@@ -2113,7 +2157,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2167,6 +2211,7 @@ const SECS = {
   'Materials Library':null,
   'Tech Mode':null,
   'Backups & Export':null,
+  'Charger Support':null,
   'Scheduling':`<div class="stitle">Scheduling</div><div class="sdesc">Settings used by the Scheduler to calculate drive times and build optimal day routes.</div>
     <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
       <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139'}">
@@ -2200,6 +2245,61 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-g" onclick="doLogout()">Sign out</button></div>`
 };
 
+function renderChargerSupportSettings() {
+  const makes = Object.keys(CHARGER_SUPPORT_DEFAULT);
+  const rows = makes.map(make => {
+    const sup = getChargerSupport(make);
+    return `<div class="srow" style="flex-direction:column;align-items:stretch;gap:8px;padding:14px 16px">
+      <div style="display:flex;align-items:center;gap:10px;font-weight:600;font-size:13.5px">
+        <span>${escHtml(make)}</span>
+        <span style="font-size:11px;color:var(--text-muted);font-weight:400">${(getPrefs().chargerSupport||{})[make]?'(custom values set)':'(defaults)'}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:90px 1fr;gap:6px 10px;align-items:center;font-size:12.5px">
+        <label>Phone</label>
+        <input class="sinput" id="csup-${escHtml(make)}-phone" type="tel" placeholder="e.g. 1-877-961-7652" value="${escHtml(sup.phone||'')}">
+        <label>Email</label>
+        <input class="sinput" id="csup-${escHtml(make)}-email" type="email" placeholder="support@example.com" value="${escHtml(sup.email||'')}">
+        <label>Web</label>
+        <input class="sinput" id="csup-${escHtml(make)}-web" type="url" placeholder="https://..." value="${escHtml(sup.web||'')}">
+        <label>Notes</label>
+        <input class="sinput" id="csup-${escHtml(make)}-notes" type="text" placeholder="Hours, RMA process, etc." value="${escHtml(sup.notes||'')}">
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="resetChargerSupportEntry('${escHtml(make)}')" title="Restore the default for this manufacturer">Reset</button>
+        <button class="btn btn-p" style="padding:4px 12px;font-size:11.5px" onclick="saveChargerSupportEntry('${escHtml(make)}')">Save ${escHtml(make)}</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="stitle">Charger Support</div>
+    <div class="sdesc">Manufacturer support contacts surfaced in the <strong>Schedule in Outlook</strong> Troubleshoot and Follow-Up templates. When a job's Charger Info has a make set, that manufacturer's contact info is auto-included in the appointment body — handy for warranty calls, firmware questions, and RMAs.</div>
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px">${rows}</div>
+    <div style="margin-top:16px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
+      <strong style="color:var(--text-secondary)">Tip:</strong> Web URLs are seeded with each manufacturer's public support page as a starting point — you can keep them, replace them, or blank them out. Phone and email are blank by default; populate from your vendor contact list.
+    </div>`;
+}
+
+function saveChargerSupportEntry(make) {
+  const fields = ['phone','email','web','notes'].reduce((acc, k) => {
+    const el = document.getElementById('csup-'+make+'-'+k);
+    acc[k] = el ? el.value.trim() : '';
+    return acc;
+  }, {});
+  saveChargerSupport(make, fields);
+  toast(`${make} support contact saved`, 'success');
+  // Refresh the panel so the "(custom values set)" indicator updates.
+  document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
+}
+
+function resetChargerSupportEntry(make) {
+  const p = getPrefs();
+  if (p.chargerSupport && p.chargerSupport[make]) {
+    delete p.chargerSupport[make];
+    savePrefs(p);
+  }
+  toast(`${make} support reset to default`, 'success');
+  document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
+}
+
 function renderUsersAccessSettings() {
   return `<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically.</div>
     <div id="ulist">${renderUsers()}</div>
@@ -2220,6 +2320,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderBackupsExportSettings();
   } else if (sec==='Users & Access') {
     document.getElementById('spanel').innerHTML = renderUsersAccessSettings();
+  } else if (sec==='Charger Support') {
+    document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
   }
@@ -8489,6 +8591,40 @@ const CHARGER_MODELS = {
   'Other':       ['40-amp Hardwired', '48-amp Hardwired', '80-amp Hardwired']
 };
 
+// ── CHARGER MANUFACTURER SUPPORT ──
+// Per-make support contacts surfaced in Troubleshoot / Follow-Up appointment
+// templates so the tech has the right tech-line on hand for warranty calls,
+// firmware questions, and RMA processes. Defaults are blank — admin populates
+// in Settings → Charger Support. Stored as a per-make override in
+// getPrefs().chargerSupport so the user can update without code changes.
+const CHARGER_SUPPORT_DEFAULT = {
+  'Tesla':       { phone: '', email: '', web: 'https://www.tesla.com/support/charging',     notes: '' },
+  'ChargePoint': { phone: '', email: '', web: 'https://chargepoint.com/support',            notes: '' },
+  'Emporia':     { phone: '', email: '', web: 'https://www.emporiaenergy.com/support',      notes: '' },
+  'Autel':       { phone: '', email: '', web: 'https://www.autelenergy.com/support',         notes: '' },
+  'Grizzl-e':    { phone: '', email: '', web: 'https://grizzl-e.com/support',                notes: '' },
+  'GM':          { phone: '', email: '', web: 'https://www.gm.com/electric-vehicles/charging', notes: '' },
+  'Rivian':      { phone: '', email: '', web: 'https://rivian.com/support',                  notes: '' },
+  'Ford':        { phone: '', email: '', web: 'https://www.ford.com/support/category/electric-vehicles/', notes: '' },
+  'Other':       { phone: '', email: '', web: '', notes: '' }
+};
+
+// Returns the support contact for a given make, with admin overrides applied.
+function getChargerSupport(make) {
+  if (!make) return null;
+  const def = CHARGER_SUPPORT_DEFAULT[make] || { phone:'', email:'', web:'', notes:'' };
+  const over = (getPrefs().chargerSupport || {})[make] || {};
+  return { ...def, ...over };
+}
+
+// Save a single make's support fields (merges into prefs, doesn't clobber others).
+function saveChargerSupport(make, fields) {
+  const p = getPrefs();
+  if (!p.chargerSupport) p.chargerSupport = {};
+  p.chargerSupport[make] = { ...(p.chargerSupport[make]||{}), ...fields };
+  savePrefs(p);
+}
+
 // ── WIRE RUN CONSTANTS ──
 // Gauges ordered from smallest → largest. THHN/THWN-2 copper is the default;
 // XHHW aluminum is the common alt for service feeders 100A+ where cost matters.
@@ -8709,6 +8845,10 @@ function renderJobDetail(id) {
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#3498db;color:#3498db" onclick="openCustomEmailModal('${id}')">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
         Send Email
+      </button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f39c12;color:#f39c12" onclick="scheduleInOutlook('${id}')" title="Open a new Outlook event pre-filled with this job's scope, address, and contact info">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
+        Schedule
       </button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
@@ -15036,6 +15176,262 @@ async function hydrateConsentFromServer(customerId) {
     }
   } catch (e) {
     console.warn('[GK] hydrateConsentFromServer failed (non-fatal):', e);
+  }
+}
+
+// ── SCHEDULE IN OUTLOOK ──
+// Bridging strategy until the in-CRM Scheduler is fully implemented. Opens a
+// modal with appointment-type templates (installation, walkdown, troubleshoot,
+// inspection, quote review, material pickup, follow-up, other), pre-fills
+// subject + body from this job's data, then opens an Outlook Web deep link
+// for a new event. The user picks date, time, and target calendar (e.g.
+// GreenKey Business Calendar) inside Outlook and saves there. No extra
+// Microsoft Graph scope required.
+//
+// Payment info is included only for DIRECT customers — if the lead came
+// through Qmerit, Electrum, Treehouse, or AF1, the technician should NOT
+// collect on site (those platforms invoice the customer directly).
+
+const _SCHED_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','AF1'];
+
+// Tracks which lead the open schedule modal is for.
+let _schedLeadId = null;
+
+function scheduleInOutlook(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) { toast('Job not found', 'error'); return; }
+  _schedLeadId = leadId;
+
+  // Default to installation type unless lead is in a pre-quote stage.
+  const defaultType = ['lead-received','info-gathering','estimating'].includes(lead.stage)
+    ? 'walkdown' : 'installation';
+  const sel = document.getElementById('sched-type');
+  if (sel) sel.value = defaultType;
+
+  // Render initial subject/body for the chosen type.
+  _populateSchedFields(defaultType);
+
+  // Show the modal.
+  const modal = document.getElementById('sched-modal');
+  if (modal) modal.classList.add('show');
+}
+
+function closeSchedModal() {
+  const modal = document.getElementById('sched-modal');
+  if (modal) modal.classList.remove('show');
+  _schedLeadId = null;
+}
+
+function onSchedTypeChange() {
+  const type = document.getElementById('sched-type')?.value || 'installation';
+  _populateSchedFields(type);
+}
+
+// Build subject + body for the given appointment type and write them into
+// the modal inputs. Called on open and on type-dropdown change.
+function _populateSchedFields(type) {
+  const lead = _schedLeadId ? getLead(_schedLeadId) : null;
+  if (!lead) return;
+  const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+  const quote = getQuotes()
+    .filter(q => q.leadId === lead.id)
+    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+
+  const built = _buildSchedContent(lead, cust, quote, type);
+
+  const subjEl = document.getElementById('sched-subject');
+  const bodyEl = document.getElementById('sched-body');
+  const locEl  = document.getElementById('sched-loc-preview');
+  if (subjEl) subjEl.value = built.subject;
+  if (bodyEl) bodyEl.value = built.body;
+  if (locEl)  locEl.textContent = built.location || '(no site address on file)';
+}
+
+// Build a charger info + manufacturer support block for the schedule body.
+// Used by Troubleshoot and Follow-Up templates so the tech has the make's
+// tech-line on hand for warranty / firmware / RMA calls. Returns '' if no
+// charger info on file.
+function _schedChargerSummary(lead) {
+  const ci = lead.chargerInfo || {};
+  if (!ci.make) return '';
+  const lines = [];
+  const desc = [ci.make, ci.model, ci.plugType ? `(${ci.plugType})` : ''].filter(Boolean).join(' ');
+  lines.push('Charger on site: ' + desc);
+  const sup = getChargerSupport(ci.make);
+  if (sup) {
+    const supBits = [];
+    if (sup.phone) supBits.push(`☎ ${sup.phone}`);
+    if (sup.email) supBits.push(`✉ ${sup.email}`);
+    if (sup.web)   supBits.push(`🌐 ${sup.web}`);
+    if (supBits.length) lines.push(`${ci.make} support: ${supBits.join('  ·  ')}`);
+    if (sup.notes) lines.push(sup.notes);
+    if (!supBits.length) lines.push(`${ci.make} support contact not yet set — populate in Settings → Charger Support so future appointments include it automatically.`);
+  }
+  return lines.join('\n');
+}
+
+// Templates for each appointment type. Each returns { subject, body, location }.
+// Body sections are joined with blank lines for readability in Outlook.
+function _buildSchedContent(lead, cust, quote, type) {
+  const lastName = (cust?.lastName || lead.customerLastName ||
+                    (lead.customerName||'').split(' ').slice(-1)[0] || '').trim() || 'Job';
+  const fullName = cust
+    ? ((typeof custFullName === 'function') ? custFullName(cust) : `${cust.firstName||''} ${cust.lastName||''}`.trim())
+    : (lead.customerName || '');
+  const phone    = cust?.phone || lead.customerPhone || '';
+  const email    = cust?.email || lead.customerEmail || '';
+  const source   = lead.source || 'Direct';
+  const isDirect = !_SCHED_PLATFORM_SOURCES.includes(source);
+
+  const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
+  const location  = addrParts.join(', ');
+
+  const permitLoc = lead.jurisdiction || lead.siteCity || '';
+  const permitLine = permitLoc ? `${permitLoc} permit` : '';
+
+  const contactLine = [fullName, phone, email].filter(Boolean).join('\n');
+
+  // Helper: due-on-completion line for direct customers
+  const paymentLine = (() => {
+    if (!isDirect) return `Lead source: ${source} — platform invoices the customer. Do NOT collect payment on site.`;
+    if (quote && quote.quoteTotal) {
+      const total   = quote.quoteTotal;
+      const deposit = quote.depositAmount || 0;
+      const due     = Math.max(0, total - deposit);
+      if (due > 0) {
+        const dollars = '$' + Number(due).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `${dollars} due on completion (we can invoice if a check isn't available).`;
+      }
+    }
+    return '';
+  })();
+
+  const scope    = (lead.scopeOfWork||'').trim();
+  const desc     = (lead.description||'').trim();
+  const recentNote = (() => {
+    const notes = (lead.jobNotes||[]).slice().sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return notes.length ? `Latest note: ${notes[0].text}` : '';
+  })();
+
+  let subject, sections = [];
+  switch (type) {
+    case 'walkdown': {
+      subject = `${lastName} - Walkdown (${source})`;
+      sections.push('Walkdown / site visit — gather info to draft a quote.');
+      if (desc)  sections.push('Customer-described needs:\n' + desc);
+      else if (scope) sections.push('Pre-quote notes:\n' + scope);
+      sections.push('Goals: measure run lengths (panel-to-load, including verticals), photo the existing panel and surrounding area, identify obstacles, confirm scope with customer, note any code issues.');
+      if (!isDirect) sections.push(`Lead source: ${source} — coordinate any platform-specific intake requirements.`);
+      if (permitLine) sections.push(`Likely jurisdiction: ${permitLoc}`);
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'troubleshoot': {
+      subject = `${lastName} - Service Call`;
+      sections.push('Troubleshooting / diagnostic visit.');
+      if (desc) sections.push('Reported issue:\n' + desc);
+      if (recentNote) sections.push(recentNote);
+      // Charger info + manufacturer support contact (warranty / firmware / RMA)
+      const chargerLine = _schedChargerSummary(lead);
+      if (chargerLine) sections.push(chargerLine);
+      sections.push('Bring multimeter, ladder, basic hand tools. Confirm symptoms with customer before opening anything.');
+      if (isDirect) sections.push('Service-call charge applies — confirm rate with customer up front, billable on completion.');
+      else sections.push(`Lead source: ${source} — platform invoices the customer. Do NOT collect payment on site.`);
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'inspection': {
+      subject = `${lastName} - Final Inspection`;
+      sections.push('Final inspection visit — be on site to walk the inspector through the work.');
+      if (scope) sections.push('Installed scope:\n' + scope);
+      if (permitLine) sections.push(permitLine + ' (have permit + diagram on hand for inspector)');
+      sections.push('Bring: permit copy, panel schedule, any required code signage. Confirm the time window with the inspector’s office the day before.');
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'quote-review': {
+      subject = `${lastName} - Quote Review`;
+      sections.push('Sit-down with customer to review the quote and answer questions.');
+      if (quote) {
+        const total = quote.quoteTotal ? '$' + Number(quote.quoteTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '(no total)';
+        sections.push(`Quote: ${quote.id || ''} — ${total}`);
+      } else {
+        sections.push('No quote on file yet — bring scope outline.');
+      }
+      if (scope) sections.push('Scope summary:\n' + scope);
+      sections.push('Bring: iPad/phone with quote PDF, comparable-job photos if helpful, schedule availability for next 2 weeks.');
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'material-pickup': {
+      subject = `Materials for ${lastName} (${source})`;
+      sections.push(`Pickup run for upcoming ${lastName} job.`);
+      sections.push(`Job: ${lead.id}${fullName ? ' — ' + fullName : ''}`);
+      if (scope) sections.push('Scope reference (verify materials list against quote):\n' + scope);
+      sections.push('Verify against latest quote PDF before leaving the supplier. Capital Electric for wire/conduit/breakers; Home Depot for access covers and basic hardware.');
+      break;
+    }
+    case 'follow-up': {
+      subject = `${lastName} - Follow-Up`;
+      sections.push('Follow-up visit (warranty / punch-list / service after install).');
+      if (recentNote) sections.push(recentNote);
+      else if (desc)  sections.push('Reason for visit:\n' + desc);
+      // Charger info + manufacturer support contact (relevant for warranty/RMA)
+      const chargerLineFU = _schedChargerSummary(lead);
+      if (chargerLineFU) sections.push(chargerLineFU);
+      sections.push('Document anything done in the CRM job notes after the visit.');
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'other': {
+      subject = `${lastName} - `;
+      if (contactLine) sections.push(contactLine);
+      sections.push('(Edit subject and body before opening Outlook.)');
+      break;
+    }
+    case 'installation':
+    default: {
+      // Installation / Job Day — full detail, matches the original template.
+      subject = `${lastName} Project - ${source}`;
+      if (scope) sections.push(scope);
+      else      sections.push('(No scope of work entered yet — fill in Job Details > Scope of Work in the CRM.)');
+      if (paymentLine) sections.push(paymentLine);
+      if (permitLine)  sections.push(permitLine);
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+  }
+
+  return { subject, body: sections.join('\n\n'), location };
+}
+
+// Build the Outlook deep link from the (possibly edited) modal values and open it.
+function openSchedInOutlook() {
+  if (!_schedLeadId) { toast('Job not found', 'error'); return; }
+  const lead = getLead(_schedLeadId);
+  if (!lead) { toast('Job not found', 'error'); return; }
+
+  const subject = document.getElementById('sched-subject')?.value || '';
+  const body    = document.getElementById('sched-body')?.value    || '';
+  const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
+  const location  = addrParts.join(', ');
+
+  const params = new URLSearchParams({
+    path: '/calendar/action/compose',
+    rru:  'addevent',
+    subject,
+    location,
+    body,
+    allday: 'false'
+  });
+  const url = 'https://outlook.office.com/calendar/0/deeplink/compose?' + params.toString();
+
+  const win = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!win) {
+    toast('Pop-up blocked — allow pop-ups for this site, then try again.', 'warning');
+  } else {
+    toast('Opened in Outlook — pick a date, time, and calendar, then save.', 'success');
+    closeSchedModal();
   }
 }
 
