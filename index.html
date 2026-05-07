@@ -446,6 +446,8 @@
   .sched-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;margin-bottom:10px;transition:border-color var(--t)}
   .sched-card:hover{border-color:var(--border-light)}
   .sched-card-done{border-color:rgba(46,204,113,0.4);background:rgba(46,204,113,0.05)}
+  .sched-card-flash{animation:schedFlash 2.2s ease-out 1}
+  @keyframes schedFlash{0%{box-shadow:0 0 0 3px rgba(155,89,182,0.5);border-color:#9b59b6}60%{box-shadow:0 0 0 6px rgba(155,89,182,0)}100%{box-shadow:0 0 0 0 rgba(155,89,182,0)}}
   .sched-slot{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
   .sched-slot:last-child{border-bottom:none}
   .sched-time{font-family:var(--mono);font-size:12px;color:var(--green);width:58px;flex-shrink:0;padding-top:2px}
@@ -2157,7 +2159,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Charger Support','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2212,6 +2214,7 @@ const SECS = {
   'Tech Mode':null,
   'Backups & Export':null,
   'Charger Support':null,
+  'Skills':null,
   'Scheduling':`<div class="stitle">Scheduling</div><div class="sdesc">Settings used by the Scheduler to calculate drive times and build optimal day routes.</div>
     <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
       <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139'}">
@@ -2244,6 +2247,61 @@ const SECS = {
     </div>
     <div style="margin-top:20px"><button class="btn btn-g" onclick="doLogout()">Sign out</button></div>`
 };
+
+function renderSkillsSettings() {
+  const vocab = getSkillsVocab();
+  const rows = vocab.map((s, i) => `
+    <div class="srow" style="gap:10px;padding:10px 14px">
+      <div style="flex:1;display:grid;grid-template-columns:160px 1fr;gap:6px 10px;align-items:center;font-size:12.5px">
+        <label>ID</label>
+        <input class="sinput" id="skill-id-${i}" type="text" value="${escHtml(s.id)}" placeholder="kebab-case-id" style="font-family:var(--mono);font-size:11.5px">
+        <label>Label</label>
+        <input class="sinput" id="skill-label-${i}" type="text" value="${escHtml(s.label)}" placeholder="Human-readable label">
+      </div>
+      <button class="li-del" title="Remove this skill" onclick="removeSkillVocab(${i})">×</button>
+    </div>`).join('');
+  return `<div class="stitle">Skills</div>
+    <div class="sdesc">Skills tags used by the Scheduler to match jobs to qualified technicians. Each user (in <strong>Users & Access</strong>) gets a list of skills they can perform; each job has a required-skills list (auto-inferred from job type, overridable per job). The Scheduler only offers a tech jobs that match every required skill. <strong>ID</strong> is the stable internal identifier (don't rename casually — existing user/job records reference it). <strong>Label</strong> is the human-readable name shown in the UI.</div>
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px">${rows}</div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn btn-g" onclick="addSkillVocab()">+ Add Skill</button>
+      <button class="btn btn-g" onclick="resetSkillsVocabToDefault()" title="Restore the seeded list of skills">Reset to defaults</button>
+      <button class="btn btn-p" style="margin-left:auto" onclick="saveSkillsVocabFromUI()">Save Changes</button>
+    </div>`;
+}
+
+function addSkillVocab() {
+  const v = getSkillsVocab();
+  v.push({ id: 'new-skill-' + Date.now(), label: 'New Skill' });
+  saveSkillsVocab(v);
+  document.getElementById('spanel').innerHTML = renderSkillsSettings();
+}
+function removeSkillVocab(idx) {
+  const v = getSkillsVocab();
+  if (idx < 0 || idx >= v.length) return;
+  if (!confirm(`Remove "${v[idx].label}" from the skills list? This won't change existing user or job records that already reference its ID, but it will disappear from selectors.`)) return;
+  v.splice(idx, 1);
+  saveSkillsVocab(v);
+  document.getElementById('spanel').innerHTML = renderSkillsSettings();
+}
+function resetSkillsVocabToDefault() {
+  if (!confirm('Reset the skills list to the GreenKey defaults? Existing user/job skill assignments stay in place but any custom skill IDs you added will no longer have labels in the UI.')) return;
+  saveSkillsVocab(SKILLS_DEFAULT.slice());
+  document.getElementById('spanel').innerHTML = renderSkillsSettings();
+}
+function saveSkillsVocabFromUI() {
+  const v = getSkillsVocab();
+  const next = v.map((_, i) => ({
+    id:    (document.getElementById('skill-id-'+i)?.value || '').trim(),
+    label: (document.getElementById('skill-label-'+i)?.value || '').trim()
+  })).filter(s => s.id && s.label);
+  // Dedupe by id (keep first)
+  const seen = new Set();
+  const cleaned = next.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
+  saveSkillsVocab(cleaned);
+  toast('Skills saved', 'success');
+  document.getElementById('spanel').innerHTML = renderSkillsSettings();
+}
 
 function renderChargerSupportSettings() {
   const makes = Object.keys(CHARGER_SUPPORT_DEFAULT);
@@ -2322,6 +2380,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderUsersAccessSettings();
   } else if (sec==='Charger Support') {
     document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
+  } else if (sec==='Skills') {
+    document.getElementById('spanel').innerHTML = renderSkillsSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
   }
@@ -2577,6 +2637,7 @@ function techModeReorderCommon(materialId, delta) {
 
 function renderUsers() {
   const isAdmin = S.user?.role === 'admin';
+  const vocab = getSkillsVocab();
   return getUsers().map(u=>{
     // notifyEmail (if set) is the address @-mention notifications go to.
     // Falls back to MSAL username when not overridden.
@@ -2586,13 +2647,62 @@ function renderUsers() {
       ? `<div class="ucmeta">${escHtml(effectiveEmail)} <span style="color:var(--text-muted);font-size:11px">(notify) · sign-in: ${escHtml(u.username||'—')}</span></div>`
       : `<div class="ucmeta">${escHtml(u.username||'—')}</div>`;
     const editBtn = isAdmin ? `<button onclick="editUserNotifyEmail('${u.id}')" title="Edit notification email" style="background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px 8px;font-size:13px">✎</button>` : '';
-    return `<div class="ucrow">
+
+    // Skills checkboxes — admin only, collapsible per user.
+    const userSkills = Array.isArray(u.skills) ? u.skills : null;
+    const skillsSummary = userSkills === null
+      ? `<span style="color:var(--text-muted);font-style:italic">All skills (not yet tagged)</span>`
+      : userSkills.length === 0
+        ? `<span style="color:var(--text-muted)">No skills set — won't be offered any jobs by the Scheduler.</span>`
+        : userSkills.map(id => `<span class="chip chip-muted" style="font-size:10.5px;margin-right:4px">${escHtml(getSkillLabel(id))}</span>`).join('');
+    const skillsBlock = isAdmin ? `
+      <div style="grid-column:1/-1;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">
+        <details style="font-size:12.5px">
+          <summary style="cursor:pointer;color:var(--text-secondary);user-select:none">
+            <strong>Skills:</strong> ${skillsSummary}
+          </summary>
+          <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px 12px">
+            ${vocab.map(s => `
+              <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+                <input type="checkbox" ${(userSkills||[]).includes(s.id)?'checked':''}
+                       data-userid="${escHtml(u.id)}" data-skillid="${escHtml(s.id)}"
+                       onchange="onUserSkillToggle(this)"
+                       style="accent-color:var(--green)">
+                ${escHtml(s.label)}
+              </label>`).join('')}
+          </div>
+          ${userSkills === null ? '<div style="margin-top:8px;font-size:11.5px;color:var(--text-muted);font-style:italic">Tip: this user is currently treated as having every skill (back-compat default). Check at least one box to start enforcing skill-based matching for them.</div>' : ''}
+        </details>
+      </div>` : '';
+
+    return `<div class="ucrow" style="display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center">
       <div class="ucav">${u.initials}</div>
       <div class="ucinfo"><div class="ucname">${escHtml(u.name||'—')}</div>${metaHtml}</div>
       ${editBtn}
       <span class="rbadge r${u.role[0]}">${u.role.charAt(0).toUpperCase()+u.role.slice(1)}</span>
+      ${skillsBlock}
     </div>`;
   }).join('');
+}
+
+// Toggle a single skill on/off for a user. Called from the checkboxes in the
+// Users & Access list. First toggle on a never-tagged user starts their skills
+// array; we don't auto-add all skills.
+function onUserSkillToggle(el) {
+  const userId  = el.dataset.userid;
+  const skillId = el.dataset.skillid;
+  if (!userId || !skillId) return;
+  const arr = getUsers();
+  const idx = arr.findIndex(u => u.id === userId);
+  if (idx < 0) return;
+  const current = Array.isArray(arr[idx].skills) ? arr[idx].skills : [];
+  const next = el.checked
+    ? Array.from(new Set([...current, skillId]))
+    : current.filter(id => id !== skillId);
+  saveUserSkills(userId, next);
+  // Re-render so the summary and the "(not yet tagged)" indicator update.
+  const list = document.getElementById('ulist');
+  if (list) list.innerHTML = renderUsers();
 }
 
 // Admin-only: override the email address that @-mention notifications go to.
@@ -8625,6 +8735,84 @@ function saveChargerSupport(make, fields) {
   savePrefs(p);
 }
 
+// ── SKILLS / TECH CAPABILITIES ──
+// Each user (tech) is tagged with the skills they can perform. Each job has
+// a requiredSkills array (auto-inferred from jobType, admin-overridable per
+// job). The Scheduler filters its pool by "this tech can do every required
+// skill on the job". Skill IDs are stable; labels are editable in
+// Settings → Skills (stored in getPrefs().skillsVocab).
+const SKILLS_DEFAULT = [
+  { id: 'ev-residential',     label: 'EV residential install' },
+  { id: 'nema-1450',          label: 'NEMA 14-50 outlet' },
+  { id: 'hvac-circuit',       label: 'HVAC dedicated circuit' },
+  { id: 'circuit-replacement',label: 'Circuit replacement' },
+  { id: 'panel-replacement',  label: 'Panel replacement' },
+  { id: 'service-upgrade',    label: 'Service upgrade' },
+  { id: 'new-service',        label: 'New service entrance' },
+  { id: 'slate-roof',         label: 'Slate roof penetration' },
+  { id: 'underground-service',label: 'Underground service entry' },
+  { id: 'battery-system',     label: 'Battery system install' },
+  { id: 'v2h',                label: 'V2H (vehicle-to-home)' },
+  { id: 'generator',          label: 'Generator install' },
+  { id: 'commercial',         label: 'Commercial work' }
+];
+
+// Default mapping from jobType to the skills that job requires. Admin can
+// override per job by editing lead.requiredSkills directly. Job types that
+// don't appear here are treated as "no special skill required" — any tech.
+const JOB_TYPE_SKILLS = {
+  'ev-residential':       ['ev-residential'],
+  'nema-1450':            ['nema-1450'],
+  'hvac-circuit':         ['hvac-circuit'],
+  'circuit-replacement':  ['circuit-replacement'],
+  'panel-replacement':    ['panel-replacement'],
+  'service-upgrade':      ['service-upgrade'],
+  'new-service':          ['new-service']
+};
+
+function getSkillsVocab() {
+  const p = getPrefs();
+  if (Array.isArray(p.skillsVocab) && p.skillsVocab.length) return p.skillsVocab;
+  return SKILLS_DEFAULT.slice();
+}
+function saveSkillsVocab(arr) {
+  const p = getPrefs();
+  p.skillsVocab = arr;
+  savePrefs(p);
+}
+function getSkillLabel(id) {
+  const v = getSkillsVocab().find(s => s.id === id);
+  return v ? v.label : id;
+}
+
+// Returns the skills required for a lead. Lead's explicit requiredSkills wins;
+// otherwise infer from jobType.
+function getRequiredSkills(lead) {
+  if (!lead) return [];
+  if (Array.isArray(lead.requiredSkills) && lead.requiredSkills.length) return lead.requiredSkills.slice();
+  return (JOB_TYPE_SKILLS[lead.jobType] || []).slice();
+}
+
+// True iff the user has every skill required by the lead. A user with no
+// skills set is treated as having all skills (back-compat for accounts that
+// haven't been tagged yet — admin can lock down by populating their skills).
+function userCanDoJob(user, lead) {
+  if (!user) return false;
+  const required = getRequiredSkills(lead);
+  if (!required.length) return true;
+  const userSkills = Array.isArray(user.skills) ? user.skills : null;
+  if (!userSkills) return true;  // not yet tagged — assume capable
+  return required.every(r => userSkills.includes(r));
+}
+
+function saveUserSkills(userId, skills) {
+  const arr = getUsers();
+  const idx = arr.findIndex(u => u.id === userId);
+  if (idx < 0) return;
+  arr[idx].skills = Array.isArray(skills) ? skills.slice() : [];
+  saveUsers(arr);
+}
+
 // ── WIRE RUN CONSTANTS ──
 // Gauges ordered from smallest → largest. THHN/THWN-2 copper is the default;
 // XHHW aluminum is the common alt for service feeders 100A+ where cost matters.
@@ -8848,7 +9036,11 @@ function renderJobDetail(id) {
       </button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f39c12;color:#f39c12" onclick="scheduleInOutlook('${id}')" title="Open a new Outlook event pre-filled with this job's scope, address, and contact info">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
-        Schedule
+        Outlook
+      </button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="scheduleNow('${id}')" title="Open the Scheduler with this job pre-selected — bypasses gates if needed">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 4v4l2.5 1.5"/></svg>
+        Schedule Now
       </button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
@@ -11536,7 +11728,13 @@ const _sched = {
   scheduled: [],    // ordered array of {lead, driveHrs, startTime, endTime}
   unscheduled: [],
   loading: false,
-  built: false
+  built: false,
+  techId: '',       // user.id of the tech being scheduled — '' means "any tech"
+  preselectId: null,// leadId to scroll/highlight after the next render (set by scheduleNow)
+  // Multi-day mode (Chunk 4): when range.start/end are set, the renderer
+  // shows a per-day strip and per-day tech pickers instead of the single-day view.
+  range: null,     // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } | null
+  dayPlans: {}     // 'YYYY-MM-DD' → { techId, scheduled[], unscheduled[], returnDriveHrs, built }
 };
 
 // Returns a human-readable reason the job can't be scheduled yet, or null if it's ready.
@@ -11574,6 +11772,56 @@ function clearScheduleOverride(leadId) {
   saveLeads(arr);
 }
 
+// Job-detail "Schedule Now" entry point. If the lead already passes the
+// schedule gates (permit received, charger confirmed for EV, etc.) we just
+// jump to the Scheduler page. If gates are blocking, we prompt for a reason
+// and set scheduleOverride so the lead appears in the pool. The Scheduler
+// then auto-scrolls to the lead via _sched.preselectId.
+function scheduleNow(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) { toast('Job not found','error'); return; }
+
+  // Inspect what's blocking. If nothing, no override needed.
+  const ms = lead.milestones || {};
+  const reasons = [];
+  if (lead.stage === 'archived') reasons.push('Lead is archived');
+  if (ms.installScheduled?.done) reasons.push('Already marked scheduled');
+  if (!ms.permitReceived?.done && !lead.scheduleOverride?.reason) reasons.push('Permit not yet received');
+  if (lead.jobType === 'ev-residential' && !ms.chargerConfirmed?.done && !lead.scheduleOverride?.reason) {
+    reasons.push('Charger not yet confirmed');
+  }
+
+  if (reasons.length && !lead.scheduleOverride?.reason) {
+    const note = prompt(
+      `This job doesn't pass the standard schedule gates yet:\n\n• ${reasons.join('\n• ')}\n\nIf you want to schedule it anyway, enter a quick reason (e.g. "permit pending — confident it'll land by Tue", "charger arriving Mon AM"). The override is recorded with your name and date so it shows up in the pool with a warning chip.`,
+      ''
+    );
+    if (note === null) return;                        // cancelled
+    if (!note.trim()) { toast('A reason is required to override the schedule gates.', 'warning'); return; }
+    setScheduleOverride(leadId, note.trim());
+    toast('Schedule override recorded — opening Scheduler…', 'success');
+  } else if (ms.installScheduled?.done) {
+    // Already scheduled — clear that milestone so we can re-schedule.
+    if (!confirm('This job is already marked as scheduled. Re-open it for re-scheduling?')) return;
+    const arr = getLeads();
+    const idx = arr.findIndex(l => l.id === leadId);
+    if (idx >= 0) {
+      delete arr[idx].milestones.installScheduled;
+      arr[idx].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+  }
+
+  // Hand off to the Scheduler. _sched.preselectId tells renderSchedulerPage
+  // to scroll-into-view and highlight this lead's row in the pool.
+  if (typeof _sched === 'object' && _sched) {
+    _sched.preselectId = leadId;
+  } else {
+    window._sched = { preselectId: leadId };
+  }
+  navigate('scheduler');
+}
+
 function promptScheduleOverride(leadId) {
   const lead = getLead(leadId);
   if (!lead) return;
@@ -11600,15 +11848,25 @@ function clearScheduleOverrideAndRerender(leadId) {
   renderJobDetail(leadId);
 }
 
-function getSchedulableJobs() {
+function getSchedulableJobs(techId) {
+  // Pool filtering with two layers:
+  //   1. Gate filter — permit, charger, archive, already-scheduled.
+  //   2. Skill filter (optional) — if techId is supplied, drop jobs whose
+  //      requiredSkills the tech can't perform.
+  const tech = techId ? getUsers().find(u => u.id === techId) : null;
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
     if (ms.installScheduled?.done) return false;      // already scheduled
-    if (l.scheduleOverride?.reason) return true;      // manual override bypasses gates
-    if (!ms.permitReceived?.done) return false;       // need permit in hand
-    const isEV = l.jobType === 'ev-residential';
-    if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
+    const passesGates = (() => {
+      if (l.scheduleOverride?.reason) return true;    // manual override bypasses gates
+      if (!ms.permitReceived?.done) return false;     // need permit in hand
+      const isEV = l.jobType === 'ev-residential';
+      if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
+      return true;
+    })();
+    if (!passesGates) return false;
+    if (tech && !userCanDoJob(tech, l)) return false; // skill filter (if a tech is selected)
     return true;
   });
 }
@@ -12178,7 +12436,7 @@ function saveTechNote(leadId) {
 function renderSchedulerPage() {
   const pg = document.getElementById('page-scheduler');
   if (!pg) return;
-  const jobs = getSchedulableJobs();
+  const jobs = getSchedulableJobs(_sched.techId || null);
   const custs = getCustomers();
 
   // Init durations for any new jobs
@@ -12299,6 +12557,32 @@ function renderSchedulerPage() {
   }
 
   const nextWorkday = getNextWorkday(_sched.date);
+  // Build the tech picker. Only show users with role admin/tech (sales doesn't
+  // do field work). Show skill summary in the option text so admin can pick
+  // by skill quickly.
+  const fieldUsers = getUsers().filter(u => u.role === 'admin' || u.role === 'tech');
+  const techOpts = '<option value="">Any tech (no skill filter)</option>' +
+    fieldUsers.map(u => {
+      const sk = Array.isArray(u.skills) ? u.skills.length : 'all';
+      return `<option value="${escHtml(u.id)}"${u.id===_sched.techId?' selected':''}>${escHtml(u.name)} (${sk} skill${sk==='all'||sk===1?'':'s'})</option>`;
+    }).join('');
+
+  // Branch: in multi-day mode, render the range view with per-day strips.
+  if (_sched.range) {
+    pg.innerHTML = _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml);
+    if (_sched.preselectId) {
+      const targetId = _sched.preselectId;
+      _sched.preselectId = null;
+      setTimeout(() => {
+        const el = document.getElementById('spool-' + targetId);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('sched-card-flash');
+        setTimeout(() => el.classList.remove('sched-card-flash'), 2200);
+      }, 80);
+    }
+    return;
+  }
   pg.innerHTML = `
     <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px">
       <div>
@@ -12306,10 +12590,23 @@ function renderSchedulerPage() {
         <input type="date" class="psel" id="sched-date" value="${_sched.date}" min="${new Date().toISOString().slice(0,10)}"
           onchange="_sched.date=this.value;_sched.built=false;renderSchedulerPage()">
       </div>
+      <div>
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Tech</div>
+        <select class="psel" id="sched-tech"
+          onchange="_sched.techId=this.value;_sched.built=false;renderSchedulerPage()"
+          title="Filter the pool to jobs this tech is qualified for. 'Any tech' shows everything.">
+          ${techOpts}
+        </select>
+      </div>
       <div style="align-self:flex-end">
         <button class="btn btn-p" onclick="runScheduler()" ${_sched.loading?'disabled':''}>
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5,2 14,8 5,14"/></svg>
           ${_sched.loading ? 'Building…' : 'Build Schedule'}
+        </button>
+      </div>
+      <div style="align-self:flex-end">
+        <button class="btn btn-g" onclick="toggleSchedRangeMode()" title="Switch between single-day and multi-day planning">
+          ${_sched.range ? 'Single-Day Mode' : 'Multi-Day Mode →'}
         </button>
       </div>
       <div style="align-self:flex-end;margin-left:auto;font-size:12px;color:var(--text-muted)">
@@ -12330,6 +12627,21 @@ function renderSchedulerPage() {
         <div class="jd-sb">${dayHtml}</div>
       </div>
     </div>`;
+
+  // If we arrived via the Schedule Now button on a job detail, scroll to the
+  // lead's pool card and pulse-highlight it so it's obvious which job we just
+  // queued. preselectId is consumed once per render.
+  if (_sched.preselectId) {
+    const targetId = _sched.preselectId;
+    _sched.preselectId = null;
+    setTimeout(() => {
+      const el = document.getElementById('spool-' + targetId);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('sched-card-flash');
+      setTimeout(() => el.classList.remove('sched-card-flash'), 2200);
+    }, 80);
+  }
 }
 
 // ── HELPERS ──
@@ -12360,8 +12672,55 @@ function getNextWorkday(iso) {
 }
 
 // ── RUN SCHEDULER (async) ──
+// Core nearest-neighbor day optimizer. Takes a pool of leads + their geocoded
+// coords, runs the same greedy fill the original runScheduler used, and
+// returns { scheduled[], unscheduled[], returnDriveHrs }. Extracted so both
+// single-day and multi-day modes can call it.
+function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap) {
+  const available  = [...jobs];
+  const scheduled  = [];
+  const unscheduled = [];
+  let remaining    = dayHours;
+  let curLat       = homeCoords.lat;
+  let curLon       = homeCoords.lon;
+  let clockHrs     = 8.0;
+
+  while (available.length > 0) {
+    let bestIdx = -1, bestDrive = Infinity;
+    for (let i = 0; i < available.length; i++) {
+      const l = available[i];
+      const c = coords[l.id];
+      if (!c) { unscheduled.push(l); available.splice(i,1); i--; continue; }
+      const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
+      const jobH  = durationsMap[l.id] || estimateJobDuration(l);
+      if (drive + jobH <= remaining + 0.05 && drive < bestDrive) {
+        bestDrive = drive; bestIdx = i;
+      }
+    }
+    if (bestIdx === -1) break;
+
+    const l = available[bestIdx];
+    const c = coords[l.id];
+    const jobH   = durationsMap[l.id] || estimateJobDuration(l);
+    const driveH = driveTimeHrs(curLat, curLon, c.lat, c.lon);
+    scheduled.push({
+      lead: l, driveStart: clockHrs, driveHrs: driveH,
+      startTime: clockHrs + driveH, jobHrs: jobH,
+      endTime: clockHrs + driveH + jobH
+    });
+    clockHrs += driveH + jobH;
+    remaining -= driveH + jobH;
+    curLat = c.lat; curLon = c.lon;
+    available.splice(bestIdx, 1);
+  }
+
+  const returnDriveHrs = homeCoords ? driveTimeHrs(curLat, curLon, homeCoords.lat, homeCoords.lon) : 0;
+  available.forEach(l => unscheduled.push(l));
+  return { scheduled, unscheduled, returnDriveHrs };
+}
+
 async function runScheduler() {
-  const jobs = getSchedulableJobs();
+  const jobs = getSchedulableJobs(_sched.techId || null);
   if (!jobs.length) { toast('No jobs ready to schedule','warning'); return; }
 
   _sched.loading = true;
@@ -12388,62 +12747,278 @@ async function runScheduler() {
     if (c) coords[key] = c;
   }
 
-  // Nearest-neighbor greedy fill
-  const available  = [...jobs];
-  const scheduled  = [];
-  const unscheduled = [];
-  let remaining    = dayHours;
-  let curLat       = homeCoords.lat;
-  let curLon       = homeCoords.lon;
-  let clockHrs     = 8.0; // start 8:00 AM
-
-  while (available.length > 0) {
-    // Find nearest job that fits
-    let bestIdx = -1, bestDrive = Infinity;
-    for (let i = 0; i < available.length; i++) {
-      const l = available[i];
-      const c = coords[l.id];
-      if (!c) { unscheduled.push(l); available.splice(i,1); i--; continue; }
-      const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
-      const jobH  = _sched.durations[l.id] || estimateJobDuration(l);
-      if (drive + jobH <= remaining + 0.05 && drive < bestDrive) {
-        bestDrive = drive; bestIdx = i;
-      }
-    }
-    if (bestIdx === -1) break; // nothing fits
-
-    const l      = available[bestIdx];
-    const c      = coords[l.id];
-    const jobH   = _sched.durations[l.id] || estimateJobDuration(l);
-    const driveH = driveTimeHrs(curLat, curLon, c.lat, c.lon);
-
-    scheduled.push({
-      lead:       l,
-      driveStart: clockHrs,
-      driveHrs:   driveH,
-      startTime:  clockHrs + driveH,
-      jobHrs:     jobH,
-      endTime:    clockHrs + driveH + jobH
-    });
-
-    clockHrs  += driveH + jobH;
-    remaining -= driveH + jobH;
-    curLat     = c.lat;
-    curLon     = c.lon;
-    available.splice(bestIdx, 1);
-  }
-
-  // Return drive
-  const returnDriveHrs = homeCoords ? driveTimeHrs(curLat, curLon, homeCoords.lat, homeCoords.lon) : 0;
-
-  // Remaining jobs didn't fit
-  available.forEach(l => unscheduled.push(l));
-
-  _sched.scheduled      = scheduled;
-  _sched.unscheduled    = unscheduled;
-  _sched.returnDriveHrs = returnDriveHrs;
+  // Run the optimizer.
+  const result = _optimizeDayPlan(jobs, coords, homeCoords, dayHours, _sched.durations);
+  _sched.scheduled      = result.scheduled;
+  _sched.unscheduled    = result.unscheduled;
+  _sched.returnDriveHrs = result.returnDriveHrs;
   _sched.loading        = false;
   _sched.built          = true;
+  renderSchedulerPage();
+}
+
+// ── MULTI-DAY MODE ──
+// Toggle between single-day and multi-day. Multi-day defaults to a 5-business-
+// day window starting from the current scheduler date. Each day in the range
+// has its own tech picker and day plan; "Build All Days" fills them in order
+// with overflow chaining (a job that doesn't fit Mon rolls into Tue's pool).
+function toggleSchedRangeMode() {
+  if (_sched.range) {
+    _sched.range = null;
+    _sched.dayPlans = {};
+  } else {
+    const startISO = _sched.date || new Date().toISOString().slice(0,10);
+    const days = _enumerateBusinessDays(new Date(startISO + 'T12:00:00'), 5);
+    _sched.range = { start: days[0], end: days[days.length-1] };
+    _sched.dayPlans = {};
+    days.forEach(d => { _sched.dayPlans[d] = { techId: '', scheduled: [], unscheduled: [], returnDriveHrs: 0, built: false }; });
+  }
+  renderSchedulerPage();
+}
+
+// Returns a list of `count` business-day ISO strings starting from startDate.
+function _enumerateBusinessDays(startDate, count) {
+  const out = [];
+  const d = new Date(startDate);
+  while (out.length < count) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) out.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+// All ISO dates between start and end (inclusive). Skips weekends by default.
+function _datesInRange(start, end, skipWeekends=true) {
+  const out = [];
+  const d = new Date(start + 'T12:00:00');
+  const endD = new Date(end + 'T12:00:00');
+  while (d <= endD) {
+    const dow = d.getDay();
+    if (!skipWeekends || (dow !== 0 && dow !== 6)) out.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+// Update an existing day plan's tech (resets the built flag for that day).
+function setSchedDayTech(date, techId) {
+  if (!_sched.dayPlans[date]) _sched.dayPlans[date] = { techId: '', scheduled: [], unscheduled: [], returnDriveHrs: 0, built: false };
+  _sched.dayPlans[date].techId = techId;
+  _sched.dayPlans[date].built = false;
+  renderSchedulerPage();
+}
+
+// Update the range start / end and re-seed dayPlans without losing existing builds.
+function setSchedRange(field, val) {
+  if (!_sched.range) return;
+  if (field === 'start') _sched.range.start = val;
+  if (field === 'end')   _sched.range.end = val;
+  // Re-seed any new days that aren't yet in dayPlans.
+  const dates = _datesInRange(_sched.range.start, _sched.range.end);
+  const fresh = {};
+  dates.forEach(d => {
+    fresh[d] = _sched.dayPlans[d] || { techId: '', scheduled: [], unscheduled: [], returnDriveHrs: 0, built: false };
+  });
+  _sched.dayPlans = fresh;
+  renderSchedulerPage();
+}
+
+// Build a single day's plan inside multi-day mode. Honors that day's techId.
+async function buildSchedDay(date) {
+  const plan = _sched.dayPlans[date];
+  if (!plan) return;
+  // Pool: schedulable jobs minus anything already scheduled on a different day in this range.
+  const otherScheduledIds = new Set();
+  Object.entries(_sched.dayPlans).forEach(([d, p]) => {
+    if (d === date) return;
+    p.scheduled.forEach(s => otherScheduledIds.add(s.lead.id));
+  });
+  const pool = getSchedulableJobs(plan.techId || null).filter(l => !otherScheduledIds.has(l.id));
+  if (!pool.length) { toast('No jobs available for this day with current filters','warning'); return; }
+
+  const prefs    = getPrefs();
+  const dayHours = prefs.dayHours || 8;
+  const homeAddr = prefs.homeBase || '3299 Colston Court, Powhatan, VA 23139';
+
+  _sched.loading = true; renderSchedulerPage();
+
+  let homeCoords = await geocodeOne(homeAddr, '__home__');
+  if (!homeCoords) {
+    toast('Could not geocode home base — check Settings → Scheduling','error');
+    _sched.loading = false; renderSchedulerPage(); return;
+  }
+  const coords = {};
+  for (const l of pool) {
+    const addr = [l.siteStreet, l.siteCity, l.siteState||'VA', l.siteZip].filter(Boolean).join(', ');
+    const c = await geocodeOne(addr, l.id);
+    if (c) coords[l.id] = c;
+  }
+  const result = _optimizeDayPlan(pool, coords, homeCoords, dayHours, _sched.durations);
+  plan.scheduled       = result.scheduled;
+  plan.unscheduled     = result.unscheduled;
+  plan.returnDriveHrs  = result.returnDriveHrs;
+  plan.built           = true;
+  _sched.loading = false;
+  renderSchedulerPage();
+}
+
+// Build every day in the range in order. Each day's pool excludes leads
+// already scheduled by earlier days in this run.
+async function buildAllSchedDays() {
+  if (!_sched.range) return;
+  const dates = _datesInRange(_sched.range.start, _sched.range.end);
+  for (const d of dates) {
+    await buildSchedDay(d);
+  }
+  toast(`Built ${dates.length} days. Review each day's tech and plan, then send confirmations.`, 'success');
+}
+
+// Render the multi-day view. Top: range pickers + Build All. Below: pool on
+// the left, per-day strip on the right (one card per business day in range).
+function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
+  const start = _sched.range.start;
+  const end   = _sched.range.end;
+  const dates = _datesInRange(start, end);
+
+  // Tech picker template — used per day card.
+  const techDropdownFor = (selected) => {
+    return '<option value="">— Pick a tech —</option>' +
+      fieldUsers.map(u => {
+        const sk = Array.isArray(u.skills) ? u.skills.length : 'all';
+        return `<option value="${escHtml(u.id)}"${u.id===selected?' selected':''}>${escHtml(u.name)} (${sk} skill${sk==='all'||sk===1?'':'s'})</option>`;
+      }).join('');
+  };
+
+  // Build a single day card.
+  const dayCard = (date) => {
+    const plan = _sched.dayPlans[date] || { techId: '', scheduled: [], unscheduled: [], returnDriveHrs: 0, built: false };
+    const tech = plan.techId ? fieldUsers.find(u => u.id === plan.techId) : null;
+    const dayHours = getPrefs().dayHours || 8;
+    const totalWork  = plan.scheduled.reduce((s,x)=> s + (x.jobHrs||0), 0);
+    const totalDrive = plan.scheduled.reduce((s,x)=> s + (x.driveHrs||0), 0);
+    const totalHrs   = totalWork + totalDrive + (plan.returnDriveHrs||0);
+    const pct = Math.min(100, Math.round(totalHrs/dayHours*100));
+    const barColor = pct > 95 ? 'var(--red)' : pct > 80 ? 'var(--amber)' : 'var(--green)';
+
+    let body = '';
+    if (!plan.built) {
+      body = `<div style="padding:18px;text-align:center;font-size:12px;color:var(--text-muted)">
+        Pick a tech and click <strong>Build</strong> to plan this day.
+      </div>`;
+    } else if (!plan.scheduled.length) {
+      body = `<div style="padding:18px;text-align:center;font-size:12px;color:var(--text-muted)">
+        No jobs fit this day with the current filters.
+      </div>`;
+    } else {
+      const slots = plan.scheduled.map(s => {
+        const cust = custs.find(c => c.id === s.lead.customerId);
+        const name = cust ? custFullName(cust) : (s.lead.customerName||'Unknown');
+        const addr = [s.lead.siteStreet, s.lead.siteCity].filter(Boolean).join(', ');
+        const driveMin = Math.round((s.driveHrs||0) * 60);
+        const driveStr = driveMin >= 60 ? `${Math.floor(driveMin/60)}h ${driveMin%60}m` : `${driveMin}m`;
+        return `${s.driveHrs > 0 ? `<div class="sched-drive-row">↳ Drive ${driveStr}</div>` : ''}
+          <div class="sched-slot">
+            <div class="sched-time">${fmtTime(s.startTime)}</div>
+            <div class="sched-slot-body">
+              <div style="font-weight:500;font-size:13px">${escHtml(name)}</div>
+              <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(addr)}</div>
+              <div style="font-size:11.5px;color:var(--text-secondary)">${s.lead.id} · ${fmtHrs(s.jobHrs)}</div>
+            </div>
+          </div>`;
+      }).join('');
+      const returnMin = Math.round((plan.returnDriveHrs||0)*60);
+      const returnStr = returnMin >= 60 ? `${Math.floor(returnMin/60)}h ${returnMin%60}m` : `${returnMin}m`;
+      body = `
+        <div style="background:var(--bg-elevated);border-radius:6px;height:6px;overflow:hidden;margin-bottom:6px">
+          <div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.4s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+          ${fmtHrs(totalWork)} work · ${fmtHrs(totalDrive)} drive · ${fmtHrs(plan.returnDriveHrs||0)} return  ·  <span style="color:${barColor};font-weight:600">${fmtHrs(totalHrs)} / ${dayHours}h</span>
+        </div>
+        ${slots}
+        <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}</div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-p" style="padding:4px 10px;font-size:11.5px" onclick="commitSchedDay('${date}')">✓ Commit Day</button>
+          <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;border-color:#3498db;color:#3498db" onclick="sendDayConfirmations('${date}')" title="Send confirmation-request emails to each scheduled customer for this day">✉ Send Confirmations</button>
+        </div>
+        ${plan.unscheduled.length ? `<div style="margin-top:8px;font-size:11.5px;color:var(--amber)">⚠ ${plan.unscheduled.length} job(s) didn't fit — they'll roll into the next day's pool when you build it.</div>` : ''}`;
+    }
+
+    const dayLabel = formatSchedDate(date);
+    return `<div class="jd-sec" style="margin-bottom:10px">
+      <div class="jd-sh" style="padding:10px 14px">
+        <div style="display:flex;align-items:center;gap:10px;flex:1;flex-wrap:wrap">
+          <div style="font-size:13px;font-weight:600">${escHtml(dayLabel)}</div>
+          <select class="psel" style="font-size:12px;padding:4px 8px"
+            onchange="setSchedDayTech('${date}', this.value)">
+            ${techDropdownFor(plan.techId)}
+          </select>
+          <button class="btn btn-p" style="padding:4px 10px;font-size:11.5px" onclick="buildSchedDay('${date}')" ${_sched.loading?'disabled':''}>
+            ${_sched.loading?'…':'Build'}
+          </button>
+        </div>
+      </div>
+      <div class="jd-sb" style="padding:10px 14px">${body}</div>
+    </div>`;
+  };
+
+  return `
+    <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
+      <div>
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Range Start</div>
+        <input type="date" class="psel" value="${start}" min="${new Date().toISOString().slice(0,10)}"
+          onchange="setSchedRange('start', this.value)">
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Range End</div>
+        <input type="date" class="psel" value="${end}" min="${start}"
+          onchange="setSchedRange('end', this.value)">
+      </div>
+      <button class="btn btn-p" onclick="buildAllSchedDays()" ${_sched.loading?'disabled':''}>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5,2 14,8 5,14"/></svg>
+        ${_sched.loading?'Building…':'Build All Days'}
+      </button>
+      <button class="btn btn-g" onclick="toggleSchedRangeMode()">Single-Day Mode</button>
+      <div style="margin-left:auto;font-size:12px;color:var(--text-muted)">
+        ${dates.length} business day${dates.length===1?'':'s'} · Home: ${escHtml(getPrefs().homeBase||'Not set')}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:16px;align-items:start">
+      <div>
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">
+          Pool — ${jobs.length} job${jobs.length===1?'':'s'} ready
+        </div>
+        ${poolHtml}
+      </div>
+      <div>${dates.map(dayCard).join('')}</div>
+    </div>`;
+}
+
+// Stub for Chunk 5a — will be replaced with the real confirmation-email sender.
+function sendDayConfirmations(date) {
+  toast('Confirmation emails coming in the next deploy chunk — for now use the per-day Outlook button on each scheduled job.', 'info');
+}
+
+// Commit a single day's scheduled jobs to lead milestones (multi-day flavor).
+function commitSchedDay(date) {
+  const plan = _sched.dayPlans[date];
+  if (!plan || !plan.scheduled.length) return;
+  const arr = getLeads();
+  plan.scheduled.forEach(s => {
+    const idx = arr.findIndex(l => l.id === s.lead.id);
+    if (idx < 0) return;
+    if (!arr[idx].milestones) arr[idx].milestones = {};
+    arr[idx].milestones.installScheduled = { done: true, date };
+    if (arr[idx].scheduleOverride) delete arr[idx].scheduleOverride;
+    arr[idx].updatedAt = new Date().toISOString();
+  });
+  saveLeads(arr);
+  toast(`${plan.scheduled.length} job(s) committed for ${date}`, 'success');
+  // Force re-pull from getSchedulableJobs (those leads should drop out).
+  plan.built = false;
+  plan.scheduled = [];
+  plan.unscheduled = [];
   renderSchedulerPage();
 }
 
@@ -13295,14 +13870,17 @@ async function _onMSALSuccess(account) {
     const users = getUsers();
     const idx = users.findIndex(u => u.id === stableId || u.username === email);
     if (idx >= 0) {
-      // Preserve existing mobile + admin-set notifyEmail override across sign-ins.
-      // notifyEmail lets an admin route @-mention notifications to a different
-      // address than the MSAL UPN — must NOT be clobbered when the user signs in.
+      // Preserve admin-set fields across sign-ins:
+      //   - mobile      (user's own phone, set in Account settings)
+      //   - notifyEmail (admin-set override for @-mention emails)
+      //   - skills      (admin-set capabilities, used by Scheduler)
+      // None of these come from MSAL — they're CRM-only state.
       users[idx] = {
         ...users[idx],
         ...user,
         mobile:      users[idx].mobile || '',
-        notifyEmail: users[idx].notifyEmail || undefined
+        notifyEmail: users[idx].notifyEmail || undefined,
+        skills:      Array.isArray(users[idx].skills) ? users[idx].skills : undefined
       };
     } else {
       // First-time sign-in — bootstrap Jon's known cell from handoff; others can self-set.
@@ -15405,6 +15983,41 @@ function _buildSchedContent(lead, cust, quote, type) {
   return { subject, body: sections.join('\n\n'), location };
 }
 
+// Convert the plain-text schedule body into HTML for the Outlook deep link.
+// Why: Outlook treats the body parameter as HTML, so plain \n characters
+// collapse to spaces (this is what was causing the "all on one line" bug).
+// Also linkifies phone numbers, emails, and URLs so techs on phones can tap
+// to call / email / open without copy-pasting.
+function _schedBodyToHtml(plain) {
+  if (!plain) return '';
+  // 1. Escape HTML entities first so user-typed < > & don't break rendering.
+  let html = String(plain)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // 2. Linkify URLs first so we don't accidentally re-match inside hrefs below.
+  html = html.replace(/(https?:\/\/[^\s<]+)/g, (m) =>
+    `<a href="${m}" style="color:#0078d4">${m}</a>`);
+
+  // 3. Linkify emails.
+  html = html.replace(/([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/g, (m) =>
+    `<a href="mailto:${m}" style="color:#0078d4">${m}</a>`);
+
+  // 4. Linkify US phone numbers (tap-to-call). Matches forms like
+  //    1-804-555-1212, (804) 555-1212, 804.555.1212, 804 555 1212, +18045551212.
+  html = html.replace(/(\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\b/g, (m, _c, a, b, d) => {
+    const tel = '+1' + a + b + d;
+    return `<a href="tel:${tel}" style="color:#0078d4;font-weight:500">${m}</a>`;
+  });
+
+  // 5. Newlines → <br> so the structure from the modal carries into Outlook.
+  //    Two consecutive newlines naturally become <br><br> = paragraph spacing.
+  html = html.replace(/\r\n/g, '\n').replace(/\n/g, '<br>');
+
+  return html;
+}
+
 // Build the Outlook deep link from the (possibly edited) modal values and open it.
 function openSchedInOutlook() {
   if (!_schedLeadId) { toast('Job not found', 'error'); return; }
@@ -15412,7 +16025,8 @@ function openSchedInOutlook() {
   if (!lead) { toast('Job not found', 'error'); return; }
 
   const subject = document.getElementById('sched-subject')?.value || '';
-  const body    = document.getElementById('sched-body')?.value    || '';
+  const bodyPlain = document.getElementById('sched-body')?.value || '';
+  const bodyHtml = _schedBodyToHtml(bodyPlain);
   const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
   const location  = addrParts.join(', ');
 
@@ -15421,7 +16035,7 @@ function openSchedInOutlook() {
     rru:  'addevent',
     subject,
     location,
-    body,
+    body: bodyHtml,
     allday: 'false'
   });
   const url = 'https://outlook.office.com/calendar/0/deeplink/compose?' + params.toString();
