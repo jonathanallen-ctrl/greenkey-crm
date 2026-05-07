@@ -12874,9 +12874,86 @@ async function buildAllSchedDays() {
   toast(`Built ${dates.length} days. Review each day's tech and plan, then send confirmations.`, 'success');
 }
 
+// In-memory cache of confirmation statuses, hydrated from the Worker.
+// Keyed by token. Refreshed when the Scheduler is opened in multi-day mode.
+const _schedConfirmStatuses = {};
+let _schedStatusHydratedAt = 0;
+
+// Pull the latest confirmation statuses for every token across visible day
+// plans. Updates _schedConfirmStatuses in place. Auto-throttled to once per
+// 10 seconds so re-renders don't spam the Worker.
+async function _hydrateSchedConfirmStatuses(force=false) {
+  if (!force && Date.now() - _schedStatusHydratedAt < 10_000) return;
+  const tokens = [];
+  Object.values(_sched.dayPlans || {}).forEach(plan => {
+    plan.scheduled.forEach(slot => {
+      const c = slot.lead.scheduling?.confirmations?.[/* date is the plan key, look up by plan.scheduled */];
+      // We don't know the date inside this loop; re-walk by plan date below.
+    });
+  });
+  // Re-walk: collect tokens with their (leadId, date) from each plan.
+  const wanted = []; // [{token, leadId, date}]
+  for (const [date, plan] of Object.entries(_sched.dayPlans || {})) {
+    for (const slot of plan.scheduled) {
+      const conf = slot.lead.scheduling?.confirmations?.[date];
+      if (conf && conf.token) wanted.push({ token: conf.token, leadId: slot.lead.id, date });
+    }
+  }
+  if (!wanted.length) return;
+
+  let workerToken = '';
+  try { workerToken = await _acquireSMSToken(); } catch (_) { return; }
+  if (!workerToken) return;
+
+  try {
+    const url = SMS_WORKER_URL.replace(/\/$/,'') + '/scheduling/status?tokens=' +
+      encodeURIComponent(wanted.map(w => w.token).join(','));
+    const r = await fetch(url, { headers: { 'Authorization': `Bearer ${workerToken}` } });
+    if (!r.ok) return;
+    const { statuses } = await r.json();
+    Object.assign(_schedConfirmStatuses, statuses || {});
+    _schedStatusHydratedAt = Date.now();
+
+    // Persist newly-arrived final statuses onto the lead so the badge survives
+    // re-renders even if the worker is unreachable.
+    const arr = getLeads();
+    let dirty = false;
+    for (const w of wanted) {
+      const s = statuses[w.token];
+      if (!s) continue;
+      const idx = arr.findIndex(l => l.id === w.leadId);
+      if (idx < 0) continue;
+      const conf = arr[idx].scheduling?.confirmations?.[w.date];
+      if (conf && conf.status !== s.status) {
+        conf.status = s.status;
+        conf.respondedAt = s.respondedAt;
+        conf.note = s.note;
+        dirty = true;
+      }
+    }
+    if (dirty) saveLeads(arr);
+  } catch (e) {
+    console.warn('[GK] Confirmation status hydration failed:', e);
+  }
+  // Re-render once with fresh statuses.
+  if (S.page === 'scheduler') renderSchedulerPage();
+}
+
+// Returns { label, color, title } for the status pill. status is one of
+// 'pending' | 'confirmed' | 'reschedule_requested' | 'expired' | undefined.
+function _schedConfirmBadge(status, note) {
+  if (status === 'confirmed') return { label: '✓ Confirmed', color: '#2ecc71', title: 'Customer confirmed this slot.' };
+  if (status === 'reschedule_requested') return { label: '📅 Reschedule', color: '#f39c12', title: note ? 'Customer note: ' + note : 'Customer asked to reschedule.' };
+  if (status === 'expired') return { label: '⌛ Expired', color: '#888', title: 'Token expired before customer responded.' };
+  if (status === 'pending') return { label: '⏳ Pending', color: '#3498db', title: 'Waiting for customer to respond to confirmation request.' };
+  return null;
+}
+
 // Render the multi-day view. Top: range pickers + Build All. Below: pool on
 // the left, per-day strip on the right (one card per business day in range).
 function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
+  // Kick off async status refresh — re-render fires when results arrive.
+  _hydrateSchedConfirmStatuses();
   const start = _sched.range.start;
   const end   = _sched.range.end;
   const dates = _datesInRange(start, end);
@@ -12917,11 +12994,20 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
         const addr = [s.lead.siteStreet, s.lead.siteCity].filter(Boolean).join(', ');
         const driveMin = Math.round((s.driveHrs||0) * 60);
         const driveStr = driveMin >= 60 ? `${Math.floor(driveMin/60)}h ${driveMin%60}m` : `${driveMin}m`;
+        // Confirmation status — pulled from lead.scheduling first (durable),
+        // then overlaid with live worker status if hydrated.
+        const localConf = s.lead.scheduling?.confirmations?.[date];
+        const liveStatus = localConf?.token ? (_schedConfirmStatuses[localConf.token]?.status || localConf.status) : null;
+        const note = localConf?.token ? _schedConfirmStatuses[localConf.token]?.note : '';
+        const badge = _schedConfirmBadge(liveStatus, note);
+        const badgeHtml = badge
+          ? `<span class="chip" style="font-size:10px;background:${badge.color}1a;color:${badge.color};margin-left:6px;padding:2px 7px;border-radius:10px;font-weight:500" title="${escHtml(badge.title)}">${badge.label}</span>`
+          : '';
         return `${s.driveHrs > 0 ? `<div class="sched-drive-row">↳ Drive ${driveStr}</div>` : ''}
           <div class="sched-slot">
             <div class="sched-time">${fmtTime(s.startTime)}</div>
             <div class="sched-slot-body">
-              <div style="font-weight:500;font-size:13px">${escHtml(name)}</div>
+              <div style="font-weight:500;font-size:13px;display:flex;align-items:center;flex-wrap:wrap">${escHtml(name)}${badgeHtml}</div>
               <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(addr)}</div>
               <div style="font-size:11.5px;color:var(--text-secondary)">${s.lead.id} · ${fmtHrs(s.jobHrs)}</div>
             </div>
@@ -12938,10 +13024,37 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
         </div>
         ${slots}
         <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}</div>
-        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-p" style="padding:4px 10px;font-size:11.5px" onclick="commitSchedDay('${date}')">✓ Commit Day</button>
-          <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;border-color:#3498db;color:#3498db" onclick="sendDayConfirmations('${date}')" title="Send confirmation-request emails to each scheduled customer for this day">✉ Send Confirmations</button>
-        </div>
+        ${(() => {
+          // Confirmation roll-up for this day: how many of the scheduled jobs
+          // have responses, and which states. Drives the Lock button gating.
+          let nConf = 0, nResched = 0, nPend = 0, nNoSent = 0;
+          plan.scheduled.forEach(s => {
+            const lc = s.lead.scheduling?.confirmations?.[date];
+            const live = lc?.token ? (_schedConfirmStatuses[lc.token]?.status || lc.status) : null;
+            if (live === 'confirmed')                  nConf++;
+            else if (live === 'reschedule_requested')  nResched++;
+            else if (live === 'pending')               nPend++;
+            else                                        nNoSent++;
+          });
+          const total = plan.scheduled.length;
+          const allConfirmed = nConf === total;
+          const lockTitle = allConfirmed
+            ? 'All customers confirmed — safe to lock this day into job milestones.'
+            : `${nConf} of ${total} confirmed. Lock will mark all ${total} scheduled in the CRM regardless — use only if you know the unconfirmed ones are good.`;
+          const summary = total
+            ? `<div style="margin-top:10px;padding:8px 10px;background:var(--bg-elevated);border-radius:6px;font-size:11.5px;color:var(--text-secondary);display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+                ${nConf      ? `<span style="color:#2ecc71">✓ ${nConf} confirmed</span>` : ''}
+                ${nResched   ? `<span style="color:#f39c12">📅 ${nResched} reschedule</span>` : ''}
+                ${nPend      ? `<span style="color:#3498db">⏳ ${nPend} pending</span>` : ''}
+                ${nNoSent    ? `<span style="color:var(--text-muted)">— ${nNoSent} not sent</span>` : ''}
+              </div>` : '';
+          return `${summary}
+            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;border-color:#3498db;color:#3498db" onclick="sendDayConfirmations('${date}')" title="Send confirmation-request emails to each scheduled customer for this day">✉ Send Confirmations</button>
+              <button class="btn ${allConfirmed?'btn-p':'btn-g'}" style="padding:4px 10px;font-size:11.5px${allConfirmed?'':';border-color:var(--amber);color:var(--amber)'}" onclick="lockSchedDay('${date}')" title="${escHtml(lockTitle)}">${allConfirmed?'🔒 Lock Day (all confirmed)':'🔒 Lock Day (override)'}</button>
+              <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="_hydrateSchedConfirmStatuses(true)" title="Re-fetch confirmation statuses from the worker">↻</button>
+            </div>`;
+        })()}
         ${plan.unscheduled.length ? `<div style="margin-top:8px;font-size:11.5px;color:var(--amber)">⚠ ${plan.unscheduled.length} job(s) didn't fit — they'll roll into the next day's pool when you build it.</div>` : ''}`;
     }
 
@@ -12995,9 +13108,189 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
     </div>`;
 }
 
-// Stub for Chunk 5a — will be replaced with the real confirmation-email sender.
-function sendDayConfirmations(date) {
-  toast('Confirmation emails coming in the next deploy chunk — for now use the per-day Outlook button on each scheduled job.', 'info');
+// Send confirmation-request emails to every customer scheduled on a given
+// day. Two-way handshake: each email contains Confirm and Reschedule buttons
+// linking to a token-protected page on the Worker. The Worker records the
+// response; the CRM picks it up via getDaySchedConfirmStatuses.
+async function sendDayConfirmations(date) {
+  const plan = _sched.dayPlans[date];
+  if (!plan || !plan.scheduled.length) {
+    toast('No scheduled jobs for this day','warning'); return;
+  }
+  const tech = plan.techId ? getUsers().find(u => u.id === plan.techId) : null;
+  const techName = tech?.name || '(tech to be assigned)';
+  const count = plan.scheduled.length;
+  if (!confirm(`Send confirmation request emails to ${count} customer${count===1?'':'s'} for ${formatSchedDate(date)}?\n\nEach customer gets a Confirm and a Request Reschedule button. Their responses show up as badges on this day's plan.`)) return;
+
+  // Refresh the Graph (Mail.Send) token — same pattern as @-mention emails.
+  let canEmail = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+        _gToken = tr.accessToken;
+        canEmail = !!_gToken;
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] Confirmation: Graph token refresh failed:', e);
+  }
+  if (!canEmail) { toast('Sign in to Microsoft and try again — Mail.Send permission required','error'); return; }
+
+  // Acquire Worker (SMS Relay API) token for /scheduling/issue-token.
+  let workerToken = '';
+  try {
+    workerToken = await _acquireSMSToken();
+  } catch (e) {
+    toast('Could not authenticate with Scheduling API: ' + e.message, 'error');
+    return;
+  }
+  if (!workerToken) { toast('No Scheduling API token','error'); return; }
+
+  toast(`Sending ${count} confirmation request${count===1?'':'s'}…`, 'info');
+  const sent = [], skipped = [], failed = [];
+
+  for (const slot of plan.scheduled) {
+    const lead = slot.lead;
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const customerEmail = (cust?.email || lead.customerEmail || '').trim();
+    const customerName  = cust ? custFullName(cust) : (lead.customerName || 'Customer');
+    const firstName     = (customerName||'').split(' ')[0] || 'there';
+
+    if (!customerEmail) { skipped.push(`${customerName} (no email)`); continue; }
+
+    try {
+      // 1. Mint a token on the Worker.
+      const tokenResp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/scheduling/issue-token', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${workerToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadId: lead.id,
+          customerEmail,
+          customerName,
+          proposedDate: date,
+          proposedStartTime: fmtTime(slot.startTime),
+          proposedEndTime:   fmtTime(slot.endTime),
+          techName,
+          scopeSummary: (lead.scopeOfWork || lead.description || '').slice(0, 1500),
+          siteAddress: [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ')
+        })
+      });
+      if (!tokenResp.ok) {
+        const t = await tokenResp.text();
+        throw new Error(`Token issue ${tokenResp.status}: ${t.slice(0,200)}`);
+      }
+      const { token, confirmUrl } = await tokenResp.json();
+      if (!token || !confirmUrl) throw new Error('Worker did not return a token');
+
+      // 2. Build and send the confirmation request email via Graph.
+      const subject = `Please confirm your GreenKey appointment on ${formatSchedDate(date)}`;
+      const html = _buildSchedConfirmEmailHtml({
+        firstName, dateLabel: formatSchedDate(date),
+        timeLabel: `${fmtTime(slot.startTime)} – ${fmtTime(slot.endTime)}`,
+        techName, lead, confirmUrl
+      });
+      await _graphFetch('/me/sendMail', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: {
+            subject,
+            body: { contentType: 'HTML', content: html },
+            toRecipients: [{ emailAddress: { address: customerEmail } }]
+          },
+          saveToSentItems: true
+        })
+      });
+
+      // 3. Record on the lead so the Scheduler can hydrate status next render.
+      const arr = getLeads();
+      const idx = arr.findIndex(l => l.id === lead.id);
+      if (idx >= 0) {
+        if (!arr[idx].scheduling) arr[idx].scheduling = {};
+        if (!arr[idx].scheduling.confirmations) arr[idx].scheduling.confirmations = {};
+        arr[idx].scheduling.confirmations[date] = {
+          token, sentAt: new Date().toISOString(), status: 'pending', techName
+        };
+        arr[idx].updatedAt = new Date().toISOString();
+        saveLeads(arr);
+      }
+      sent.push(firstName);
+    } catch (e) {
+      console.warn('[GK] Confirmation send failed for', lead.id, e);
+      failed.push(`${firstName}: ${String(e.message||e).slice(0,100)}`);
+    }
+  }
+
+  const parts = [];
+  if (sent.length)    parts.push(`sent ${sent.length}`);
+  if (skipped.length) parts.push(`skipped ${skipped.length} (no email)`);
+  if (failed.length)  parts.push(`failed ${failed.length}`);
+  const msg = `Confirmations: ${parts.join(' · ')}`;
+  toast(msg, sent.length && !failed.length ? 'success' : sent.length ? 'warning' : 'error');
+  if (failed.length) console.warn('[GK] Confirmation failures:', failed);
+  renderSchedulerPage();
+}
+
+// Build the confirmation-request email body (HTML). Mirrors the visual
+// language of the existing quote / consent emails.
+function _buildSchedConfirmEmailHtml({ firstName, dateLabel, timeLabel, techName, lead, confirmUrl }) {
+  const scope = (lead.scopeOfWork || lead.description || '').trim();
+  const scopeHtml = scope
+    ? `<div style="background:#f9f9f9;padding:14px 16px;border-radius:6px;margin:0 0 18px"><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Scope of Work</div><div style="font-size:14px;color:#333;line-height:1.55">${escHtml(scope).replace(/\n/g,'<br>')}</div></div>`
+    : '';
+  return `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55">
+    <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(firstName)},</p>
+    <p style="font-size:14px;margin:0 0 16px">We'd like to schedule your GreenKey electrical service. Please <strong>confirm</strong> this time or <strong>request a different day</strong> using the buttons below.</p>
+    <div style="background:#f6fff9;border-left:4px solid #2ecc71;padding:14px 18px;margin:0 0 18px;border-radius:0 8px 8px 0">
+      <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Proposed Appointment</div>
+      <div style="font-size:18px;font-weight:600;color:#1a1a1a">${escHtml(dateLabel)}</div>
+      <div style="font-size:14px;color:#444;margin-top:4px">${escHtml(timeLabel)}</div>
+      ${techName ? `<div style="font-size:13px;color:#666;margin-top:8px">Technician: <strong>${escHtml(techName)}</strong></div>` : ''}
+    </div>
+    ${scopeHtml}
+    <div style="margin:24px 0;text-align:center">
+      <a href="${confirmUrl}&action=confirm" style="display:inline-block;background:#2ecc71;color:white;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin:4px">✓ Confirm This Time</a>
+      <a href="${confirmUrl}&action=reschedule" style="display:inline-block;background:#f39c12;color:white;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;margin:4px">📅 Request Different Time</a>
+    </div>
+    <p style="font-size:13px;color:#666;margin:18px 0 6px">If neither button works, paste this link: <span style="word-break:break-all">${escHtml(confirmUrl)}</span></p>
+    <p style="font-size:13px;color:#666;margin:0 0 8px">Questions? Reply to this email or call us.</p>
+    <p style="font-size:11px;color:#888;margin:24px 0 0;border-top:1px solid #eee;padding-top:12px">GreenKey Electric · automated scheduling notification · this confirmation link is unique to you</p>
+  </div>`;
+}
+
+// Lock a day in. If every scheduled customer has confirmed, commit silently.
+// Otherwise warn and require admin override before committing.
+function lockSchedDay(date) {
+  const plan = _sched.dayPlans[date];
+  if (!plan || !plan.scheduled.length) return;
+  let nConf = 0, nResched = 0, nPend = 0, nNoSent = 0;
+  const reschedNotes = [];
+  plan.scheduled.forEach(s => {
+    const lc = s.lead.scheduling?.confirmations?.[date];
+    const live = lc?.token ? (_schedConfirmStatuses[lc.token]?.status || lc.status) : null;
+    if (live === 'confirmed')                  nConf++;
+    else if (live === 'reschedule_requested') {
+      nResched++;
+      const note = lc?.token ? _schedConfirmStatuses[lc.token]?.note : '';
+      if (note) reschedNotes.push(`• ${(s.lead.customerName||'Customer')}: ${note}`);
+    }
+    else if (live === 'pending')               nPend++;
+    else                                        nNoSent++;
+  });
+  const total = plan.scheduled.length;
+
+  if (nConf < total) {
+    const warnings = [];
+    if (nResched) warnings.push(`${nResched} customer(s) requested a reschedule`);
+    if (nPend)    warnings.push(`${nPend} confirmation(s) still pending`);
+    if (nNoSent)  warnings.push(`${nNoSent} customer(s) haven't been sent a request yet`);
+    let msg = `Only ${nConf}/${total} customers have confirmed for ${formatSchedDate(date)}.\n\nProblems:\n• ${warnings.join('\n• ')}`;
+    if (reschedNotes.length) msg += `\n\nReschedule notes:\n${reschedNotes.join('\n')}`;
+    msg += `\n\nLock anyway? This marks all ${total} as scheduled in the CRM regardless of confirmation status — use only if you've already worked it out with each customer.`;
+    if (!confirm(msg)) return;
+  }
+  commitSchedDay(date);
 }
 
 // Commit a single day's scheduled jobs to lead milestones (multi-day flavor).
@@ -13715,7 +14008,7 @@ const SP_LIST_NAME      = 'GreenKeyCRM_Data';
 // — URL building must use encodeURI() (handled in _uploadPhotoToSP, _writeBackupSnapshot,
 // _pruneOldBackups). Update both constants together if folders move again.
 const SP_PHOTO_LIB_NAME = 'CEO/CRM software/GreenKeyCRM_Photos';
-const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read','Mail.Send'];
+const GRAPH_SCOPES      = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read','Mail.Send','Calendars.ReadWrite'];
 
 let _msal    = null;
 let _gToken  = null;
