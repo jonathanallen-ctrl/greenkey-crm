@@ -2179,11 +2179,10 @@ const SECS = {
     </div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSchedSettings()">Save Changes</button></div>`,
 
-  'Users & Access':`<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically.</div>
-    <div id="ulist">${renderUsers()}</div>
-    <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
-      To grant or revoke access, manage users in the Microsoft 365 admin center. Only <strong>greenkey-usa.com</strong> accounts can sign in to this CRM.
-    </div>`,
+  // Users & Access is rendered dynamically at click time (see showSec) so the
+  // admin-only pencil-edit button has the live S.user role available — at
+  // script-eval time S.user is still null and the cached HTML would omit it.
+  'Users & Access': null,
 
   'Account':`<div class="stitle">Account</div><div class="sdesc">Your sign-in is managed by Microsoft 365. There is no separate CRM password to change.</div>
     <div class="srow"><div><div class="srl">Signed in as</div><div class="srd" id="acct-email">${(S.user&&S.user.username)||'—'}</div></div></div>
@@ -2201,6 +2200,15 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-g" onclick="doLogout()">Sign out</button></div>`
 };
 
+function renderUsersAccessSettings() {
+  return `<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically.</div>
+    <div id="ulist">${renderUsers()}</div>
+    <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
+      To grant or revoke access, manage users in the Microsoft 365 admin center. Only <strong>greenkey-usa.com</strong> accounts can sign in to this CRM.
+      ${S.user?.role === 'admin' ? '<br><br>Tip: click the <strong>✎</strong> next to a teammate to override the email address @-mention notifications go to (useful when the sign-in UPN doesn\'t match the inbox they actually read).' : ''}
+    </div>`;
+}
+
 function showSec(el, sec) {
   document.querySelectorAll('.sni').forEach(i=>i.classList.remove('active'));
   if (el) el.classList.add('active');
@@ -2210,6 +2218,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderTechModeSettings();
   } else if (sec==='Backups & Export') {
     document.getElementById('spanel').innerHTML = renderBackupsExportSettings();
+  } else if (sec==='Users & Access') {
+    document.getElementById('spanel').innerHTML = renderUsersAccessSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
   }
@@ -3297,16 +3307,30 @@ function saveLead() {
     utilityInfo: existingLead?.utilityInfo || {}
   };
 
-  upsertLead(lead);
+  const wasNew = !existingId;
+  const savedId = upsertLead(lead);
   closeDrawer();
-  toast(existingId?'Lead updated':'Lead created','success');
+  toast(wasNew?'Lead created — opening job…':'Lead updated','success');
+  updateLeadsBadge();
+
+  if (wasNew) {
+    // Drop the user straight into the new job's detail page so they can keep
+    // filling in info (snapshot, notes, charger, etc.) without having to
+    // navigate back through the pipeline or search.
+    if (S.page !== 'jobs') navigate('jobs');
+    // Small delay so the page-jobs DOM is mounted before openJobDetail tries
+    // to swap in the detail view (matches the pattern used elsewhere in the file).
+    setTimeout(() => { try { openJobDetail(savedId); } catch(e) { console.warn('[GK] post-save openJobDetail failed:', e); } }, 60);
+    return;
+  }
+
+  // Existing edit — preserve the user's current page context.
   if (S.page==='leads') renderLeadsPage();
   else if (S.page==='jobs') {
     if (S.jobDetailId) renderJobDetail(S.jobDetailId);
     else renderPipeline();
   }
   else if (S.page==='customers' && S.custView) renderCustomerDetail(S.custView);
-  updateLeadsBadge();
 }
 
 // ── CUSTOMER FORM ──
@@ -4069,7 +4093,7 @@ function renderQuickQuoteForm(q){
     <div class="qq-section">
       <div class="qq-title">Run Segments</div>
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.45">
-        Distances here are <strong>wire / conduit run length</strong>, not tape-measure distance. Charged in 10 ft increments — round up to the next 10 ft.
+        Distances here are <strong>wire / conduit run length</strong>, not tape-measure distance. <strong>Include verticals</strong> — panel-to-floor drop, vertical risers, exit-through-wall, and bends. Charged in 10 ft increments — round up to the next 10 ft.
       </div>
       <div id="qq-runs-list">${renderQQRunSegs(qq.runSegs||[], q.id)}</div>
       <button class="li-add" style="margin-top:10px" onclick="addQQRunSeg('${q.id}')">
@@ -4247,7 +4271,7 @@ function _renderQQ_HVAC(q) {
     <div class="qq-section">
       <div class="qq-title">Run Segments</div>
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.45">
-        Distances are <strong>wire / conduit run length</strong>. Charged in 10 ft increments — round up. AF1 jobs are typically surface-run; trenching options are available if needed.
+        Distances are <strong>wire / conduit run length</strong>. <strong>Include verticals</strong> — panel-to-floor drop, vertical risers, exit-through-wall, and bends. Charged in 10 ft increments — round up. AF1 jobs are typically surface-run; trenching options are available if needed.
       </div>
       <div id="qq-runs-list">${renderQQRunSegs(qq.runSegs||[], q.id)}</div>
       <button class="li-add" style="margin-top:10px" onclick="addQQRunSeg('${q.id}')">
@@ -4860,8 +4884,9 @@ function _renderAdditionalTaskCard(qid, task, idx) {
         </select>
       </div>
     </div>
-    <div class="fg"><div class="fl">Run Length (ft of wire run)</div>
+    <div class="fg"><div class="fl">Run Length (ft of wire run — include verticals)</div>
       <input class="fi" type="number" min="0" step="10" value="${task.runFt || 25}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runFt', parseInt(this.value)||0)">
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">Total <strong>conduit-path length</strong> — include vertical drops, risers, exit-through-wall, and bends. Not tape-measure distance.</div>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
@@ -8341,7 +8366,7 @@ function _wireRunRow(leadId, run) {
     <select class="jd-fi" style="width:160px;font-size:12.5px" onchange="updateWireRun('${leadId}','${run.id}','gauge',this.value)">
       <option value="">— Gauge —</option>${gaugeOpts}
     </select>
-    <input class="jd-fi" type="number" min="0" step="1" placeholder="Length (ft)" value="${run.length||''}" style="width:100px;font-size:12.5px;font-family:var(--mono)" onchange="updateWireRun('${leadId}','${run.id}','length',parseFloat(this.value)||0)">
+    <input class="jd-fi" type="number" min="0" step="1" placeholder="Length (ft, incl. verticals)" title="Total conduit-path length including vertical drops, risers, exit-through-wall, and bends — not tape-measure distance." value="${run.length||''}" style="width:100px;font-size:12.5px;font-family:var(--mono)" onchange="updateWireRun('${leadId}','${run.id}','length',parseFloat(this.value)||0)">
     <select class="jd-fi" style="width:120px;font-size:12.5px" onchange="updateWireRun('${leadId}','${run.id}','conduit',this.value)">
       ${condOpts}
     </select>
