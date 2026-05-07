@@ -143,7 +143,7 @@
   .page.active{display:block}
 
   /* DASHBOARD */
-  .sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+  .sgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
   .sc{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rl);padding:16px 18px;display:flex;flex-direction:column;gap:8px;transition:border-color var(--t)}
   .sc:hover{border-color:var(--border-light)}
   .sl{font-size:11.5px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
@@ -307,6 +307,7 @@
   .chip-muted{background:var(--bg-hover);color:var(--text-muted)}
   .chip-blue{background:var(--blue-dim);color:var(--blue)}
   .chip-purple{background:var(--purple-dim);color:var(--purple)}
+  .chip-lost{background:var(--red-dim);color:var(--red);font-weight:600}
   /* PIPELINE */
   .pipe-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
     position:sticky;top:-24px;z-index:60;
@@ -1080,6 +1081,11 @@
           <div class="sc aa"><div class="sl">Pending Quotes</div><div class="sv" id="stat-pending-quotes">0</div><div class="ss w">Awaiting approval</div></div>
           <div class="sc ab"><div class="sl">This Month</div><div class="sv" id="stat-month-rev">$0</div><div class="ss">Revenue billed</div></div>
           <div class="sc ar" id="stat-overdue-tasks"><div class="sl">Overdue Tasks</div><div class="sv">0</div><div class="ss d">All clear</div></div>
+          <div class="sc ar" id="stat-lost-card" onclick="navigate('reports');setTimeout(()=>{const t=document.querySelector('.rtab[data-rpt=\\'lost\\']');if(t)switchReport(t,'lost');},80)" style="cursor:pointer" title="View Lost Leads report">
+            <div class="sl">Lost This Month</div>
+            <div class="sv" id="stat-lost-month">0</div>
+            <div class="ss" id="stat-lost-month-sub">No losses</div>
+          </div>
         </div>
 
         <!-- Main widgets row -->
@@ -1314,6 +1320,7 @@
           <button class="rtab"        data-rpt="royalty"      onclick="switchReport(this,'royalty')">Qmerit Royalty</button>
           <button class="rtab"        data-rpt="margins"      onclick="switchReport(this,'margins')">Margin Summary</button>
           <button class="rtab"        data-rpt="jurisdiction" onclick="switchReport(this,'jurisdiction')">By Jurisdiction</button>
+          <button class="rtab"        data-rpt="lost"         onclick="switchReport(this,'lost')">Lost Leads</button>
         </div>
         <!-- Report content -->
         <div class="card" id="rpt-body" style="margin-top:14px;overflow-x:auto"></div>
@@ -7878,6 +7885,9 @@ function openJobDetail(id) {
 }
 
 function closeJobDetail() {
+  // Flush any debounced auto-saves before tearing down the page —
+  // otherwise the last ~800ms of typing in Snapshot/Charger/Utility/Platform is lost.
+  try { if (typeof _flushAllAutoSaves === 'function') _flushAllAutoSaves(); } catch (_) {}
   try { if (typeof stopSMSPolling === 'function') stopSMSPolling(); } catch (_) {}
   S.jobDetailId = null;
   const pv = document.getElementById('jobs-pipe-view');
@@ -7955,9 +7965,13 @@ function updateJobStage(leadId, newStage) {
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  // update chips inline
+  // update chips inline — preserve the Lost chip if this lead is marked lost
   const chipsEl = document.getElementById('jd-stage-chips');
-  if (chipsEl) chipsEl.innerHTML = stageChip(newStage);
+  if (chipsEl) {
+    const li = arr[idx].lostInfo;
+    const lostChip = li?.isLost ? `<span class="chip chip-lost" style="margin-left:6px">Lost${li.reason?' · '+escHtml(li.reason):''}</span>` : '';
+    chipsEl.innerHTML = stageChip(newStage) + lostChip;
+  }
   toast('Stage: ' + (STAGE_MAP[newStage]?.label || newStage), 'success');
 }
 
@@ -8030,13 +8044,41 @@ function addJobNote(leadId) {
 // For each mentioned teammate:
 //   1) Create an actionable task on their to-do list linked to this job + note.
 //   2) Email them the ask so they see it even if they aren't in the CRM.
-// Failures are logged but non-fatal — the note itself has already been saved.
+// Failures are tracked per-recipient and surfaced honestly in the final toast,
+// so the user knows when an email didn't actually go out (vs. silently failing
+// while the toast lies "email sent").
 async function processNoteMentions(lead, note, mentions) {
   const cust = getCustomer(lead.customerId);
   const custName = cust ? custFullName(cust) : (lead.customerName || 'Unknown');
   const jobLabel = `${lead.id} — ${custName}`;
   const authorName = note.authorName || 'A teammate';
   const authorId   = note.author;
+
+  // Force-refresh the Graph token before sending so we pick up the latest
+  // scopes (Mail.Send was added later in the project — a cached pre-Mail.Send
+  // token will 403 on /me/sendMail). Mirrors what the quote-email path does.
+  let canEmail = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        try {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+          _gToken = tr.accessToken;
+          canEmail = !!_gToken;
+        } catch (silentErr) {
+          console.warn('[GK] Mention email: silent token refresh failed:', silentErr);
+          // Don't auto-trigger interactive consent here — it would redirect the
+          // user mid-note. Just record the email as failed and surface it.
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] Mention email: token acquisition error:', e);
+  }
+
+  // Track outcomes for an honest toast.
+  const sent = [], skippedNoEmail = [], failedSend = [];
 
   for (const u of mentions) {
     // ── 1. Task ──
@@ -8057,12 +8099,22 @@ async function processNoteMentions(lead, note, mentions) {
     } catch (e) { console.warn('[GK] Mention task creation failed:', e); }
 
     // ── 2. Email ──
-    if (!u.username) { console.warn('[GK] No email for mentioned user', u); continue; }
+    const firstName = (u.name||'').split(' ')[0] || u.username || 'user';
+    if (!u.username) {
+      console.warn('[GK] Mention email skipped — no email on user record:', u);
+      skippedNoEmail.push(firstName);
+      continue;
+    }
+    if (!canEmail) {
+      console.warn('[GK] Mention email skipped — no Graph token / Mail.Send scope. User:', u.username);
+      failedSend.push({ name: firstName, reason: 'auth' });
+      continue;
+    }
     const jobUrl = location.origin + location.pathname + '#job-' + encodeURIComponent(lead.id);
     const subject = `[GreenKey CRM] ${authorName} mentioned you on ${jobLabel}`;
     const html = `
       <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
-        <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml((u.name||'').split(' ')[0] || 'there')},</p>
+        <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(firstName)},</p>
         <p style="font-size:14px;margin:0 0 12px"><strong>${escHtml(authorName)}</strong> tagged you in a note on job <strong>${escHtml(jobLabel)}</strong>:</p>
         <blockquote style="margin:0 0 16px;padding:10px 14px;border-left:3px solid #2ecc71;background:#f6fff9;font-size:14px;white-space:pre-wrap">${escHtml(note.text)}</blockquote>
         <p style="font-size:13px;margin:0 0 12px">This has also been added to your task list in the CRM. When you mark it complete, ${escHtml(authorName.split(' ')[0])} will be notified automatically.</p>
@@ -8081,9 +8133,37 @@ async function processNoteMentions(lead, note, mentions) {
           saveToSentItems: true
         })
       });
-    } catch (e) { console.warn('[GK] Mention email failed for ' + u.username + ':', e); }
+      console.log('[GK] Mention email sent to', u.username);
+      sent.push(firstName);
+    } catch (e) {
+      console.warn('[GK] Mention email failed for ' + u.username + ':', e);
+      // Classify common failure modes for a clearer toast.
+      const msg = String(e?.message || e);
+      let reason = 'error';
+      if (/401|403|InvalidAuthenticationToken|Forbidden/i.test(msg)) reason = 'auth';
+      else if (/recipient|InvalidRecipients|address/i.test(msg))      reason = 'bad-address';
+      else if (/throttle|429/i.test(msg))                              reason = 'throttle';
+      failedSend.push({ name: firstName, reason });
+    }
   }
-  toast(`Tagged ${mentions.length === 1 ? mentions[0].name.split(' ')[0] : mentions.length + ' teammates'} — task + email sent`, 'success');
+
+  // Build an honest toast that reflects what actually happened.
+  const parts = [];
+  if (sent.length)            parts.push(`emailed ${sent.join(', ')}`);
+  if (skippedNoEmail.length)  parts.push(`no email on file for ${skippedNoEmail.join(', ')}`);
+  if (failedSend.length) {
+    const byReason = {};
+    failedSend.forEach(f => { (byReason[f.reason] = byReason[f.reason] || []).push(f.name); });
+    if (byReason.auth)        parts.push(`email failed for ${byReason.auth.join(', ')} (sign out + back in to refresh Mail.Send permission)`);
+    if (byReason['bad-address']) parts.push(`bad email address for ${byReason['bad-address'].join(', ')}`);
+    if (byReason.throttle)    parts.push(`throttled — try again for ${byReason.throttle.join(', ')}`);
+    if (byReason.error)       parts.push(`email failed for ${byReason.error.join(', ')} (check console)`);
+  }
+  const taskMsg = `Task created for ${mentions.length === 1 ? mentions[0].name.split(' ')[0] : mentions.length + ' teammates'}`;
+  const toastMsg = parts.length ? `${taskMsg} · ${parts.join(' · ')}` : taskMsg;
+  // Success only if every mention got an email.
+  const allOk = sent.length === mentions.length;
+  toast(toastMsg, allOk ? 'success' : (sent.length ? 'warning' : 'error'));
 }
 
 function deleteJobNote(leadId, noteId) {
@@ -8103,14 +8183,53 @@ function deleteJobNote(leadId, noteId) {
 }
 
 // ── AUTO-SAVE DEBOUNCE ──
-const _asTimers = {};
+// Tracks pending saves with both timer AND fn so we can flush them on
+// navigation/unload (otherwise the last ~800ms of typing is lost when the
+// user clicks the back button or closes the tab before the timer fires).
+const _asPending = {}; // key -> { timer, fn }
 function _autoSave(key, fn) {
-  clearTimeout(_asTimers[key]);
-  _asTimers[key] = setTimeout(fn, 800);
+  if (_asPending[key]) clearTimeout(_asPending[key].timer);
+  _asPending[key] = {
+    fn,
+    timer: setTimeout(() => { try { fn(); } catch(e) { console.warn('[GK] autosave failed:', key, e); } delete _asPending[key]; }, 800)
+  };
 }
+// Fire any pending saves NOW. Called by change events (immediate commit),
+// navigation, beforeunload, and visibilitychange→hidden.
+function _autoSaveNow(key) {
+  const p = _asPending[key];
+  if (!p) return;
+  clearTimeout(p.timer);
+  delete _asPending[key];
+  try { p.fn(); } catch(e) { console.warn('[GK] autosave-now failed:', key, e); }
+}
+function _flushAllAutoSaves() {
+  for (const key of Object.keys(_asPending)) _autoSaveNow(key);
+}
+// Run any pending save fn immediately if no timer; or fire the existing one now.
+function _autoSaveImmediate(key, fn) {
+  if (_asPending[key]) { _autoSaveNow(key); return; }
+  try { fn(); } catch(e) { console.warn('[GK] immediate autosave failed:', key, e); }
+}
+
+// Debounced (input/typing) variants — used on `oninput`
 function autoSaveSnapshot(lid) { _autoSave('snap_'+lid, ()=>saveJobSnapshot(lid, true)); }
 function autoSaveCharger(lid)  { _autoSave('char_'+lid, ()=>saveChargerInfo(lid, true)); }
 function autoSaveUtility(lid)  { _autoSave('util_'+lid, ()=>saveUtilityInfo(lid, true)); }
+function autoSavePlatform(lid) { _autoSave('plat_'+lid, ()=>savePlatformFields(lid, true)); }
+function autoSaveLost(lid)     { _autoSave('lost_'+lid, ()=>saveLostInfo(lid, true)); }
+
+// Immediate variants — used on `onchange` (selects, checkboxes, blurred text inputs)
+// so committed changes save instantly without the 800ms wait.
+function autoSaveSnapshotNow(lid) { _autoSaveImmediate('snap_'+lid, ()=>saveJobSnapshot(lid, true)); }
+function autoSaveChargerNow(lid)  { _autoSaveImmediate('char_'+lid, ()=>saveChargerInfo(lid, true)); }
+function autoSaveUtilityNow(lid)  { _autoSaveImmediate('util_'+lid, ()=>saveUtilityInfo(lid, true)); }
+function autoSavePlatformNow(lid) { _autoSaveImmediate('plat_'+lid, ()=>savePlatformFields(lid, true)); }
+function autoSaveLostNow(lid)     { _autoSaveImmediate('lost_'+lid, ()=>saveLostInfo(lid, true)); }
+
+// Flush hooks — catch every realistic way the user can leave the page mid-edit.
+window.addEventListener('beforeunload', _flushAllAutoSaves);
+document.addEventListener('visibilitychange', () => { if (document.hidden) _flushAllAutoSaves(); });
 function _showAutoSaved(sectionId) {
   const btn = document.getElementById(sectionId);
   if (!btn) return;
@@ -8302,12 +8421,43 @@ const NEC_GAUGE_BY_BREAKER = {
   '400-amp': '500 kcmil CU'
 };
 
+// Plug type options keyed by make. Tesla doesn't make J1772-only chargers —
+// their lineup is NACS (Wall Connector) or NACS+J1772 (Universal Wall Connector),
+// so we hide the J1772-only and Other options when Tesla is selected to prevent
+// the wrong default from leaking into quotes/emails. All other makes get the full set.
+const PLUG_OPTIONS_DEFAULT = [
+  { v: 'J1772', label: 'J1772 (most pre-2025 EVs)' },
+  { v: 'NACS',  label: 'NACS (Tesla & most 2025+ EVs)' },
+  { v: 'Both',  label: 'Both J1772 and NACS' },
+  { v: 'Other', label: 'Other' }
+];
+const PLUG_OPTIONS_TESLA = [
+  { v: 'NACS', label: 'NACS' },
+  { v: 'Both', label: 'NACS + J1772 (Universal Wall Connector)' }
+];
+function _plugOptionsForMake(make) {
+  return make === 'Tesla' ? PLUG_OPTIONS_TESLA : PLUG_OPTIONS_DEFAULT;
+}
+
 function onChargerMakeChange(makeVal) {
-  const sel = document.getElementById('ch-model');
-  if (!sel) return;
-  const models = CHARGER_MODELS[makeVal] || [];
-  sel.innerHTML = '<option value="">— Select model —</option>' +
-    models.map(m => `<option value="${m}">${m}</option>`).join('');
+  const modelSel = document.getElementById('ch-model');
+  if (modelSel) {
+    const models = CHARGER_MODELS[makeVal] || [];
+    modelSel.innerHTML = '<option value="">— Select model —</option>' +
+      models.map(m => `<option value="${m}">${m}</option>`).join('');
+  }
+  // Rebuild plug dropdown to match the make's actual product lineup.
+  const plugSel = document.getElementById('ch-plug');
+  if (plugSel) {
+    const opts = _plugOptionsForMake(makeVal);
+    const current = plugSel.value;
+    // If current selection is no longer valid for this make, fall back to first option.
+    const validValues = opts.map(o => o.v);
+    const newValue = validValues.includes(current) ? current : opts[0].v;
+    plugSel.innerHTML = opts.map(o =>
+      `<option value="${o.v}"${o.v===newValue?' selected':''}>${o.label}</option>`
+    ).join('');
+  }
 }
 
 function saveChargerInfo(leadId, silent=false) {
@@ -8344,7 +8494,50 @@ function saveUtilityInfo(leadId, silent=false) {
   else toast('Utility info saved','success');
 }
 
-function savePlatformFields(leadId) {
+// ── LOST / NOT WON ──
+// Loss-reason tracking lives on the lead as `lostInfo` rather than a pipeline
+// stage so the existing pipeline flow stays clean. A lost lead keeps its
+// original stage for context (e.g. "lost during Quote Delivered") but is
+// excluded from active-lead filters and shown with a red chip on the header.
+const LOST_REASONS = [
+  'Price / too expensive',
+  'Lost to competitor',
+  'No response / ghosted',
+  'Took too long to respond',
+  'Not a fit / cancelled / other'
+];
+
+function saveLostInfo(leadId, silent=false) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  const isLost = document.getElementById('lost-cb')?.checked || false;
+  const wasAlreadyLost = !!arr[idx].lostInfo?.isLost;
+  arr[idx].lostInfo = {
+    isLost,
+    reason: isLost ? (document.getElementById('lost-reason')?.value || '') : '',
+    notes:  isLost ? (document.getElementById('lost-notes')?.value  || '') : '',
+    // Preserve original lostAt timestamp on subsequent edits, set fresh if newly lost
+    lostAt: isLost ? (wasAlreadyLost ? (arr[idx].lostInfo?.lostAt || new Date().toISOString()) : new Date().toISOString()) : ''
+  };
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  // Re-render header chips so the "Lost" pill appears/disappears immediately.
+  if (S.jobDetailId === leadId) {
+    const chipsEl = document.getElementById('jd-stage-chips');
+    if (chipsEl && typeof stageChip === 'function') {
+      const lostChip = isLost ? `<span class="chip chip-lost" style="margin-left:6px">Lost${arr[idx].lostInfo.reason?' · '+escHtml(arr[idx].lostInfo.reason):''}</span>` : '';
+      chipsEl.innerHTML = stageChip(arr[idx].stage) + lostChip;
+    }
+    // Toggle visibility of the reason/notes fields.
+    const detailWrap = document.getElementById('lost-detail-wrap');
+    if (detailWrap) detailWrap.style.display = isLost ? 'block' : 'none';
+  }
+  if (silent) _showAutoSaved('lost-save-btn');
+  else toast(isLost?'Marked as lost':'Lost flag cleared','success');
+}
+
+function savePlatformFields(leadId, silent=false) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
@@ -8359,7 +8552,8 @@ function savePlatformFields(leadId) {
   }
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Platform info saved','success');
+  if (silent) _showAutoSaved('plat-save-btn');
+  else toast('Platform info saved','success');
 }
 
 // ── RENDER JOB DETAIL ──
@@ -8397,7 +8591,7 @@ function renderJobDetail(id) {
       <div class="jd-id">${id}</div>
       <div class="jd-name">${custName}</div>
       <div class="jd-chips">
-        ${typeChip(lead.jobType)}${sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}</span>
+        ${typeChip(lead.jobType)}${sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
         ${lead.inspectionRequired?`<span class="chip chip-flag">⚠ In-person Inspection</span>`:''}
       </div>
       <div class="stg-row">
@@ -8459,8 +8653,17 @@ function renderJobDetail(id) {
     <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
   </div>`;
 
+  // Lost / Not Won state — read off lead.lostInfo (newer leads) or default to empty.
+  const lostInfo = lead.lostInfo || {};
+  const lostReasonOpts = LOST_REASONS.map(r =>
+    `<option value="${escHtml(r)}"${lostInfo.reason===r?' selected':''}>${escHtml(r)}</option>`
+  ).join('');
+
   const jobSec = `<div class="jd-sec">
-    <div class="jd-sh"><div class="jd-st">Job Details</div></div>
+    <div class="jd-sh">
+      <div class="jd-st">Job Details</div>
+      <button id="lost-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px;visibility:hidden">Saved ✓</button>
+    </div>
     <div class="jd-sb">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Job Type</div><div class="jd-fv">${typeChip(lead.jobType)}</div></div>
@@ -8471,6 +8674,32 @@ function renderJobDetail(id) {
       </div>
       ${lead.description?`<div class="jd-f" style="margin-top:8px"><div class="jd-fl">Description</div><div class="jd-fv" style="font-size:12.5px;white-space:pre-wrap;color:var(--text-secondary)">${lead.description}</div></div>`:''}
       <div style="margin-top:8px"><div class="jd-fl" style="margin-bottom:4px">Quote</div>${quoteLinkHtml}</div>
+
+      <!-- Lost / Not Won — auto-saves like other sections -->
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)"
+           onchange="autoSaveLostNow('${id}')" oninput="autoSaveLost('${id}')">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;font-weight:500;color:var(--red)">
+          <input type="checkbox" id="lost-cb" ${lostInfo.isLost?'checked':''} style="accent-color:var(--red)"
+                 onchange="document.getElementById('lost-detail-wrap').style.display=this.checked?'block':'none'">
+          Mark as Lost / Not Won
+        </label>
+        <div id="lost-detail-wrap" style="margin-top:10px;display:${lostInfo.isLost?'block':'none'}">
+          <div class="jd-fg">
+            <div class="jd-f">
+              <div class="jd-fl">Reason</div>
+              <select class="jd-fsel" id="lost-reason">
+                <option value=""${!lostInfo.reason?' selected':''}>— Select a reason —</option>
+                ${lostReasonOpts}
+              </select>
+            </div>
+            ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Lost</div><div class="jd-fv" style="font-size:12px">${lostInfo.lostAt.slice(0,10)}</div></div>`:''}
+          </div>
+          <div class="jd-f" style="margin-top:8px">
+            <div class="jd-fl">Notes (optional)</div>
+            <textarea class="jd-fi" id="lost-notes" placeholder="Quick context — competitor name, price gap, etc." rows="2" style="width:100%;resize:vertical;font-family:inherit;font-size:12.5px">${escHtml(lostInfo.notes||'')}</textarea>
+          </div>
+        </div>
+      </div>
     </div>
   </div>`;
 
@@ -8604,7 +8833,7 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Electrical Snapshot</div>
       <button id="snap-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveJobSnapshot('${id}')">Save</button>
     </div>
-    <div class="jd-sb" onchange="autoSaveSnapshot('${id}')" oninput="autoSaveSnapshot('${id}')">
+    <div class="jd-sb" onchange="autoSaveSnapshotNow('${id}')" oninput="autoSaveSnapshot('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Service Size</div><select class="jd-fi" id="snap-panels">
           ${['400A','300A','200A','150A','100A','Other'].map(o=>`<option value="${o}"${(snap.serviceSize||snap.numPanels||'200A')==o?' selected':''}>${o}</option>`).join('')}
@@ -8663,7 +8892,7 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Charger Info</div>
       <button id="char-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveChargerInfo('${id}')">Save</button>
     </div>
-    <div class="jd-sb" onchange="autoSaveCharger('${id}')" oninput="autoSaveCharger('${id}')">
+    <div class="jd-sb" onchange="autoSaveChargerNow('${id}')" oninput="autoSaveCharger('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Make</div>
           <select class="jd-fsel" id="ch-make" onchange="onChargerMakeChange(this.value)">
@@ -8680,10 +8909,12 @@ function renderJobDetail(id) {
       </div>
       <div class="jd-f" style="margin-top:10px"><div class="jd-fl">Plug Type</div>
         <select class="jd-fsel" id="ch-plug">
-          <option value="J1772"${(charger.plugType||'J1772')==='J1772'?' selected':''}>J1772 (most pre-2025 EVs)</option>
-          <option value="NACS"${charger.plugType==='NACS'?' selected':''}>NACS (Tesla & most 2025+ EVs)</option>
-          <option value="Both"${charger.plugType==='Both'?' selected':''}>Both J1772 and NACS</option>
-          <option value="Other"${charger.plugType==='Other'?' selected':''}>Other</option>
+          ${(()=>{
+            const opts = _plugOptionsForMake(charger.make);
+            const validValues = opts.map(o => o.v);
+            const cur = validValues.includes(charger.plugType) ? charger.plugType : opts[0].v;
+            return opts.map(o => `<option value="${o.v}"${o.v===cur?' selected':''}>${o.label}</option>`).join('');
+          })()}
         </select>
       </div>
       <div style="margin-top:10px">
@@ -8700,7 +8931,7 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Utility Info</div>
       <button id="util-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="saveUtilityInfo('${id}')">Save</button>
     </div>
-    <div class="jd-sb" onchange="autoSaveUtility('${id}')" oninput="autoSaveUtility('${id}')">
+    <div class="jd-sb" onchange="autoSaveUtilityNow('${id}')" oninput="autoSaveUtility('${id}')">
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Utility Company</div><input class="jd-fi" id="ut-company" placeholder="e.g. Dominion Energy" value="${utility.utilityCompany||''}"></div>
         <div class="jd-f"><div class="jd-fl">Approval Status</div>
@@ -8729,9 +8960,9 @@ function renderJobDetail(id) {
   if (isQmerit) {
     platformSec = `<div class="jd-sec">
       <div class="jd-sh"><div class="jd-st">Qmerit Platform</div>
-        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="savePlatformFields('${id}')">Save</button>
+        <button id="plat-save-btn" class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="savePlatformFields('${id}')">Save</button>
       </div>
-      <div class="jd-sb">
+      <div class="jd-sb" onchange="autoSavePlatformNow('${id}')" oninput="autoSavePlatform('${id}')">
         <div class="jd-fg" style="margin-bottom:10px">
           <div class="jd-f"><div class="jd-fl">Program Sponsor</div><div class="jd-fv">${qm.programSponsor||'—'}</div></div>
           <div class="jd-f"><div class="jd-fl">Tier</div><div class="jd-fv">${qm.tier||'—'}</div></div>
@@ -10442,6 +10673,25 @@ function updateDashboardWidget() {
                        .reduce((s,q)=>s+(q.quoteTotal||0),0);
     const mrEl = document.getElementById('stat-month-rev');
     if (mrEl) mrEl.textContent = fmtDollar(mRev);
+
+    // Lost This Month — count + estimated lost revenue (most recent quote per lead)
+    const lostThisMonth = leads.filter(l => l.lostInfo?.isLost && l.lostInfo.lostAt && new Date(l.lostInfo.lostAt) >= ms);
+    const lostCountEl = document.getElementById('stat-lost-month');
+    const lostSubEl   = document.getElementById('stat-lost-month-sub');
+    if (lostCountEl) lostCountEl.textContent = lostThisMonth.length;
+    if (lostSubEl) {
+      if (lostThisMonth.length === 0) {
+        lostSubEl.textContent = 'No losses';
+        lostSubEl.className = 'ss';
+      } else {
+        const lostValue = lostThisMonth.reduce((s, l) => {
+          const q = quotes.filter(x => x.leadId === l.id).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+          return s + (q?.quoteTotal || 0);
+        }, 0);
+        lostSubEl.textContent = lostValue ? `${fmtDollar(lostValue)} lost` : 'View report';
+        lostSubEl.className = 'ss d';
+      }
+    }
   }
 
   // ── Active Pipeline widget ──
@@ -11334,7 +11584,7 @@ function renderTechPage(leadId) {
 // ── My Jobs Today landing (Tech Mode landing page when no specific job is open) ──
 function _renderTechModeLanding(pg) {
   const me = S.user || {};
-  const leads = getLeads().filter(l => l.stage !== 'archived' && l.stage !== 'closed-won' && l.stage !== 'closed-lost');
+  const leads = getLeads().filter(l => l.stage !== 'archived' && l.stage !== 'closed-won' && l.stage !== 'closed-lost' && !l.lostInfo?.isLost);
   const custs = getCustomers();
   const today = new Date(); today.setHours(0,0,0,0);
   const todayStr = today.toISOString().slice(0,10);
@@ -12065,8 +12315,16 @@ function renderCurrentReport() {
     case 'royalty':      body.innerHTML = rptQmeritRoyalty(period);break;
     case 'margins':      body.innerHTML = rptMargins(period);      break;
     case 'jurisdiction': body.innerHTML = rptJurisdiction();       break;
+    case 'lost':         body.innerHTML = rptLostLeads(period);     break;
     default:             body.innerHTML = emptyRpt('Select a report.');
   }
+}
+
+// Lost-leads report state. Filter is a reason string ('' = all reasons).
+let _lostFilter = '';
+function setLostFilter(val) {
+  _lostFilter = val || '';
+  renderCurrentReport();
 }
 
 function emptyRpt(msg) {
@@ -12314,6 +12572,121 @@ function rptJurisdiction() {
   </div>${sections}`;
 }
 
+// ── 8. LOST LEADS ──
+// Pulls every lead with lostInfo.isLost=true, optionally narrowed by the
+// period selector (matched against lostAt) and the in-page reason filter.
+// Surfaces a per-reason breakdown so loss patterns are obvious at a glance.
+function rptLostLeads(period) {
+  const all = getLeads().filter(l => l.lostInfo?.isLost);
+  // Period filter: 'all' returns everything regardless of when it was lost
+  const inWindow = period === 'all'
+    ? all
+    : all.filter(l => l.lostInfo?.lostAt && inPeriod(l.lostInfo.lostAt, period));
+  // Apply reason filter on top of the period filter
+  const filtered = _lostFilter
+    ? inWindow.filter(l => l.lostInfo.reason === _lostFilter)
+    : inWindow;
+
+  const custs  = getCustomers();
+  const quotes = getQuotes();
+
+  if (!all.length) return emptyRpt('No lost leads recorded yet. When you mark a lead as Lost in its Job Details, it shows up here.');
+
+  // Reason breakdown — always computed against the period-filtered set (not the
+  // reason-filter), so the user can see the full distribution while drilling in.
+  const byReason = {};
+  LOST_REASONS.forEach(r => byReason[r] = { count: 0, value: 0 });
+  byReason['(no reason)'] = { count: 0, value: 0 };
+  inWindow.forEach(l => {
+    const r = l.lostInfo.reason || '(no reason)';
+    if (!byReason[r]) byReason[r] = { count: 0, value: 0 };
+    byReason[r].count++;
+    // Pick the most recent quote for this lead — represents the dollar value lost
+    const q = quotes.filter(x => x.leadId === l.id)
+                    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+    byReason[r].value += q?.quoteTotal || 0;
+  });
+  const totalCount = inWindow.length;
+  const totalValue = Object.values(byReason).reduce((s,v) => s + v.value, 0);
+
+  // Filter dropdown options
+  const filterOpts = `<option value=""${!_lostFilter?' selected':''}>All reasons</option>` +
+    LOST_REASONS.map(r => `<option value="${escHtml(r)}"${_lostFilter===r?' selected':''}>${escHtml(r)} (${byReason[r]?.count||0})</option>`).join('') +
+    (byReason['(no reason)'].count > 0 ? `<option value="(no reason)"${_lostFilter==='(no reason)'?' selected':''}>(no reason) (${byReason['(no reason)'].count})</option>` : '');
+
+  // Breakdown rows with horizontal bars
+  const reasonRows = Object.entries(byReason)
+    .filter(([,v]) => v.count > 0)
+    .sort((a,b) => b[1].count - a[1].count)
+    .map(([reason, v]) => {
+      const pct = totalCount ? Math.round((v.count/totalCount)*100) : 0;
+      return `<tr style="cursor:pointer" onclick="setLostFilter('${reason==='(no reason)'?'(no reason)':escHtml(reason)}')">
+        <td style="padding:8px 14px;font-size:12.5px">${escHtml(reason)}</td>
+        <td style="padding:8px 14px;font-family:var(--mono);text-align:center;font-weight:600">${v.count}</td>
+        <td style="padding:8px 14px;font-family:var(--mono);text-align:right;color:var(--red)">${fmtDollar(v.value)}</td>
+        <td style="padding:8px 14px;min-width:140px">
+          <div style="background:var(--bg-elevated);border-radius:3px;height:6px;overflow:hidden;margin-bottom:2px"><div style="background:var(--red);height:100%;width:${pct}%"></div></div>
+          <span style="font-size:10px;color:var(--text-muted)">${pct}%</span>
+        </td>
+      </tr>`;
+    }).join('');
+
+  // Detail rows — sorted newest-first by lostAt
+  const detailRows = filtered.sort((a,b) => new Date(b.lostInfo.lostAt||0) - new Date(a.lostInfo.lostAt||0)).map(l => {
+    const c = custs.find(x => x.id === l.customerId);
+    const name = c ? custFullName(c) : (l.customerName || '—');
+    const q = quotes.filter(x => x.leadId === l.id)
+                    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+    const stageLabel = STAGE_MAP[l.stage]?.label || l.stage || '—';
+    const notes = l.lostInfo.notes || '';
+    const notesShort = notes.length > 60 ? escHtml(notes.slice(0,60)) + '…' : escHtml(notes);
+    return `<tr onclick="navigate('jobs');setTimeout(()=>openJobDetail('${l.id}'),60)" style="cursor:pointer">
+      <td style="padding:8px 14px;font-family:var(--mono);font-size:12px;color:var(--text-muted)">${(l.lostInfo.lostAt||'').slice(0,10)||'—'}</td>
+      <td style="padding:8px 14px;font-family:var(--mono);font-size:12px">${l.id}</td>
+      <td style="padding:8px 14px">${escHtml(name)}</td>
+      <td style="padding:8px 14px">${typeChip(l.jobType)}</td>
+      <td style="padding:8px 14px">${sourceChip(l.source)}</td>
+      <td style="padding:8px 14px;font-size:12px">${escHtml(stageLabel)}</td>
+      <td style="padding:8px 14px"><span class="chip chip-lost" style="font-size:11px">${escHtml(l.lostInfo.reason||'—')}</span></td>
+      <td style="padding:8px 14px;font-size:12px;color:var(--text-secondary);max-width:240px" title="${escHtml(notes)}">${notesShort||'—'}</td>
+      <td style="padding:8px 14px;font-family:var(--mono);text-align:right;color:var(--red)">${q?fmtDollar(q.quoteTotal):'—'}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Lost Leads</div>
+      <div style="font-size:26px;font-weight:700;font-family:var(--mono);color:var(--red);letter-spacing:-1px">${totalCount}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Estimated Lost Revenue</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:var(--red);letter-spacing:-0.5px">${fmtDollar(totalValue)}</div>
+      <div style="font-size:10px;color:var(--text-muted)">based on most recent quote per lead</div>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <span style="font-size:12px;color:var(--text-muted)">Filter:</span>
+      <select onchange="setLostFilter(this.value)" style="padding:6px 10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;font-size:12.5px;min-width:200px">${filterOpts}</select>
+    </div>
+  </div>
+  <div class="rpt-split">
+    <div class="rpt-split-l">
+      ${rptSecHdr('Breakdown by Reason')}
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>${TH('Reason')}${THC('#')}${THR('Lost $')}${TH('Share')}</tr></thead>
+        <tbody>${reasonRows||'<tr><td colspan="4" style="padding:14px;color:var(--text-muted);font-size:12.5px">No data for this period.</td></tr>'}</tbody>
+      </table>
+      <div style="padding:8px 14px;font-size:11px;color:var(--text-muted);font-style:italic">Click a row to filter detail to that reason.</div>
+    </div>
+    <div>
+      ${rptSecHdr(`Lost Leads ${_lostFilter?`— ${escHtml(_lostFilter)} (${filtered.length})`:`(${filtered.length})`}`)}
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr>${TH('Date Lost')}${TH('Job ID')}${TH('Customer')}${TH('Type')}${TH('Source')}${TH('Stage When Lost')}${TH('Reason')}${TH('Notes')}${THR('Quote $')}</tr></thead>
+        <tbody>${detailRows||'<tr><td colspan="9" style="padding:14px;color:var(--text-muted);font-size:12.5px">No leads match this filter.</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
 // ── CSV EXPORT ──
 function exportReportCSV() {
   const period=document.getElementById('rpt-period')?.value||'all';
@@ -12360,6 +12733,19 @@ function exportReportCSV() {
       leads.forEach(l=>{const c=custs.find(x=>x.id===l.customerId);rows.push([l.id,c?custFullName(c):'',l.jobType||'',l.jurisdiction||'',l.stage||'',l.inspectionRequired?'Yes':'No',l.milestones?.finalInspPassed?'Yes':'No']);});
       filename='jobs-by-jurisdiction';break;
     }
+    case 'lost':{
+      const all=getLeads().filter(l=>l.lostInfo?.isLost);
+      const inWindow=period==='all'?all:all.filter(l=>l.lostInfo?.lostAt&&inPeriod(l.lostInfo.lostAt,period));
+      const filtered=_lostFilter?inWindow.filter(l=>l.lostInfo.reason===_lostFilter):inWindow;
+      const custs=getCustomers(),quotes=getQuotes();
+      rows=[['Date Lost','Job ID','Customer','Type','Source','Stage When Lost','Reason','Notes','Quote $']];
+      filtered.sort((a,b)=>new Date(b.lostInfo.lostAt||0)-new Date(a.lostInfo.lostAt||0)).forEach(l=>{
+        const c=custs.find(x=>x.id===l.customerId);
+        const q=quotes.filter(x=>x.leadId===l.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0];
+        rows.push([(l.lostInfo.lostAt||'').slice(0,10),l.id,c?custFullName(c):(l.customerName||''),l.jobType||'',l.source||'',STAGE_MAP[l.stage]?.label||l.stage||'',l.lostInfo.reason||'',l.lostInfo.notes||'',q?.quoteTotal||0]);
+      });
+      filename='lost-leads';break;
+    }
     default: toast('Nothing to export','warning'); return;
   }
   const csv=rows.map(r=>r.map(v=>JSON.stringify(String(v))).join(',')).join('\n');
@@ -12375,7 +12761,7 @@ function exportReportCSV() {
 function exportReportPDF() {
   const body=document.getElementById('rpt-body');
   if (!body) return;
-  const rptNames={pipeline:'Open Pipeline',thismonth:'Jobs This Month',overdue:'Overdue Tasks',revenue:'Revenue by Service Type',royalty:'Qmerit Royalty',margins:'Margin Summary',jurisdiction:'Jobs by Jurisdiction'};
+  const rptNames={pipeline:'Open Pipeline',thismonth:'Jobs This Month',overdue:'Overdue Tasks',revenue:'Revenue by Service Type',royalty:'Qmerit Royalty',margins:'Margin Summary',jurisdiction:'Jobs by Jurisdiction',lost:'Lost Leads'};
   const period=document.getElementById('rpt-period')?.value||'all';
   const pNames={month:'This Month',lastmonth:'Last Month',quarter:'This Quarter',lastquarter:'Last Quarter',year:'This Year',all:'All Time'};
   const css=`body{font-family:Arial,sans-serif;color:#1a1a2e;background:#fff;margin:0;padding:20px;font-size:12px}
