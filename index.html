@@ -2464,12 +2464,56 @@ function techModeReorderCommon(materialId, delta) {
 }
 
 function renderUsers() {
-  return getUsers().map(u=>`
-    <div class="ucrow">
+  const isAdmin = S.user?.role === 'admin';
+  return getUsers().map(u=>{
+    // notifyEmail (if set) is the address @-mention notifications go to.
+    // Falls back to MSAL username when not overridden.
+    const effectiveEmail = u.notifyEmail || u.username;
+    const isOverride = !!u.notifyEmail && u.notifyEmail !== u.username;
+    const metaHtml = isOverride
+      ? `<div class="ucmeta">${escHtml(effectiveEmail)} <span style="color:var(--text-muted);font-size:11px">(notify) · sign-in: ${escHtml(u.username||'—')}</span></div>`
+      : `<div class="ucmeta">${escHtml(u.username||'—')}</div>`;
+    const editBtn = isAdmin ? `<button onclick="editUserNotifyEmail('${u.id}')" title="Edit notification email" style="background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px 8px;font-size:13px">✎</button>` : '';
+    return `<div class="ucrow">
       <div class="ucav">${u.initials}</div>
-      <div class="ucinfo"><div class="ucname">${u.name}</div><div class="ucmeta">${u.username}</div></div>
+      <div class="ucinfo"><div class="ucname">${escHtml(u.name||'—')}</div>${metaHtml}</div>
+      ${editBtn}
       <span class="rbadge r${u.role[0]}">${u.role.charAt(0).toUpperCase()+u.role.slice(1)}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+// Admin-only: override the email address that @-mention notifications go to.
+// Useful when a user's MSAL UPN doesn't match the address they actually read
+// mail at (e.g. UPN sherri@... but mail goes to sherri.allen@...).
+function editUserNotifyEmail(userId) {
+  if (S.user?.role !== 'admin') { toast('Admin only', 'error'); return; }
+  const arr = getUsers();
+  const idx = arr.findIndex(u => u.id === userId);
+  if (idx < 0) { toast('User not found', 'error'); return; }
+  const u = arr[idx];
+  const current = u.notifyEmail || u.username || '';
+  const next = prompt(
+    `Notification email for ${u.name}\n\nThis is the address @-mention emails go to. Leave blank to use the sign-in address (${u.username||'none'}).`,
+    current
+  );
+  if (next === null) return; // user cancelled
+  const trimmed = next.trim().toLowerCase();
+  if (trimmed === '') {
+    delete arr[idx].notifyEmail;
+    saveUsers(arr);
+    toast('Notification email cleared — will use sign-in address', 'success');
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    toast('That doesn\'t look like a valid email address', 'error');
+    return;
+  } else {
+    arr[idx].notifyEmail = trimmed;
+    saveUsers(arr);
+    toast(`Notifications for ${u.name} will go to ${trimmed}`, 'success');
+  }
+  // Re-render the list inline so the change is visible immediately.
+  const list = document.getElementById('ulist');
+  if (list) list.innerHTML = renderUsers();
 }
 
 // User management has been moved to Microsoft 365.
@@ -8099,8 +8143,11 @@ async function processNoteMentions(lead, note, mentions) {
     } catch (e) { console.warn('[GK] Mention task creation failed:', e); }
 
     // ── 2. Email ──
-    const firstName = (u.name||'').split(' ')[0] || u.username || 'user';
-    if (!u.username) {
+    // notifyEmail (admin-set in Users & Access) wins over the MSAL username,
+    // letting admin route notifications to a different address than the UPN.
+    const recipientEmail = u.notifyEmail || u.username;
+    const firstName = (u.name||'').split(' ')[0] || recipientEmail || 'user';
+    if (!recipientEmail) {
       console.warn('[GK] Mention email skipped — no email on user record:', u);
       skippedNoEmail.push(firstName);
       continue;
@@ -8128,15 +8175,15 @@ async function processNoteMentions(lead, note, mentions) {
           message: {
             subject,
             body: { contentType: 'HTML', content: html },
-            toRecipients: [{ emailAddress: { address: u.username } }]
+            toRecipients: [{ emailAddress: { address: recipientEmail } }]
           },
           saveToSentItems: true
         })
       });
-      console.log('[GK] Mention email sent to', u.username);
+      console.log('[GK] Mention email sent to', recipientEmail);
       sent.push(firstName);
     } catch (e) {
-      console.warn('[GK] Mention email failed for ' + u.username + ':', e);
+      console.warn('[GK] Mention email failed for ' + recipientEmail + ':', e);
       // Classify common failure modes for a clearer toast.
       const msg = String(e?.message || e);
       let reason = 'error';
@@ -13056,8 +13103,15 @@ async function _onMSALSuccess(account) {
     const users = getUsers();
     const idx = users.findIndex(u => u.id === stableId || u.username === email);
     if (idx >= 0) {
-      // Preserve existing mobile; user changes persist across sign-ins.
-      users[idx] = { ...users[idx], ...user, mobile: users[idx].mobile || '' };
+      // Preserve existing mobile + admin-set notifyEmail override across sign-ins.
+      // notifyEmail lets an admin route @-mention notifications to a different
+      // address than the MSAL UPN — must NOT be clobbered when the user signs in.
+      users[idx] = {
+        ...users[idx],
+        ...user,
+        mobile:      users[idx].mobile || '',
+        notifyEmail: users[idx].notifyEmail || undefined
+      };
     } else {
       // First-time sign-in — bootstrap Jon's known cell from handoff; others can self-set.
       const bootstrapMobile = (stableId === 'u-jon') ? '+18043105368' : '';
