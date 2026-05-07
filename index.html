@@ -3695,6 +3695,7 @@ const _DEFAULT_MATERIALS = [
   // ── Hardware ──
   {id:'m-018', name:'4x4 Treated Post w/ Sonotube', category:'Hardware', unit:'each',    unitCost:55, markup:45},
   {id:'m-019', name:'Misc Fittings & Hardware',     category:'Hardware', unit:'per job', unitCost:25, markup:40},
+  {id:'m-043', name:'8x8 Plastic Access Cover',     category:'Hardware', unit:'each',    unitCost:12, markup:40, lastUpdated:'2026-05-07', source:'Home Depot', notes:'Pop-in plumber-style access cover. $12 from Home Depot, $20 from Lowes if HD is out. Used on every crawl-space EV install for the access cut below the panel (drill through the bottom plate), and on finished-wall fishing jobs.'},
 ];
 
 // One-time migration: refreshes wire prices and adds metadata fields on
@@ -3748,10 +3749,36 @@ function migrateMaterialsV2() {
   localStorage.setItem(FLAG, '1');
 }
 
+// V3 migration: adds the 8x8 plastic access cover SKU (m-043) on existing
+// installs that already ran v2. Every crawl-space EV install needs one of
+// these for the under-panel access cut, so it deserves to be a first-class
+// catalog SKU rather than a free-form line on every quote.
+function migrateMaterialsV3() {
+  const FLAG = 'gk_materials_migration_v3';
+  if (localStorage.getItem(FLAG)) return;
+  const mats = getMaterials();
+  if (!mats.length) {
+    // initMaterials will seed from _DEFAULT_MATERIALS — nothing to migrate.
+    localStorage.setItem(FLAG, '1');
+    return;
+  }
+  const NEW_IDS = ['m-043'];
+  let dirty = false;
+  NEW_IDS.forEach(id => {
+    if (!mats.find(m => m.id === id)) {
+      const seed = _DEFAULT_MATERIALS.find(m => m.id === id);
+      if (seed) { mats.push({ ...seed }); dirty = true; }
+    }
+  });
+  if (dirty) saveMaterials(mats);
+  localStorage.setItem(FLAG, '1');
+}
+
 function initMaterials(){
   // Run the v2 migration first so existing installs get refreshed prices
   // and new SKUs without losing manual edits.
   migrateMaterialsV2();
+  migrateMaterialsV3();
   // Fresh installs: seed the full catalog.
   if(getMaterials().length) return;
   saveMaterials(_DEFAULT_MATERIALS.map(m => ({ ...m })));
