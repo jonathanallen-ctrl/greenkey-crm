@@ -325,10 +325,13 @@
   /* Kanban board — horizontal scroll, fills viewport height */
   .kanban{display:flex;gap:10px;overflow-x:auto;overflow-y:hidden;
     height:calc(100vh - var(--hh) - 62px);
-    align-items:flex-start;padding:16px 0 16px 0}
-  .kanban::-webkit-scrollbar{height:6px}
-  .kanban::-webkit-scrollbar-track{background:transparent}
-  .kanban::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+    align-items:flex-start;padding:16px 0 22px 0;
+    scrollbar-color:var(--text-muted) var(--bg-elevated);
+    scrollbar-width:auto}
+  .kanban::-webkit-scrollbar{height:14px}
+  .kanban::-webkit-scrollbar-track{background:var(--bg-elevated);border-radius:8px;margin:0 4px}
+  .kanban::-webkit-scrollbar-thumb{background:var(--text-muted);border-radius:8px;border:3px solid var(--bg-elevated);transition:background 0.15s}
+  .kanban::-webkit-scrollbar-thumb:hover{background:var(--text-secondary)}
   /* Columns */
   .kcol{width:230px;flex-shrink:0;display:flex;flex-direction:column;max-height:100%}
   .kcol-hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;flex-shrink:0}
@@ -1281,6 +1284,10 @@
                 <option value="name">Sort: Name A–Z</option>
               </select>
             </div>
+            <div id="kanban-scroll-btns" style="display:flex;gap:4px">
+              <button class="ptog" onclick="kanbanScrollBy(-1)" title="Scroll columns left">◀</button>
+              <button class="ptog" onclick="kanbanScrollBy(1)" title="Scroll columns right">▶</button>
+            </div>
             <div class="pipe-tog">
               <button class="ptog active" id="ptog-k" onclick="setPipeMode('kanban')">⊞ Kanban</button>
               <button class="ptog" id="ptog-l" onclick="setPipeMode('list')">☰ List</button>
@@ -1818,7 +1825,45 @@ function kcardDragEnd(e) {
   document.querySelectorAll('.kcol.drag-over').forEach(c=>c.classList.remove('drag-over'));
   _kanbanDragId = null;
 }
+// Convert vertical mouse-wheel into horizontal scroll on the kanban — much
+// faster than reaching for the scrollbar. Respects column-body vertical
+// scroll: if the mouse is over a column with content to scroll vertically,
+// vertical wheels go to the column first, only "spilling over" to horizontal
+// kanban scroll once the column reaches its top/bottom edge.
+function setupKanbanWheelScroll() {
+  const kanban = document.getElementById('pipe-kanban');
+  if (!kanban || kanban._wheelHooked) return;
+  kanban._wheelHooked = true;
+  kanban.addEventListener('wheel', (e) => {
+    if (kanban.scrollWidth <= kanban.clientWidth) return;       // no horizontal overflow
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;        // user is already scrolling horizontally
+    const colBody = e.target.closest('.kcol-body');
+    if (colBody && colBody.scrollHeight > colBody.clientHeight) {
+      // Column has its own vertical content. Don't hijack the wheel until
+      // the column reaches its edge in the wheel direction.
+      const atTop    = colBody.scrollTop <= 0;
+      const atBottom = colBody.scrollTop + colBody.clientHeight >= colBody.scrollHeight - 1;
+      if (e.deltaY < 0 && !atTop)    return;
+      if (e.deltaY > 0 && !atBottom) return;
+    }
+    e.preventDefault();
+    kanban.scrollLeft += e.deltaY;
+  }, { passive: false });
+}
+
+// Click-style horizontal scroll for the ◀ ▶ buttons in the filter row.
+// Direction = -1 (left) or +1 (right). Scrolls by one column width so each
+// click visibly advances by one stage.
+function kanbanScrollBy(direction) {
+  const kanban = document.getElementById('pipe-kanban');
+  if (!kanban) return;
+  const col = kanban.querySelector('.kcol');
+  const step = (col?.offsetWidth || 230) + 10;  // column width + gap
+  kanban.scrollBy({ left: direction * step, behavior: 'smooth' });
+}
+
 function setupKanbanDnd() {
+  setupKanbanWheelScroll();
   document.querySelectorAll('#pipe-kanban .kcol').forEach(col => {
     const stageId = col.dataset.stageId;
     col.addEventListener('dragover', e => {
