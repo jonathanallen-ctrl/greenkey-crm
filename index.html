@@ -11947,10 +11947,26 @@ function driveTimeHrs(lat1, lon1, lat2, lon2) {
 async function geocodeOne(address, cacheKey) {
   const cache = getGeoCache();
   if (cache[cacheKey]) return cache[cacheKey];
+  if (!address || !address.trim()) return null;
   try {
     await new Promise(r => setTimeout(r, 1100)); // Nominatim 1 req/sec limit
     const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-    const res  = await fetch(url, { headers: { 'Accept-Language': 'en-US,en', 'User-Agent': 'GreenKeyCRM/1.0' } });
+    // Hard 8-second timeout per request so a slow / unresponsive geocoder
+    // can't hang the whole Scheduler. Without this, fetch() has no default
+    // timeout and a stuck network can freeze "Building…" indefinitely.
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 8000);
+    let res;
+    try {
+      res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { 'Accept-Language': 'en-US,en', 'User-Agent': 'GreenKeyCRM/1.0' }
+      });
+    } finally { clearTimeout(tid); }
+    if (!res.ok) {
+      console.warn('[GK] Geocode HTTP', res.status, 'for', address);
+      return null;
+    }
     const data = await res.json();
     if (data && data[0]) {
       const coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
@@ -11958,7 +11974,11 @@ async function geocodeOne(address, cacheKey) {
       saveGeoCache(cache);
       return coords;
     }
-  } catch(e) { /* fall through */ }
+    console.warn('[GK] Geocode empty result for', address);
+  } catch(e) {
+    if (e.name === 'AbortError') console.warn('[GK] Geocode timeout (>8s) for', address);
+    else console.warn('[GK] Geocode error for', address, ':', e.message);
+  }
   return null;
 }
 
@@ -12976,7 +12996,7 @@ function renderSchedulerPage() {
         const name = cust ? custFullName(cust) : (l.customerName||'Unknown');
         const addr = [l.siteStreet, l.siteCity, l.siteState||'VA'].filter(Boolean).join(', ');
         const dur  = _sched.durations[l.id] || 2;
-        const isScheduled = _sched.scheduled.some(s => s.lead.id === l.id);
+        const isScheduled = _sched.scheduled.some(s => s.lead && s.lead.id === l.id);
         const isSelected = !!_sched.included[l.id];
         const isExcluded = !isSelected;
         const overrideChip = l.scheduleOverride?.reason
@@ -13566,7 +13586,7 @@ async function buildSchedDay(date) {
   const otherScheduledIds = new Set();
   Object.entries(_sched.dayPlans).forEach(([d, p]) => {
     if (d === date) return;
-    p.scheduled.forEach(s => otherScheduledIds.add(s.lead.id));
+    p.scheduled.forEach(s => { if (s.lead) otherScheduledIds.add(s.lead.id); });
   });
   const pool = getSelectedSchedJobs(plan.techId || null).filter(l => !otherScheduledIds.has(l.id));
   if (!pool.length) {
@@ -13723,11 +13743,32 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
       </div>`;
     } else {
       const slots = plan.scheduled.map(s => {
+        const driveMin = Math.round((s.driveHrs||0) * 60);
+        const driveStr = driveMin >= 60 ? `${Math.floor(driveMin/60)}h ${driveMin%60}m` : `${driveMin}m`;
+        // Special slot types in multi-day day cards
+        if (s.stopType === 'distributor') {
+          return `${s.driveHrs > 0 ? `<div class="sched-drive-row">↳ Drive ${driveStr}</div>` : ''}
+            <div class="sched-slot" style="background:rgba(243,156,18,0.06);border-left:3px solid #f39c12">
+              <div class="sched-time">${fmtTime(s.startTime)}</div>
+              <div class="sched-slot-body">
+                <div style="font-weight:500;font-size:13px;color:#f39c12">📦 Distributor stop</div>
+                <div style="font-size:11.5px;color:var(--text-secondary)">${fmtHrs(s.jobHrs)}</div>
+              </div>
+            </div>`;
+        }
+        if (s.stopType === 'break') {
+          return `<div class="sched-slot" style="background:rgba(149,165,166,0.08);border-left:3px solid #95a5a6">
+            <div class="sched-time">${fmtTime(s.startTime)}</div>
+            <div class="sched-slot-body">
+              <div style="font-weight:500;font-size:13px;color:#7f8c8d">🍔 Gas / restroom break</div>
+              <div style="font-size:11.5px;color:var(--text-secondary)">${fmtHrs(s.jobHrs)}</div>
+            </div>
+          </div>`;
+        }
+        if (!s.lead) return '';  // safety: shouldn't happen but don't crash
         const cust = custs.find(c => c.id === s.lead.customerId);
         const name = cust ? custFullName(cust) : (s.lead.customerName||'Unknown');
         const addr = [s.lead.siteStreet, s.lead.siteCity].filter(Boolean).join(', ');
-        const driveMin = Math.round((s.driveHrs||0) * 60);
-        const driveStr = driveMin >= 60 ? `${Math.floor(driveMin/60)}h ${driveMin%60}m` : `${driveMin}m`;
         // Confirmation status — pulled from lead.scheduling first (durable),
         // then overlaid with live worker status if hydrated.
         const localConf = s.lead.scheduling?.confirmations?.[date];
@@ -13763,6 +13804,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
           // have responses, and which states. Drives the Lock button gating.
           let nConf = 0, nResched = 0, nPend = 0, nNoSent = 0;
           plan.scheduled.forEach(s => {
+            if (!s.lead) return;  // skip break / distributor stops in confirmation rollup
             const lc = s.lead.scheduling?.confirmations?.[date];
             const live = lc?.token ? (_schedConfirmStatuses[lc.token]?.status || lc.status) : null;
             if (live === 'confirmed')                  nConf++;
@@ -14106,6 +14148,7 @@ function lockSchedDay(date) {
   let nConf = 0, nResched = 0, nPend = 0, nNoSent = 0;
   const reschedNotes = [];
   plan.scheduled.forEach(s => {
+    if (!s.lead) return;  // skip break / distributor stops
     const lc = s.lead.scheduling?.confirmations?.[date];
     const live = lc?.token ? (_schedConfirmStatuses[lc.token]?.status || lc.status) : null;
     if (live === 'confirmed')                  nConf++;
