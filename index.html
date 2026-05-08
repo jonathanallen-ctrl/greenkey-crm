@@ -14482,23 +14482,63 @@ async function _syncFromSP() {
     criticalBanner(`SharePoint list "${SP_LIST_NAME}" is missing. Data sync is DISABLED until it is created. See SharePoint Site contents.`);
     return;
   }
+  // Buffer SP data first so we can safety-check before overwriting localStorage.
+  // Without this, a corrupted SP list would silently destroy good local data —
+  // which is exactly what happened during the 2026-05-08 incident.
+  const fetched = {};
   let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$top=200`;
-  let count = 0;
   try {
     while (nextLink) {
       const res = await _graphFetch(nextLink);
       for (const item of (res.value || [])) {
         const key = item.fields?.Title;
         const val = item.fields?.DataValue;
-        if (key && val) { localStorage.setItem(key, val); count++; }
+        if (key && val) fetched[key] = val;
       }
       nextLink = res['@odata.nextLink'] || null;
     }
-    console.log('[GK] Synced from SharePoint:', count, 'keys');
   } catch(e) {
     criticalBanner('Failed to read from SharePoint: ' + (e.message || e) + '. Your local data is unchanged — do not edit anything until this is resolved.');
     throw e;
   }
+
+  // SAFETY GUARD (mirror of the _syncToSP guard, applied to the pull direction):
+  // if SharePoint has SIGNIFICANTLY less data than what's already in localStorage,
+  // refuse to overwrite. This protects against the case where the SP list itself
+  // got corrupted — without this, every device that signs in inherits the bad
+  // state and the corruption propagates everywhere.
+  const criticalKeys = ['gk_leads', 'gk_customers', 'gk_quotes'];
+  for (const key of criticalKeys) {
+    const spVal = fetched[key];
+    const localRaw = localStorage.getItem(key);
+    if (!spVal || !localRaw) continue;  // nothing to compare on either side
+    let spArr, localArr;
+    try { spArr = JSON.parse(spVal); } catch { continue; }
+    try { localArr = JSON.parse(localRaw); } catch { continue; }
+    if (!Array.isArray(spArr) || !Array.isArray(localArr)) continue;
+    const spN = spArr.length, localN = localArr.length;
+    // Only guard when local already has a meaningful amount of data (>=10 items).
+    // Block if SP has less than 95% of what local has — this would be a
+    // destructive overwrite, almost certainly indicating SP-side corruption.
+    if (localN >= 10 && spN < localN * 0.95) {
+      criticalBanner(
+        `Pull ABORTED to protect your data: SharePoint's ${key} has ${spN} items but this tab already has ${localN} (loss > 5%). ` +
+        `Sync skipped — your local data is unchanged. ` +
+        `This usually means the SharePoint list got corrupted. Do not edit anything until this is resolved. ` +
+        `Recovery: restore from a SharePoint backup file in CEO/CRM software/GreenKeyCRM_Backups/.`
+      );
+      console.error(`[GK] Pull aborted: ${key} SP=${spN} vs local=${localN}`);
+      return;
+    }
+  }
+
+  // Safe to apply.
+  let count = 0;
+  for (const [key, val] of Object.entries(fetched)) {
+    localStorage.setItem(key, val);
+    count++;
+  }
+  console.log('[GK] Synced from SharePoint:', count, 'keys');
 }
 
 // ── SYNC localStorage → SHAREPOINT (debounced 3s) ──
@@ -14534,10 +14574,13 @@ async function _syncToSP() {
     }
 
     // SAFETY GUARD: before pushing, compare local vs SharePoint counts for critical arrays.
-    // If the local copy has dramatically fewer entries than SharePoint, it likely means
-    // this tab started with empty/bad localStorage (e.g. fresh session, interrupted sync)
-    // and pushing it would WIPE the good data in SharePoint. Abort with a loud banner.
-    const criticalKeys = ['gk_leads', 'gk_customers'];
+    // If the local copy has fewer entries than SharePoint, it likely means this tab started
+    // with stale or partial localStorage (e.g. interrupted sync, broken JS during init,
+    // multi-device race) and pushing it would WIPE good data on the SharePoint list.
+    // Tightened 2026-05-08 from 50% to 95% after a real incident where ~8% data loss
+    // (47 quotes vs 51) slipped through the old threshold and overwrote the live list.
+    // gk_quotes added to the critical-keys list for the same reason.
+    const criticalKeys = ['gk_leads', 'gk_customers', 'gk_quotes'];
     for (const key of criticalKeys) {
       const spVal = existData[key];
       if (!spVal) continue; // nothing in SP yet — first write, safe to push
@@ -14547,9 +14590,11 @@ async function _syncToSP() {
       if (!Array.isArray(spArr) || !Array.isArray(localArr)) continue;
       const spN = spArr.length, localN = localArr.length;
       // Only guard when SP has a meaningful amount of data (>=10 items).
-      // Block if local has less than 50% of what SP has.
-      if (spN >= 10 && localN < spN * 0.5) {
-        criticalBanner(`Push ABORTED to protect your data: this tab's ${key} has ${localN} items but SharePoint has ${spN}. Pushing would wipe real data. Reload the page to pull a fresh copy from SharePoint, then try again. If you intended this change, contact support.`);
+      // Block if local has less than 95% of what SP has — small deliberate deletions
+      // are allowed (e.g. archiving a single duplicate), but anything larger is treated
+      // as accidental data loss and refused.
+      if (spN >= 10 && localN < spN * 0.95) {
+        criticalBanner(`Push ABORTED to protect your data: this tab's ${key} has ${localN} items but SharePoint has ${spN} (loss > 5%). Pushing would wipe real data. Reload the page to pull a fresh copy from SharePoint, then try again. If you intended this change, contact support.`);
         console.error(`[GK] Push aborted: ${key} local=${localN} vs SP=${spN}`);
         _syncing = false;
         return;
