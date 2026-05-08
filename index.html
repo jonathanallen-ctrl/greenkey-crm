@@ -13055,14 +13055,7 @@ let _schedStatusHydratedAt = 0;
 // 10 seconds so re-renders don't spam the Worker.
 async function _hydrateSchedConfirmStatuses(force=false) {
   if (!force && Date.now() - _schedStatusHydratedAt < 10_000) return;
-  const tokens = [];
-  Object.values(_sched.dayPlans || {}).forEach(plan => {
-    plan.scheduled.forEach(slot => {
-      const c = slot.lead.scheduling?.confirmations?.[/* date is the plan key, look up by plan.scheduled */];
-      // We don't know the date inside this loop; re-walk by plan date below.
-    });
-  });
-  // Re-walk: collect tokens with their (leadId, date) from each plan.
+  // Collect tokens with their (leadId, date) from each plan.
   const wanted = []; // [{token, leadId, date}]
   for (const [date, plan] of Object.entries(_sched.dayPlans || {})) {
     for (const slot of plan.scheduled) {
