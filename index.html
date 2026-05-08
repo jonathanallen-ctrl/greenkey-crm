@@ -717,16 +717,34 @@
     </div>
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Body / Description</div>
-      <textarea id="sched-body" rows="12" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
+      <textarea id="sched-body" rows="10" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55"></textarea>
     </div>
-    <div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--r);line-height:1.5">
+    <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px;margin-bottom:12px">
+      <div>
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Date</div>
+        <input id="sched-date-input" type="date" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Start</div>
+        <input id="sched-start-input" type="time" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">End</div>
+        <input id="sched-end-input" type="time" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+      </div>
+    </div>
+    <div style="margin-bottom:8px;font-size:11px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--r);line-height:1.5">
       <strong>Location:</strong> <span id="sched-loc-preview"></span>
+    </div>
+    <div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--r);line-height:1.5;display:flex;align-items:center;gap:8px">
+      <strong>Calendar:</strong> <span id="sched-cal-preview" style="flex:1"></span>
+      <button onclick="navigate('settings');setTimeout(()=>{const sni=Array.from(document.querySelectorAll('.sni')).find(e=>e.textContent.trim()==='Scheduling');if(sni)showSec(sni,'Scheduling');closeSchedModal();},80)" style="background:none;border:none;color:var(--blue);font-size:11px;cursor:pointer;text-decoration:underline">Change</button>
     </div>
     <div class="mact">
       <button class="btn btn-g" onclick="closeSchedModal()">Cancel</button>
       <button class="btn btn-p" style="background:#f39c12;border-color:#f39c12" onclick="openSchedInOutlook()">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
-        Open in Outlook
+        Create &amp; Open in Outlook
       </button>
     </div>
   </div>
@@ -2215,17 +2233,9 @@ const SECS = {
   'Backups & Export':null,
   'Charger Support':null,
   'Skills':null,
-  'Scheduling':`<div class="stitle">Scheduling</div><div class="sdesc">Settings used by the Scheduler to calculate drive times and build optimal day routes.</div>
-    <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
-      <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139'}">
-    </div>
-    <div class="srow"><div><div class="srl">Average Road Speed (mph)</div><div class="srd">Used to estimate drive time from distances. Default 45 mph works well for central VA.</div></div>
-      <input class="sinput" id="set-roadspeed" style="width:80px" type="number" value="${getPrefs().roadSpeedMph||45}">
-    </div>
-    <div class="srow"><div><div class="srl">Work Day Length (hours)</div><div class="srd">Target hours per crew day including drive time.</div></div>
-      <input class="sinput" id="set-daylen" style="width:80px" type="number" step="0.5" value="${getPrefs().dayHours||8}">
-    </div>
-    <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSchedSettings()">Save Changes</button></div>`,
+  // Scheduling rendered dynamically so the calendar picker can fetch live
+  // calendars from Graph at click time.
+  'Scheduling': null,
 
   // Users & Access is rendered dynamically at click time (see showSec) so the
   // admin-only pencil-edit button has the live S.user role available — at
@@ -2247,6 +2257,86 @@ const SECS = {
     </div>
     <div style="margin-top:20px"><button class="btn btn-g" onclick="doLogout()">Sign out</button></div>`
 };
+
+function renderSchedulingSettings() {
+  const tgt = getSchedTargetCalendar();
+  const calBlock = tgt
+    ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+         <span class="chip chip-ok" style="font-size:12px">${escHtml(tgt.name)}</span>
+         <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="pickOutlookCalendar()">Change</button>
+         <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="clearOutlookCalendarChoice()">Use default calendar</button>
+       </div>`
+    : `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+         <span style="font-size:12.5px;color:var(--text-muted);font-style:italic">Default calendar (your primary inbox)</span>
+         <button class="btn btn-p" style="padding:4px 12px;font-size:11.5px" onclick="pickOutlookCalendar()">Pick a calendar…</button>
+       </div>`;
+
+  return `<div class="stitle">Scheduling</div>
+    <div class="sdesc">Settings used by the Scheduler to calculate drive times, build optimal day routes, and place calendar events on the right calendar.</div>
+    <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
+      <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${escHtml(getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139')}">
+    </div>
+    <div class="srow"><div><div class="srl">Average Road Speed (mph)</div><div class="srd">Used to estimate drive time from distances. Default 45 mph works well for central VA.</div></div>
+      <input class="sinput" id="set-roadspeed" style="width:80px" type="number" value="${getPrefs().roadSpeedMph||45}">
+    </div>
+    <div class="srow"><div><div class="srl">Work Day Length (hours)</div><div class="srd">Target hours per crew day including drive time.</div></div>
+      <input class="sinput" id="set-daylen" style="width:80px" type="number" step="0.5" value="${getPrefs().dayHours||8}">
+    </div>
+    <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSchedSettings()">Save Drive-Time Changes</button></div>
+
+    <div style="margin-top:28px;padding-top:18px;border-top:1px solid var(--border)">
+      <div class="srl" style="font-size:14px;font-weight:600;margin-bottom:6px">Outlook Calendar Target</div>
+      <div class="srd" style="margin-bottom:12px">When you click <strong>Schedule in Outlook</strong> on a job, the event is created on this calendar. Default is your primary inbox calendar — pick a different one (e.g. <em>GreenKey Business Calendar</em>) so events land in the right place automatically.</div>
+      ${calBlock}
+      <div id="cal-picker-wrap" style="margin-top:12px"></div>
+      <div style="margin-top:10px;font-size:11.5px;color:var(--text-muted);font-style:italic">First-time use will prompt you to grant Microsoft the <code>Calendars.ReadWrite</code> permission. After that, picking and changing is instant.</div>
+    </div>`;
+}
+
+// Open the calendar picker — fetches /me/calendars and renders a list of
+// click-to-select buttons inline below the current target.
+async function pickOutlookCalendar() {
+  const wrap = document.getElementById('cal-picker-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:10px 0">Loading your calendars from Microsoft…</div>`;
+  try {
+    const cals = await fetchOutlookCalendars(true);
+    if (!cals.length) {
+      wrap.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:10px 0">No editable calendars found.</div>`;
+      return;
+    }
+    const tgt = getSchedTargetCalendar();
+    wrap.innerHTML = `
+      <div style="font-size:11.5px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Pick a calendar</div>
+      <div style="display:flex;flex-direction:column;gap:6px;max-width:480px">
+        ${cals.map(c => {
+          const isCur = tgt && tgt.id === c.id;
+          return `<button class="btn ${isCur?'btn-p':'btn-g'}" style="padding:8px 12px;font-size:13px;text-align:left;display:flex;align-items:center;gap:8px"
+            onclick="selectOutlookCalendar('${escHtml(c.id)}','${escHtml((c.name||'').replace(/'/g,"\\'"))}')">
+            <span style="flex:1">${escHtml(c.name||'(unnamed)')}</span>
+            ${isCur ? '<span style="font-size:11px;opacity:0.85">✓ current</span>' : ''}
+          </button>`;
+        }).join('')}
+      </div>`;
+  } catch (e) {
+    console.warn('[GK] pickOutlookCalendar failed:', e);
+    wrap.innerHTML = `<div style="font-size:12.5px;color:var(--red);padding:10px 0">Could not load calendars: ${escHtml(String(e.message||e))}</div>`;
+  }
+}
+
+function selectOutlookCalendar(id, name) {
+  saveSchedTargetCalendar(id, name);
+  toast(`Calendar target set to "${name}"`, 'success');
+  // Re-render the Scheduling panel to reflect the new target.
+  document.getElementById('spanel').innerHTML = renderSchedulingSettings();
+}
+
+function clearOutlookCalendarChoice() {
+  if (!confirm('Use your default calendar for new events instead of the GreenKey Business Calendar (or whatever is currently set)?')) return;
+  clearSchedTargetCalendar();
+  toast('Calendar target cleared — events will go to your default calendar.', 'success');
+  document.getElementById('spanel').innerHTML = renderSchedulingSettings();
+}
 
 function renderSkillsSettings() {
   const vocab = getSkillsVocab();
@@ -2382,6 +2472,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
   } else if (sec==='Skills') {
     document.getElementById('spanel').innerHTML = renderSkillsSettings();
+  } else if (sec==='Scheduling') {
+    document.getElementById('spanel').innerHTML = renderSchedulingSettings();
   } else {
     document.getElementById('spanel').innerHTML = SECS[sec] || `<div class="empty"><div class="etitle">${sec}</div></div>`;
   }
@@ -11731,11 +11823,51 @@ const _sched = {
   built: false,
   techId: '',       // user.id of the tech being scheduled — '' means "any tech"
   preselectId: null,// leadId to scroll/highlight after the next render (set by scheduleNow)
+  // Pool selection: leadId → true means EXCLUDED from the build. Empty object
+  // means "everything in the pool is selected" — preserves the original
+  // behavior. User unchecks individual jobs to narrow the optimizer's input.
+  excluded: {},
   // Multi-day mode (Chunk 4): when range.start/end are set, the renderer
   // shows a per-day strip and per-day tech pickers instead of the single-day view.
   range: null,     // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } | null
   dayPlans: {}     // 'YYYY-MM-DD' → { techId, scheduled[], unscheduled[], returnDriveHrs, built }
 };
+
+// Pool selection helpers. _sched.excluded is the source of truth — keyed by
+// leadId, value true means "skip this job when building." Default empty
+// object means everything is selected, preserving the original behavior.
+function toggleSchedJobInclusion(leadId) {
+  if (_sched.excluded[leadId]) delete _sched.excluded[leadId];
+  else _sched.excluded[leadId] = true;
+  // Single-day stale flag — multi-day day plans stay built until rebuilt.
+  _sched.built = false;
+  renderSchedulerPage();
+}
+function selectAllSchedJobs() {
+  _sched.excluded = {};
+  _sched.built = false;
+  renderSchedulerPage();
+}
+function selectNoSchedJobs() {
+  // Mark every currently-visible pool job as excluded.
+  const jobs = getSchedulableJobs(_sched.techId || null);
+  jobs.forEach(l => { _sched.excluded[l.id] = true; });
+  _sched.built = false;
+  renderSchedulerPage();
+}
+function invertSchedSelection() {
+  const jobs = getSchedulableJobs(_sched.techId || null);
+  jobs.forEach(l => {
+    if (_sched.excluded[l.id]) delete _sched.excluded[l.id];
+    else _sched.excluded[l.id] = true;
+  });
+  _sched.built = false;
+  renderSchedulerPage();
+}
+// Returns the selected pool — what should actually feed the optimizer.
+function getSelectedSchedJobs(techId) {
+  return getSchedulableJobs(techId).filter(l => !_sched.excluded[l.id]);
+}
 
 // Returns a human-readable reason the job can't be scheduled yet, or null if it's ready.
 // Ignores any scheduleOverride — useful for the job detail UI to show what's blocking.
@@ -11813,9 +11945,18 @@ function scheduleNow(leadId) {
   }
 
   // Hand off to the Scheduler. _sched.preselectId tells renderSchedulerPage
-  // to scroll-into-view and highlight this lead's row in the pool.
+  // to scroll-into-view and highlight this lead's row in the pool. Also narrow
+  // the pool selection to ONLY this lead so clicking Build immediately gives
+  // the user a plan with just this job — the most common reason they hit
+  // "Schedule Now" is "this one specific job needs to go on the calendar."
+  // They can re-include other jobs by clicking Select All in the pool header.
   if (typeof _sched === 'object' && _sched) {
     _sched.preselectId = leadId;
+    // Mark every other schedulable job as excluded.
+    const allJobs = getSchedulableJobs(null);
+    _sched.excluded = {};
+    allJobs.forEach(l => { if (l.id !== leadId) _sched.excluded[l.id] = true; });
+    _sched.built = false;
   } else {
     window._sched = { preselectId: leadId };
   }
@@ -12446,24 +12587,44 @@ function renderSchedulerPage() {
     }
   });
 
+  // Pool selection counters — drives the "X of Y selected" header.
+  const totalPool    = jobs.length;
+  const selectedPool = jobs.filter(l => !_sched.excluded[l.id]).length;
+  const poolHeader = totalPool === 0 ? '' : `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:11.5px">
+      <span style="color:var(--text-muted)"><strong style="color:var(--text-primary)">${selectedPool}</strong> of ${totalPool} selected</span>
+      <button onclick="selectAllSchedJobs()" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11.5px;padding:2px 4px">Select all</button>
+      <span style="color:var(--text-muted)">·</span>
+      <button onclick="selectNoSchedJobs()" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11.5px;padding:2px 4px">Select none</button>
+      <span style="color:var(--text-muted)">·</span>
+      <button onclick="invertSchedSelection()" style="background:none;border:none;cursor:pointer;color:var(--blue);font-size:11.5px;padding:2px 4px">Invert</button>
+    </div>`;
+
   // Job pool
   const poolHtml = jobs.length === 0
-    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs ready to schedule.<br><span style="font-size:12px">Jobs need: permit received ✓ + charger confirmed ✓ (EV jobs) + not yet scheduled.<br>Use <strong>+ Add to Scheduler</strong> on a job detail page to override gates.</span></div>`
-    : jobs.map(l => {
+    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs ready to schedule.<br><span style="font-size:12px">Jobs need: permit received ✓ + charger confirmed ✓ (EV jobs) + not yet scheduled.<br>Use <strong>Schedule Now</strong> on a job detail page to override gates.</span></div>`
+    : poolHeader + jobs.map(l => {
         const cust = custs.find(c => c.id === l.customerId);
         const name = cust ? custFullName(cust) : (l.customerName||'Unknown');
         const addr = [l.siteStreet, l.siteCity, l.siteState||'VA'].filter(Boolean).join(', ');
         const dur  = _sched.durations[l.id] || 2;
         const isScheduled = _sched.scheduled.some(s => s.lead.id === l.id);
+        const isExcluded = !!_sched.excluded[l.id];
         const overrideChip = l.scheduleOverride?.reason
           ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${(l.scheduleOverride.setAt||'').slice(0,10)}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
           : '';
-        return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}">
+        return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}" style="${isExcluded?'opacity:0.45;background:var(--bg-elevated)':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-            <div>
-              <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
-              <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-              <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}</div>
+            <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
+              <input type="checkbox" ${isExcluded?'':'checked'}
+                onchange="toggleSchedJobInclusion('${l.id}')"
+                title="${isExcluded?'Excluded — won\\'t be included in the next build':'Included in the next build'}"
+                style="margin-top:2px;accent-color:var(--green);cursor:pointer;flex-shrink:0">
+              <div style="flex:1">
+                <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}</div>
+              </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
               <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Duration</div>
@@ -12720,8 +12881,13 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap) {
 }
 
 async function runScheduler() {
-  const jobs = getSchedulableJobs(_sched.techId || null);
-  if (!jobs.length) { toast('No jobs ready to schedule','warning'); return; }
+  const jobs = getSelectedSchedJobs(_sched.techId || null);
+  if (!jobs.length) {
+    const totalPool = getSchedulableJobs(_sched.techId || null).length;
+    if (totalPool === 0) toast('No jobs ready to schedule','warning');
+    else toast('No jobs selected — check at least one in the pool first.','warning');
+    return;
+  }
 
   _sched.loading = true;
   _sched.built   = false;
@@ -12828,14 +12994,19 @@ function setSchedRange(field, val) {
 async function buildSchedDay(date) {
   const plan = _sched.dayPlans[date];
   if (!plan) return;
-  // Pool: schedulable jobs minus anything already scheduled on a different day in this range.
+  // Pool: selected schedulable jobs minus anything already scheduled on a different day in this range.
   const otherScheduledIds = new Set();
   Object.entries(_sched.dayPlans).forEach(([d, p]) => {
     if (d === date) return;
     p.scheduled.forEach(s => otherScheduledIds.add(s.lead.id));
   });
-  const pool = getSchedulableJobs(plan.techId || null).filter(l => !otherScheduledIds.has(l.id));
-  if (!pool.length) { toast('No jobs available for this day with current filters','warning'); return; }
+  const pool = getSelectedSchedJobs(plan.techId || null).filter(l => !otherScheduledIds.has(l.id));
+  if (!pool.length) {
+    const totalPool = getSchedulableJobs(plan.techId || null).length;
+    if (totalPool === 0) toast('No jobs available for this day with current filters','warning');
+    else toast('No jobs selected for this day — check at least one in the pool, or pick a different tech.','warning');
+    return;
+  }
 
   const prefs    = getPrefs();
   const dayHours = prefs.dayHours || 8;
@@ -16079,12 +16250,56 @@ function scheduleInOutlook(leadId) {
   const sel = document.getElementById('sched-type');
   if (sel) sel.value = defaultType;
 
-  // Render initial subject/body for the chosen type.
+  // Pre-fill date + time inputs with sensible defaults: next business day,
+  // 8:30 AM start, end based on the type's typical duration.
+  const dateInp = document.getElementById('sched-date-input');
+  const startInp = document.getElementById('sched-start-input');
+  const endInp = document.getElementById('sched-end-input');
+  if (dateInp && startInp && endInp) {
+    // Next business day
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+    dateInp.value = d.toISOString().slice(0,10);
+    startInp.value = '08:30';
+    const dur = _SCHED_TYPE_DEFAULT_HOURS[defaultType] || 1;
+    const endDate = new Date(d); endDate.setHours(8, 30, 0, 0);
+    endDate.setMinutes(endDate.getMinutes() + Math.round(dur * 60));
+    endInp.value = String(endDate.getHours()).padStart(2,'0') + ':' + String(endDate.getMinutes()).padStart(2,'0');
+  }
+
+  // Render subject/body for the chosen type and refresh calendar preview.
   _populateSchedFields(defaultType);
+  _updateSchedCalendarPreview();
 
   // Show the modal.
   const modal = document.getElementById('sched-modal');
   if (modal) modal.classList.add('show');
+}
+
+// Default appointment duration (hours) per type. Used to compute End time from
+// Start when the modal opens or the type changes. User can override the End.
+const _SCHED_TYPE_DEFAULT_HOURS = {
+  installation:    8,
+  walkdown:        1,
+  troubleshoot:    2,
+  inspection:      0.5,
+  'quote-review':  1,
+  'material-pickup': 0.5,
+  'follow-up':     1,
+  other:           1
+};
+
+// Refresh the calendar preview line in the modal — runs every time the modal
+// opens, since the user can change the target calendar in Settings between uses.
+function _updateSchedCalendarPreview() {
+  const el = document.getElementById('sched-cal-preview');
+  if (!el) return;
+  const tgt = getSchedTargetCalendar();
+  if (tgt) {
+    el.innerHTML = `<strong style="color:var(--text-primary)">${escHtml(tgt.name)}</strong>`;
+  } else {
+    el.innerHTML = `<em>Default calendar (your primary inbox calendar)</em> — pick a different one to send these to GreenKey Business Calendar`;
+  }
 }
 
 function closeSchedModal() {
@@ -16096,6 +16311,17 @@ function closeSchedModal() {
 function onSchedTypeChange() {
   const type = document.getElementById('sched-type')?.value || 'installation';
   _populateSchedFields(type);
+  // Re-derive End from Start using the new type's default duration. Don't
+  // touch Date or Start — those are user-controlled.
+  const startInp = document.getElementById('sched-start-input');
+  const endInp = document.getElementById('sched-end-input');
+  if (startInp && endInp && startInp.value) {
+    const [h, m] = startInp.value.split(':').map(Number);
+    const dur = _SCHED_TYPE_DEFAULT_HOURS[type] || 1;
+    const end = new Date(); end.setHours(h || 0, m || 0, 0, 0);
+    end.setMinutes(end.getMinutes() + Math.round(dur * 60));
+    endInp.value = String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
+  }
 }
 
 // Build subject + body for the given appointment type and write them into
@@ -16276,6 +16502,61 @@ function _buildSchedContent(lead, cust, quote, type) {
   return { subject, body: sections.join('\n\n'), location };
 }
 
+// ── OUTLOOK CALENDAR PICKER ──
+// Targets a specific calendar (e.g. "GreenKey Business Calendar") instead of
+// the user's default. Stored in getPrefs().outlookCalendar = {id, name}.
+// Admin picks once in Settings → Scheduling; the modal honors it on every
+// event creation. Falls back to /me/calendar (user's default) if unset.
+
+function getSchedTargetCalendar() {
+  const p = getPrefs();
+  return p.outlookCalendar && p.outlookCalendar.id ? p.outlookCalendar : null;
+}
+function saveSchedTargetCalendar(id, name) {
+  const p = getPrefs();
+  p.outlookCalendar = { id, name };
+  savePrefs(p);
+}
+function clearSchedTargetCalendar() {
+  const p = getPrefs();
+  delete p.outlookCalendar;
+  savePrefs(p);
+}
+
+// Fetch the user's calendars from Graph. Cached briefly to avoid spamming the
+// API when the Settings panel re-renders.
+let _outlookCalendarsCache = null;
+let _outlookCalendarsCachedAt = 0;
+async function fetchOutlookCalendars(forceRefresh=false) {
+  if (!forceRefresh && _outlookCalendarsCache && Date.now() - _outlookCalendarsCachedAt < 60_000) {
+    return _outlookCalendarsCache;
+  }
+  // Make sure we have a fresh token with Calendars.ReadWrite scope.
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+        _gToken = tr.accessToken;
+      }
+    }
+  } catch (silentErr) {
+    // Silent failed — likely first time the user is using Calendars.ReadWrite.
+    // Trigger interactive consent.
+    try {
+      const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
+      _gToken = tr2.accessToken;
+    } catch (e) {
+      throw new Error('Calendar permission not granted. Sign out and back in to refresh, or accept the consent prompt.');
+    }
+  }
+  const resp = await _graphFetch('/me/calendars?$select=id,name,canEdit,owner&$top=50');
+  const list = (resp.value || []).filter(c => c.canEdit !== false);
+  _outlookCalendarsCache = list;
+  _outlookCalendarsCachedAt = Date.now();
+  return list;
+}
+
 // Convert the plain-text schedule body into HTML for the Outlook deep link.
 // Why: Outlook treats the body parameter as HTML, so plain \n characters
 // collapse to spaces (this is what was causing the "all on one line" bug).
@@ -16311,34 +16592,109 @@ function _schedBodyToHtml(plain) {
   return html;
 }
 
-// Build the Outlook deep link from the (possibly edited) modal values and open it.
-function openSchedInOutlook() {
+// Create the event via Microsoft Graph on the configured target calendar
+// (or the user's default if none configured), then open the created event
+// in Outlook web for review. Replaces the old deep-link compose flow so we
+// can target a specific calendar (e.g. GreenKey Business Calendar).
+async function openSchedInOutlook() {
   if (!_schedLeadId) { toast('Job not found', 'error'); return; }
   const lead = getLead(_schedLeadId);
   if (!lead) { toast('Job not found', 'error'); return; }
 
-  const subject = document.getElementById('sched-subject')?.value || '';
+  // Read modal inputs.
+  const subject   = document.getElementById('sched-subject')?.value?.trim() || '';
   const bodyPlain = document.getElementById('sched-body')?.value || '';
+  const date      = document.getElementById('sched-date-input')?.value || '';
+  const start     = document.getElementById('sched-start-input')?.value || '';
+  const end       = document.getElementById('sched-end-input')?.value || '';
+
+  if (!subject)         { toast('Subject is required', 'error'); return; }
+  if (!date)            { toast('Pick a date', 'error'); return; }
+  if (!start || !end)   { toast('Pick a start and end time', 'error'); return; }
+  if (start >= end)     { toast('End time must be after start time', 'error'); return; }
+
   const bodyHtml = _schedBodyToHtml(bodyPlain);
   const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
   const location  = addrParts.join(', ');
 
-  const params = new URLSearchParams({
-    path: '/calendar/action/compose',
-    rru:  'addevent',
-    subject,
-    location,
-    body: bodyHtml,
-    allday: 'false'
-  });
-  const url = 'https://outlook.office.com/calendar/0/deeplink/compose?' + params.toString();
+  // Construct ISO datetimes — let Outlook interpret in the user's timezone.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+  const startDateTime = `${date}T${start}:00`;
+  const endDateTime   = `${date}T${end}:00`;
 
-  const win = window.open(url, '_blank', 'noopener,noreferrer');
-  if (!win) {
-    toast('Pop-up blocked — allow pop-ups for this site, then try again.', 'warning');
-  } else {
-    toast('Opened in Outlook — pick a date, time, and calendar, then save.', 'success');
+  // Refresh Graph token to ensure Calendars.ReadWrite scope is granted.
+  let canCreate = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        try {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+          _gToken = tr.accessToken;
+          canCreate = !!_gToken;
+        } catch (silentErr) {
+          // First time using Calendars.ReadWrite — needs interactive consent.
+          console.warn('[GK] Calendar: silent token failed, trying interactive:', silentErr);
+          const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
+          _gToken = tr2.accessToken;
+          canCreate = !!_gToken;
+        }
+      }
+    }
+  } catch (e) {
+    toast('Microsoft sign-in required to create calendar events. Sign out and back in.', 'error');
+    console.warn('[GK] Calendar token acquisition failed:', e);
+    return;
+  }
+  if (!canCreate) { toast('Microsoft sign-in required to create calendar events.', 'error'); return; }
+
+  // Pick endpoint: configured target calendar, or /me/events (default).
+  const tgt = getSchedTargetCalendar();
+  const endpoint = tgt && tgt.id
+    ? `/me/calendars/${encodeURIComponent(tgt.id)}/events`
+    : '/me/events';
+  const calendarLabel = tgt ? tgt.name : 'your default calendar';
+
+  // Build the event payload.
+  const payload = {
+    subject,
+    body: { contentType: 'HTML', content: bodyHtml },
+    start: { dateTime: startDateTime, timeZone: tz },
+    end:   { dateTime: endDateTime,   timeZone: tz },
+    location: location ? { displayName: location } : undefined,
+    isReminderOn: true,
+    reminderMinutesBeforeStart: 60
+  };
+
+  // Show progress; the user has just clicked the button.
+  toast('Creating event…', 'info');
+
+  try {
+    const resp = await _graphFetch(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    // resp is the created event; it has webLink we can open for review.
+    const webLink = resp?.webLink;
+    toast(`Event created on ${calendarLabel}.`, 'success');
     closeSchedModal();
+    // Open the created event in Outlook for review/edit.
+    if (webLink) {
+      const win = window.open(webLink, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        toast('Pop-up blocked — your event was created, but check your calendar to review it.', 'warning');
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] Calendar event creation failed:', e);
+    const msg = String(e?.message || e);
+    if (/Calendars\.ReadWrite|Forbidden|403/i.test(msg)) {
+      toast('Calendar permission missing. Sign out and back in to grant Calendars.ReadWrite.', 'error');
+    } else if (/404|not found/i.test(msg) && tgt) {
+      toast(`Target calendar "${tgt.name}" no longer exists. Re-pick it in Settings → Scheduling.`, 'error');
+    } else {
+      toast('Could not create event: ' + msg.slice(0, 200), 'error');
+    }
   }
 }
 
