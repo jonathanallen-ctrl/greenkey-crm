@@ -1848,7 +1848,14 @@ function moveLeadToStage(leadId, stageId) {
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast(`Moved to: ${stageName}`, 'success');
+  // Hint toward the Scheduler when moving into the Scheduled stage — that's
+  // the trigger for adding to the schedulable pool, but the Scheduler is on a
+  // separate page so a nudge is helpful.
+  if (stageId === 'scheduled') {
+    toast(`Moved to Scheduled — open the Scheduler to set a date.`, 'success');
+  } else {
+    toast(`Moved to: ${stageName}`, 'success');
+  }
   if (S.page==='jobs') renderPipeline();
   else if (S.page==='leads') renderLeadsPage();
 }
@@ -11998,8 +12005,13 @@ function getSchedulableJobs(techId) {
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
-    if (ms.installScheduled?.done) return false;      // already scheduled
+    if (ms.installScheduled?.done) return false;      // already committed to a date
     const passesGates = (() => {
+      // Pipeline shortcut: dragging a job into the 'Scheduled' column on the
+      // kanban (or selecting it from the stage dropdown) is an explicit signal
+      // that this job is ready to be placed on the calendar. Bypass the
+      // milestone gates — the user has already decided.
+      if (l.stage === 'scheduled') return true;
       if (l.scheduleOverride?.reason) return true;    // manual override bypasses gates
       if (!ms.permitReceived?.done) return false;     // need permit in hand
       const isEV = l.jobType === 'ev-residential';
