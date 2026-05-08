@@ -2536,12 +2536,63 @@ function resetChargerSupportEntry(make) {
 }
 
 function renderUsersAccessSettings() {
-  return `<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically.</div>
+  return `<div class="stitle">Users & Access</div><div class="sdesc">Access is managed through your Microsoft 365 tenant. Users who sign in with an authorized <strong>@greenkey-usa.com</strong> account are registered here automatically. Admin can also add a teammate manually below — useful for picking them in scheduler/email dropdowns before they've signed in for the first time.</div>
     <div id="ulist">${renderUsers()}</div>
+    ${S.user?.role === 'admin' ? `<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-p" onclick="addManualTeamMember()">+ Add team member</button>
+      <span style="font-size:11.5px;color:var(--text-muted)">Manually-added members can be picked from dropdowns immediately. Their record auto-merges with their MSAL identity the first time they sign in.</span>
+    </div>` : ''}
     <div style="margin-top:16px;padding:12px 14px;background:var(--bg-muted,#f7f7f7);border:1px solid var(--border);border-radius:6px;font-size:12.5px;color:var(--text-muted);line-height:1.5">
-      To grant or revoke access, manage users in the Microsoft 365 admin center. Only <strong>greenkey-usa.com</strong> accounts can sign in to this CRM.
+      To grant or revoke <strong>sign-in access</strong>, manage users in the Microsoft 365 admin center. Only <strong>greenkey-usa.com</strong> accounts can sign in to this CRM.
       ${S.user?.role === 'admin' ? '<br><br>Tip: click the <strong>✎</strong> next to a teammate to override the email address @-mention notifications go to (useful when the sign-in UPN doesn\'t match the inbox they actually read).' : ''}
     </div>`;
+}
+
+// Admin-only: create a teammate record without waiting for them to sign in.
+// The record is keyed by email so when the real person signs in via MSAL,
+// the upsert in _onMSALSuccess will merge with this record (preserving any
+// skills, notifyEmail, mobile that admin set up here).
+function addManualTeamMember() {
+  if (S.user?.role !== 'admin') { toast('Admin only', 'error'); return; }
+  const name = prompt('Full name of the teammate:\n(e.g., "Chase Smith")', '');
+  if (!name) return;
+  const email = prompt('Email address:\n(must be @greenkey-usa.com)', '');
+  if (!email) return;
+  const trimmedEmail = email.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    toast('That doesn\'t look like a valid email address.', 'error'); return;
+  }
+  const role = prompt('Role: type "tech", "admin", or "sales"', 'tech');
+  if (!role) return;
+  const trimmedRole = role.trim().toLowerCase();
+  if (!['admin','tech','sales'].includes(trimmedRole)) {
+    toast('Role must be admin, tech, or sales.', 'error'); return;
+  }
+  const arr = getUsers();
+  // Collision check: same email = duplicate.
+  if (arr.find(u => (u.username||'').toLowerCase() === trimmedEmail)) {
+    toast('A teammate with that email already exists.', 'warning'); return;
+  }
+  // Generate stable id. Use 'u-manual-' prefix so it's clear this came from a
+  // manual add. When the person signs in via MSAL, _onMSALSuccess merges by
+  // username (email) match, which preserves admin-set fields on this record.
+  const initials = name.trim().split(/\s+/).map(p => p[0]).join('').toUpperCase().slice(0,2) || 'GK';
+  const newUser = {
+    id:         'u-manual-' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
+    username:   trimmedEmail,
+    name:       name.trim(),
+    initials,
+    role:       trimmedRole,
+    active:     true,
+    manualAdd:  true,
+    addedBy:    S.user?.name || 'Admin',
+    addedAt:    new Date().toISOString()
+  };
+  arr.push(newUser);
+  saveUsers(arr);
+  toast(`Added ${newUser.name} as a ${trimmedRole}. Pick them from any dropdown.`, 'success');
+  // Re-render the panel to show the new row.
+  document.getElementById('spanel').innerHTML = renderUsersAccessSettings();
 }
 
 function showSec(el, sec) {
@@ -11921,55 +11972,255 @@ const _sched = {
   built: false,
   techId: '',       // user.id of the tech being scheduled — '' means "any tech"
   preselectId: null,// leadId to scroll/highlight after the next render (set by scheduleNow)
-  // Pool selection: leadId → true means EXCLUDED from the build. Empty object
-  // means "everything in the pool is selected" — preserves the original
-  // behavior. User unchecks individual jobs to narrow the optimizer's input.
-  excluded: {},
+  // Pool selection: leadId → true means INCLUDED in the build. Empty object
+  // means "nothing is selected" — user explicitly checks the jobs they want
+  // to schedule. This is the opposite of the original behavior, but matches
+  // how a daily-build workflow actually feels: pick today's work, build, done.
+  included: {},
   // Per-day stop options + start-time override. Empty startTime falls back to
   // prefs.crewStartTime (default 08:00). Stop toggles default off.
   startTime: '',         // e.g. '08:00' for inspection-day early start; '' = use default
   stopDistributor: false,
   stopRestroom:    false,
+  allowOT:         false,// pack everything in geographically optimal order even if it exceeds dayHours
   // Multi-day mode (Chunk 4): when range.start/end are set, the renderer
   // shows a per-day strip and per-day tech pickers instead of the single-day view.
   range: null,     // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } | null
   dayPlans: {}     // 'YYYY-MM-DD' → { techId, scheduled[], unscheduled[], returnDriveHrs, built }
 };
 
-// Pool selection helpers. _sched.excluded is the source of truth — keyed by
-// leadId, value true means "skip this job when building." Default empty
-// object means everything is selected, preserving the original behavior.
+// Persisted-to-localStorage scheduler state. Survives page reloads so a plan
+// built yesterday is still visible today. Saved any time a meaningful change
+// happens (build, date change, mark scheduled).
+const SCHED_STATE_KEY = 'gk_sched_state';
+
+function _persistSched() {
+  try {
+    localStorage.setItem(SCHED_STATE_KEY, JSON.stringify({
+      date:            _sched.date,
+      techId:          _sched.techId,
+      startTime:       _sched.startTime,
+      stopDistributor: _sched.stopDistributor,
+      stopRestroom:    _sched.stopRestroom,
+      durations:       _sched.durations,
+      included:        _sched.included,
+      dayPlans:        _sched.dayPlans
+    }));
+  } catch (e) {
+    console.warn('[GK] Could not persist scheduler state:', e);
+  }
+}
+
+function _loadSched() {
+  try {
+    const raw = localStorage.getItem(SCHED_STATE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.date)            _sched.date            = s.date;
+    if (s.techId)          _sched.techId          = s.techId;
+    if (s.startTime)       _sched.startTime       = s.startTime;
+    _sched.stopDistributor = !!s.stopDistributor;
+    _sched.stopRestroom    = !!s.stopRestroom;
+    if (s.durations)       _sched.durations       = s.durations;
+    if (s.included)        _sched.included        = s.included;
+    if (s.dayPlans)        _sched.dayPlans        = s.dayPlans;
+    // Refresh lead snapshots inside saved plans — leads in localStorage may
+    // have changed since the plan was built (edits, deletions, milestone updates).
+    for (const date of Object.keys(_sched.dayPlans)) {
+      const plan = _sched.dayPlans[date];
+      if (Array.isArray(plan.scheduled)) {
+        plan.scheduled = plan.scheduled.map(slot => {
+          if (!slot.lead) return slot;       // distributor / utility stops
+          const fresh = getLead(slot.lead.id);
+          return fresh ? { ...slot, lead: fresh } : null;  // null = lead deleted
+        }).filter(Boolean);
+      }
+      if (Array.isArray(plan.unscheduled)) {
+        plan.unscheduled = plan.unscheduled
+          .map(l => getLead(l.id))
+          .filter(Boolean);
+      }
+    }
+    // If the active single-day plan exists for the persisted date, restore it
+    // into the live single-day fields.
+    const cur = _sched.dayPlans[_sched.date];
+    if (cur && cur.built) {
+      _sched.scheduled      = cur.scheduled || [];
+      _sched.unscheduled    = cur.unscheduled || [];
+      _sched.returnDriveHrs = cur.returnDriveHrs || 0;
+      _sched.restroomHrs    = cur.restroomHrs || 0;
+      _sched.built          = true;
+    }
+  } catch (e) {
+    console.warn('[GK] Could not load scheduler state:', e);
+  }
+}
+
+// Recalculate every slot's drive time and start/end timestamps based on the
+// current order in _sched.scheduled. Used after a manual reorder. Reads
+// addresses from the geocache (already populated when the day was first
+// built); falls back to driveHrs=0 if a coord is missing.
+async function _recalcSchedTimes() {
+  if (!_sched.scheduled.length) return;
+  const prefs = getPrefs();
+  const homeAddr = prefs.homeBase || '';
+  const homeCoords = homeAddr ? await geocodeOne(homeAddr, '__home__') : null;
+
+  // Resolve the start time the same way the optimizer does.
+  const stStr = (_sched.startTime || prefs.crewStartTime || '08:00').trim();
+  const [sh, sm] = stStr.split(':').map(Number);
+  let clockHrs = (isNaN(sh) ? 8 : sh) + ((isNaN(sm) ? 0 : sm) / 60);
+
+  let curLat = homeCoords?.lat ?? null;
+  let curLon = homeCoords?.lon ?? null;
+
+  for (const s of _sched.scheduled) {
+    let coords = null;
+    if (s.stopType === 'break') {
+      // No drive, no coord change.
+      s.driveStart = clockHrs;
+      s.driveHrs   = 0;
+      s.startTime  = clockHrs;
+      s.endTime    = clockHrs + (s.jobHrs || 0);
+      clockHrs    += (s.jobHrs || 0);
+      continue;
+    }
+    if (s.stopType === 'distributor') {
+      const distAddr = prefs.distributorAddress || '';
+      coords = distAddr ? await geocodeOne(distAddr, '__distributor__') : null;
+    } else if (s.lead) {
+      const addr = [s.lead.siteStreet, s.lead.siteCity, s.lead.siteState||'VA', s.lead.siteZip].filter(Boolean).join(', ');
+      coords = await geocodeOne(addr, s.lead.id);
+    }
+    const driveH = (coords && curLat != null && curLon != null)
+      ? driveTimeHrs(curLat, curLon, coords.lat, coords.lon)
+      : 0;
+    s.driveStart = clockHrs;
+    s.driveHrs   = driveH;
+    s.startTime  = clockHrs + driveH;
+    s.endTime    = clockHrs + driveH + (s.jobHrs || 0);
+    clockHrs    += driveH + (s.jobHrs || 0);
+    if (coords) { curLat = coords.lat; curLon = coords.lon; }
+  }
+  _sched.returnDriveHrs = (homeCoords && curLat != null)
+    ? driveTimeHrs(curLat, curLon, homeCoords.lat, homeCoords.lon)
+    : 0;
+}
+
+// Move a slot up (-1) or down (+1) in the day plan. Recalculates drive times
+// and start/end stamps for the new order, persists to dayPlans, re-renders.
+async function reorderSchedSlot(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= _sched.scheduled.length) return;
+  const tmp = _sched.scheduled[idx];
+  _sched.scheduled[idx]    = _sched.scheduled[newIdx];
+  _sched.scheduled[newIdx] = tmp;
+  await _recalcSchedTimes();
+  if (_sched.dayPlans[_sched.date]) {
+    _sched.dayPlans[_sched.date].scheduled      = _sched.scheduled;
+    _sched.dayPlans[_sched.date].returnDriveHrs = _sched.returnDriveHrs;
+  }
+  _persistSched();
+  renderSchedulerPage();
+}
+
+// Wipe the saved plan for the current date. Doesn't touch any leads or
+// milestones — just throws away the built schedule for that date so the
+// user can start over with a fresh build.
+function clearSchedDayPlan() {
+  if (!_sched.dayPlans[_sched.date]) {
+    toast('No saved plan for this date', 'info'); return;
+  }
+  const wasLocked = !!_sched.dayPlans[_sched.date].locked;
+  if (wasLocked) {
+    if (!confirm('This plan is locked (marked as scheduled). Clearing it will:\n  • Remove the saved schedule view for this date\n  • Un-mark every job that was scheduled for this date (their installScheduled milestone is cleared)\n\nThe jobs themselves are not deleted. Continue?')) return;
+  }
+  // If the plan was locked, also clear lead milestones for this date.
+  if (wasLocked) {
+    const arr = getLeads();
+    let cleared = 0;
+    arr.forEach(l => {
+      const ms = l.milestones || {};
+      if (ms.installScheduled?.done && ms.installScheduled.date === _sched.date) {
+        delete l.milestones.installScheduled;
+        l.updatedAt = new Date().toISOString();
+        cleared++;
+      }
+    });
+    if (cleared) saveLeads(arr);
+  }
+  delete _sched.dayPlans[_sched.date];
+  _sched.scheduled = []; _sched.unscheduled = []; _sched.returnDriveHrs = 0; _sched.restroomHrs = 0;
+  _sched.built = false;
+  _persistSched();
+  toast('Plan cleared for ' + formatSchedDate(_sched.date), 'success');
+  renderSchedulerPage();
+}
+
+// Called from the date input. Restores the previously-built plan if there is
+// one for the new date, or clears the day-plan view if not.
+function _changeSchedDate(newDate) {
+  if (newDate === _sched.date) return;
+  _sched.date = newDate;
+  const cur = _sched.dayPlans[newDate];
+  if (cur && cur.built) {
+    _sched.scheduled      = cur.scheduled || [];
+    _sched.unscheduled    = cur.unscheduled || [];
+    _sched.returnDriveHrs = cur.returnDriveHrs || 0;
+    _sched.restroomHrs    = cur.restroomHrs || 0;
+    _sched.techId         = cur.techId || _sched.techId;
+    _sched.startTime      = cur.startTime || _sched.startTime;
+    _sched.stopDistributor= !!cur.stopDistributor;
+    _sched.stopRestroom   = !!cur.stopRestroom;
+    _sched.built          = true;
+    // Auto-check the plan's jobs in the pool, so clicking Build right away
+    // would rebuild with the same jobs. User can add/remove from there.
+    _sched.included = {};
+    cur.scheduled.forEach(s => { if (s.lead) _sched.included[s.lead.id] = true; });
+  } else {
+    _sched.scheduled      = [];
+    _sched.unscheduled    = [];
+    _sched.returnDriveHrs = 0;
+    _sched.restroomHrs    = 0;
+    _sched.built          = false;
+    _sched.included       = {};   // fresh slate for this date
+  }
+  _persistSched();
+  renderSchedulerPage();
+}
+
+// Pool selection helpers. _sched.included is the source of truth — keyed by
+// leadId, value true means "include in the next build." Default empty
+// object means nothing is selected; user explicitly checks what to schedule.
 function toggleSchedJobInclusion(leadId) {
-  if (_sched.excluded[leadId]) delete _sched.excluded[leadId];
-  else _sched.excluded[leadId] = true;
-  // Single-day stale flag — multi-day day plans stay built until rebuilt.
+  if (_sched.included[leadId]) delete _sched.included[leadId];
+  else _sched.included[leadId] = true;
   _sched.built = false;
   renderSchedulerPage();
 }
 function selectAllSchedJobs() {
-  _sched.excluded = {};
+  const jobs = getSchedulableJobs(_sched.techId || null);
+  jobs.forEach(l => { _sched.included[l.id] = true; });
   _sched.built = false;
   renderSchedulerPage();
 }
 function selectNoSchedJobs() {
-  // Mark every currently-visible pool job as excluded.
-  const jobs = getSchedulableJobs(_sched.techId || null);
-  jobs.forEach(l => { _sched.excluded[l.id] = true; });
+  _sched.included = {};
   _sched.built = false;
   renderSchedulerPage();
 }
 function invertSchedSelection() {
   const jobs = getSchedulableJobs(_sched.techId || null);
   jobs.forEach(l => {
-    if (_sched.excluded[l.id]) delete _sched.excluded[l.id];
-    else _sched.excluded[l.id] = true;
+    if (_sched.included[l.id]) delete _sched.included[l.id];
+    else _sched.included[l.id] = true;
   });
   _sched.built = false;
   renderSchedulerPage();
 }
 // Returns the selected pool — what should actually feed the optimizer.
 function getSelectedSchedJobs(techId) {
-  return getSchedulableJobs(techId).filter(l => !_sched.excluded[l.id]);
+  return getSchedulableJobs(techId).filter(l => !!_sched.included[l.id]);
 }
 
 // Returns a human-readable reason the job can't be scheduled yet, or null if it's ready.
@@ -12049,16 +12300,12 @@ function scheduleNow(leadId) {
 
   // Hand off to the Scheduler. _sched.preselectId tells renderSchedulerPage
   // to scroll-into-view and highlight this lead's row in the pool. Also narrow
-  // the pool selection to ONLY this lead so clicking Build immediately gives
-  // the user a plan with just this job — the most common reason they hit
-  // "Schedule Now" is "this one specific job needs to go on the calendar."
-  // They can re-include other jobs by clicking Select All in the pool header.
+  // the pool selection to ONLY this lead — pre-select just it (everything else
+  // unchecked by default) so clicking Build immediately gives a plan with just
+  // this job. They can check more from the pool to add to the build.
   if (typeof _sched === 'object' && _sched) {
     _sched.preselectId = leadId;
-    // Mark every other schedulable job as excluded.
-    const allJobs = getSchedulableJobs(null);
-    _sched.excluded = {};
-    allJobs.forEach(l => { if (l.id !== leadId) _sched.excluded[l.id] = true; });
+    _sched.included = { [leadId]: true };
     _sched.built = false;
   } else {
     window._sched = { preselectId: leadId };
@@ -12094,27 +12341,40 @@ function clearScheduleOverrideAndRerender(leadId) {
 
 function getSchedulableJobs(techId) {
   // Pool filtering with two layers:
-  //   1. Gate filter — permit, charger, archive, already-scheduled.
+  //   1. Gate filter — permit, charger, archive, already-scheduled-for-other-day.
   //   2. Skill filter (optional) — if techId is supplied, drop jobs whose
   //      requiredSkills the tech can't perform.
+  // EXCEPTION: jobs already committed for THE ACTIVE scheduler date stay in
+  // the pool so the user can re-arrange today's schedule (add/remove jobs and
+  // rebuild). Jobs committed for a different date drop out as before.
   const tech = techId ? getUsers().find(u => u.id === techId) : null;
+  const activeDate = _sched.date;
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
-    if (ms.installScheduled?.done) return false;      // already committed to a date
-    const passesGates = (() => {
-      // Pipeline shortcut: dragging a job into the 'Scheduled' column on the
-      // kanban (or selecting it from the stage dropdown) is an explicit signal
-      // that this job is ready to be placed on the calendar. Bypass the
-      // milestone gates — the user has already decided.
-      if (l.stage === 'scheduled') return true;
-      if (l.scheduleOverride?.reason) return true;    // manual override bypasses gates
-      if (!ms.permitReceived?.done) return false;     // need permit in hand
-      const isEV = l.jobType === 'ev-residential';
-      if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
-      return true;
-    })();
-    if (!passesGates) return false;
+    if (ms.installScheduled?.done) {
+      // Job has been committed to a date. Include it in the pool ONLY if
+      // that date is the date currently being scheduled — so the user can
+      // re-shape today's plan (drop a job, swap it, add to it) by selecting
+      // and re-building. Jobs scheduled for OTHER dates stay excluded.
+      if (ms.installScheduled.date !== activeDate) return false;
+      // Falls through — applies skill filter below, but skips gates.
+    } else {
+      // Not yet committed: apply the normal pre-schedule gates.
+      const passesGates = (() => {
+        // Pipeline shortcut: dragging a job into the 'Scheduled' column on the
+        // kanban (or selecting it from the stage dropdown) is an explicit signal
+        // that this job is ready to be placed on the calendar. Bypass the
+        // milestone gates — the user has already decided.
+        if (l.stage === 'scheduled') return true;
+        if (l.scheduleOverride?.reason) return true;    // manual override bypasses gates
+        if (!ms.permitReceived?.done) return false;     // need permit in hand
+        const isEV = l.jobType === 'ev-residential';
+        if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
+        return true;
+      })();
+      if (!passesGates) return false;
+    }
     if (tech && !userCanDoJob(tech, l)) return false; // skill filter (if a tech is selected)
     return true;
   });
@@ -12697,7 +12957,7 @@ function renderSchedulerPage() {
 
   // Pool selection counters — drives the "X of Y selected" header.
   const totalPool    = jobs.length;
-  const selectedPool = jobs.filter(l => !_sched.excluded[l.id]).length;
+  const selectedPool = jobs.filter(l => !!_sched.included[l.id]).length;
   const poolHeader = totalPool === 0 ? '' : `
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:11.5px">
       <span style="color:var(--text-muted)"><strong style="color:var(--text-primary)">${selectedPool}</strong> of ${totalPool} selected</span>
@@ -12717,21 +12977,28 @@ function renderSchedulerPage() {
         const addr = [l.siteStreet, l.siteCity, l.siteState||'VA'].filter(Boolean).join(', ');
         const dur  = _sched.durations[l.id] || 2;
         const isScheduled = _sched.scheduled.some(s => s.lead.id === l.id);
-        const isExcluded = !!_sched.excluded[l.id];
+        const isSelected = !!_sched.included[l.id];
+        const isExcluded = !isSelected;
         const overrideChip = l.scheduleOverride?.reason
           ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${(l.scheduleOverride.setAt||'').slice(0,10)}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
+          : '';
+        // "Already in today's schedule" chip: shows when this job has an
+        // installScheduled milestone set to the active date. Lets the user
+        // distinguish jobs they're rebuilding vs. fresh adds.
+        const inTodayChip = l.milestones?.installScheduled?.done && l.milestones.installScheduled.date === _sched.date
+          ? `<span class="chip chip-ok" style="font-size:10.5px" title="Already committed to this date — uncheck and rebuild to remove from the schedule">📅 In today's plan</span>`
           : '';
         return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}" style="${isExcluded?'opacity:0.45;background:var(--bg-elevated)':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
             <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
-              <input type="checkbox" ${isExcluded?'':'checked'}
+              <input type="checkbox" ${isSelected?'checked':''}
                 onchange="toggleSchedJobInclusion('${l.id}')"
-                title="${isExcluded?'Excluded — will not be included in the next build':'Included in the next build'}"
+                title="${isSelected?'Included in the next build':'Click to add to the next build'}"
                 style="margin-top:2px;accent-color:var(--green);cursor:pointer;flex-shrink:0">
               <div style="flex:1">
                 <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
                 <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}${inTodayChip}</div>
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
@@ -12767,15 +13034,22 @@ function renderSchedulerPage() {
   } else {
     const prefs = getPrefs();
     const dayHours = prefs.dayHours || 8;
-    // Distributor stops are inside _sched.scheduled (with stopType='distributor')
-    // so their jobHrs gets summed into totalWork. The restroom break is overhead
-    // outside the scheduled list — add it explicitly.
-    let totalWork  = _sched.scheduled.reduce((s,x) => s + (x.jobHrs||0), 0);
+    // Slot types in _sched.scheduled:
+    //   - regular job (lead set, no stopType)     — counts as work
+    //   - distributor stop (stopType='distributor') — counts as work for total math
+    //   - lunch/break (stopType='break')             — counts as break, NOT work
+    let totalWork  = _sched.scheduled.reduce((s,x) =>
+      s + (x.stopType === 'break' ? 0 : (x.jobHrs||0)), 0);
     let totalDrive = _sched.scheduled.reduce((s,x) => s + (x.driveHrs||0), 0);
-    const restroomHrs = _sched.restroomHrs || 0;
+    const restroomHrs = _sched.scheduled
+      .filter(x => x.stopType === 'break')
+      .reduce((s,x) => s + (x.jobHrs||0), 0);
     let totalHrs   = totalWork + totalDrive + restroomHrs + (_sched.returnDriveHrs||0);
-    const pct = Math.min(100, Math.round(totalHrs / dayHours * 100));
-    const barColor = pct > 95 ? 'var(--red)' : pct > 80 ? 'var(--amber)' : 'var(--green)';
+    const rawPct = Math.round(totalHrs / dayHours * 100);
+    const pct = Math.min(100, rawPct);
+    const isOT = rawPct > 100;
+    const otHrs = Math.max(0, totalHrs - dayHours);
+    const barColor = isOT ? 'var(--red)' : pct > 95 ? 'var(--red)' : pct > 80 ? 'var(--amber)' : 'var(--green)';
 
     const slots = _sched.scheduled.map((s, i) => {
       const driveMin = Math.round((s.driveHrs||0) * 60);
@@ -12797,16 +13071,31 @@ function renderSchedulerPage() {
             </div>
           </div>`;
       }
+      if (s.stopType === 'break') {
+        return `<div class="sched-slot" style="background:rgba(149,165,166,0.08);border-left:3px solid #95a5a6">
+          <div class="sched-time">${fmtTime(s.startTime)}</div>
+          <div class="sched-slot-body">
+            <div style="font-weight:500;font-size:13.5px;color:#7f8c8d">🍔 Gas / restroom break</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTime(s.endTime)}</div>
+          </div>
+        </div>`;
+      }
       const cust = custs.find(c => c.id === s.lead.customerId);
       const name = cust ? custFullName(cust) : (s.lead.customerName||'Unknown');
       const addr = [s.lead.siteStreet, s.lead.siteCity].filter(Boolean).join(', ');
+      const upDisabled   = i === 0 ? 'disabled style="opacity:0.3;cursor:not-allowed"' : '';
+      const downDisabled = i === _sched.scheduled.length - 1 ? 'disabled style="opacity:0.3;cursor:not-allowed"' : '';
       return `${driveRow}
-        <div class="sched-slot">
+        <div class="sched-slot" style="display:flex;align-items:center;gap:10px">
           <div class="sched-time">${fmtTime(s.startTime)}</div>
-          <div class="sched-slot-body">
+          <div class="sched-slot-body" style="flex:1">
             <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
             <div style="font-size:12px;color:var(--text-muted)">${escHtml(addr)}</div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${s.lead.id} · ${fmtHrs(s.jobHrs)} · ends ${fmtTime(s.endTime)}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
+            <button onclick="reorderSchedSlot(${i},-1)" ${upDisabled} title="Move earlier" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;width:24px;height:18px;cursor:pointer;color:var(--text-secondary);font-size:11px;line-height:1;padding:0">▲</button>
+            <button onclick="reorderSchedSlot(${i},1)" ${downDisabled} title="Move later" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;width:24px;height:18px;cursor:pointer;color:var(--text-secondary);font-size:11px;line-height:1;padding:0">▼</button>
           </div>
         </div>`;
     }).join('');
@@ -12824,7 +13113,7 @@ function renderSchedulerPage() {
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-top:4px">
           <span>${fmtHrs(totalWork)} work · ${fmtHrs(totalDrive)} drive · ${fmtHrs(_sched.returnDriveHrs||0)} return${restroomHrs?` · ${fmtHrs(restroomHrs)} break`:''}</span>
-          <span style="color:${barColor};font-weight:600">${fmtHrs(totalHrs)} / ${dayHours}h</span>
+          <span style="color:${barColor};font-weight:600">${fmtHrs(totalHrs)} / ${dayHours}h${isOT?` · +${fmtHrs(otHrs)} OT`:''}</span>
         </div>
       </div>
       ${slots}
@@ -12833,6 +13122,7 @@ function renderSchedulerPage() {
         Return home ${returnStr} — ${fmtTime(last.endTime)}
       </div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        ${_sched.dayPlans[_sched.date]?.locked ? `<span class="chip chip-ok" style="font-size:11px">🔒 Locked — marked as scheduled</span>` : ''}
         <button class="btn btn-p" onclick="downloadSchedICS()">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="12" rx="1.5"/><path d="M1 7h14M5 1v4M11 1v4"/></svg>
           Download .ics
@@ -12841,7 +13131,8 @@ function renderSchedulerPage() {
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
           Send Confirmations
         </button>
-        <button class="btn btn-g" onclick="markDayScheduled()">✓ Mark all as scheduled</button>
+        <button class="btn btn-g" onclick="markDayScheduled()" ${_sched.dayPlans[_sched.date]?.locked ? 'disabled title="Already marked"' : ''}>✓ Mark all as scheduled</button>
+        <button class="btn btn-g" style="margin-left:auto;color:var(--text-muted);font-size:11px" onclick="clearSchedDayPlan()" title="Wipe this day's saved plan and start over">Clear plan</button>
       </div>
       ${_sched.unscheduled.length ? `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${_sched.unscheduled.length} job(s) didn't fit today — they remain in the pool for another day.</div>` : ''}`;
   }
@@ -12878,7 +13169,7 @@ function renderSchedulerPage() {
       <div>
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Schedule Date</div>
         <input type="date" class="psel" id="sched-date" value="${_sched.date}" min="${new Date().toISOString().slice(0,10)}"
-          onchange="_sched.date=this.value;_sched.built=false;renderSchedulerPage()">
+          onchange="_changeSchedDate(this.value)">
       </div>
       <div>
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Tech</div>
@@ -12906,6 +13197,12 @@ function renderSchedulerPage() {
             onchange="_sched.stopRestroom=this.checked;_sched.built=false;renderSchedulerPage()"
             style="accent-color:var(--green)">
           Gas / restroom break
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--amber)" title="Pack every selected job into the day even if it pushes past your work-day budget. The plan will run long; the day-utilization bar shows the overtime.">
+          <input type="checkbox" ${_sched.allowOT?'checked':''}
+            onchange="_sched.allowOT=this.checked;_sched.built=false;renderSchedulerPage()"
+            style="accent-color:var(--amber)">
+          Allow overtime (force all selected)
         </label>
       </div>
       <div style="align-self:flex-end">
@@ -12995,7 +13292,8 @@ async function _buildSchedOpts() {
     startHrs,
     distributorMin: 0,
     restroomMin:    0,
-    distributorCoords: null
+    distributorCoords: null,
+    allowOT: !!_sched.allowOT
   };
   if (_sched.stopDistributor && (prefs.distributorAddress || '').trim()) {
     opts.distributorMin = prefs.distributorStopMinutes || 30;
@@ -13028,6 +13326,7 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
   const distCoords        = opts.distributorCoords || null;
   const distHrs           = (opts.distributorMin || 0) / 60;
   const restroomHrs       = (opts.restroomMin    || 0) / 60;
+  const allowOT           = !!opts.allowOT;
 
   const available  = [...jobs];
   const scheduled  = [];
@@ -13067,7 +13366,11 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
       if (!c) { unscheduled.push(l); available.splice(i,1); i--; continue; }
       const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
       const jobH  = durationsMap[l.id] || estimateJobDuration(l);
-      if (drive + jobH <= remaining + 0.05 && drive < bestDrive) {
+      // Default behavior: only consider jobs that fit in the remaining day budget.
+      // allowOT: ignore the budget — pack everything in geographically optimal order
+      // and let the day run long. Scheduler shows the OT amount in the utilization summary.
+      const fits = allowOT || (drive + jobH <= remaining + 0.05);
+      if (fits && drive < bestDrive) {
         bestDrive = drive; bestIdx = i;
       }
     }
@@ -13090,6 +13393,39 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
 
   const returnDriveHrs = homeCoords ? driveTimeHrs(curLat, curLon, homeCoords.lat, homeCoords.lon) : 0;
   available.forEach(l => unscheduled.push(l));
+
+  // Insert the gas/restroom break as a visible slot in the timeline. The time
+  // was already reserved at the top of this function (subtracted from
+  // `remaining`), so inserting it here just makes the schedule render
+  // truthfully — without this, the timeline ends before the summary total.
+  // Heuristic: insert AFTER the job whose endTime is closest to noon. If no
+  // jobs were scheduled, no break is inserted (a day with no work doesn't need a lunch).
+  if (restroomHrs > 0 && scheduled.length > 0) {
+    let bestIdx = 0, bestDiff = Infinity;
+    for (let i = 0; i < scheduled.length; i++) {
+      const s = scheduled[i];
+      if (s.stopType) continue;  // distributor stops aren't lunch anchors
+      const diff = Math.abs(s.endTime - 12.0);
+      if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+    }
+    const prev = scheduled[bestIdx];
+    scheduled.splice(bestIdx + 1, 0, {
+      lead: null,
+      stopType: 'break',
+      driveStart: prev.endTime,
+      driveHrs:   0,
+      startTime:  prev.endTime,
+      jobHrs:     restroomHrs,
+      endTime:    prev.endTime + restroomHrs
+    });
+    // Shift everything after the inserted break by restroomHrs.
+    for (let i = bestIdx + 2; i < scheduled.length; i++) {
+      scheduled[i].driveStart += restroomHrs;
+      scheduled[i].startTime  += restroomHrs;
+      scheduled[i].endTime    += restroomHrs;
+    }
+  }
+
   return { scheduled, unscheduled, returnDriveHrs, restroomHrs };
 }
 
@@ -13136,6 +13472,21 @@ async function runScheduler() {
   _sched.returnDriveHrs = result.returnDriveHrs;
   _sched.restroomHrs    = result.restroomHrs || 0;
   _sched.loading        = false;
+  // Persist the built plan into dayPlans so it survives date changes and
+  // page reloads. Mirror the live single-day fields into a per-date snapshot.
+  _sched.dayPlans[_sched.date] = {
+    scheduled:      _sched.scheduled,
+    unscheduled:    _sched.unscheduled,
+    returnDriveHrs: _sched.returnDriveHrs,
+    restroomHrs:    _sched.restroomHrs,
+    techId:         _sched.techId,
+    startTime:      _sched.startTime,
+    stopDistributor:_sched.stopDistributor,
+    stopRestroom:   _sched.stopRestroom,
+    built:          true,
+    builtAt:        new Date().toISOString()
+  };
+  _persistSched();
   _sched.built          = true;
   renderSchedulerPage();
 }
@@ -13807,7 +14158,19 @@ function commitSchedDay(date) {
 // ── MARK AS SCHEDULED ──
 function markDayScheduled() {
   if (!_sched.scheduled.length) return;
+  // Persist the plan (with locked status) into dayPlans BEFORE we update the
+  // leads' milestones — the persistent plan should remain visible on this
+  // date even after the jobs leave the pool.
+  if (_sched.dayPlans[_sched.date]) {
+    _sched.dayPlans[_sched.date].locked = true;
+    _sched.dayPlans[_sched.date].lockedAt = new Date().toISOString();
+  }
   const arr = getLeads();
+  // Build the "in current plan" set for reconciliation below.
+  const inPlanIds = new Set(
+    _sched.scheduled.filter(s => s.lead).map(s => s.lead.id)
+  );
+  // (a) Set installScheduled for every lead in the current plan.
   _sched.scheduled.forEach(s => {
     if (!s.lead) return;  // distributor / utility stops have no lead
     const idx = arr.findIndex(l => l.id === s.lead.id);
@@ -13818,9 +14181,26 @@ function markDayScheduled() {
     if (arr[idx].scheduleOverride) delete arr[idx].scheduleOverride;
     arr[idx].updatedAt = new Date().toISOString();
   });
+  // (b) Reconcile: clear installScheduled for any lead that WAS scheduled for
+  //     THIS date but isn't in the current plan anymore. Without this, removing
+  //     a job from a plan and re-Mark-all-ing would leave a stale milestone.
+  let removedCount = 0;
+  arr.forEach(l => {
+    const ms = l.milestones || {};
+    if (ms.installScheduled?.done
+        && ms.installScheduled.date === _sched.date
+        && !inPlanIds.has(l.id)) {
+      delete l.milestones.installScheduled;
+      l.updatedAt = new Date().toISOString();
+      removedCount++;
+    }
+  });
   saveLeads(arr);
-  _sched.built = false;
-  toast(`${_sched.scheduled.length} job(s) marked as scheduled`, 'success');
+  _persistSched();
+  const setN = inPlanIds.size;
+  let msg = `${setN} job${setN===1?'':'s'} marked as scheduled`;
+  if (removedCount) msg += ` · ${removedCount} previously-scheduled job${removedCount===1?'':'s'} removed from this date`;
+  toast(msg, 'success');
   renderSchedulerPage();
 }
 
@@ -17334,6 +17714,8 @@ async function init() {
   try { initMaterials(); } catch (e) { console.warn('[GK] initMaterials failed:', e); }
   // Seed B2B referrer customer records (AF1 etc.) on every boot — idempotent.
   try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] seedReferrerCustomers failed:', e); }
+  // Restore Scheduler state (built plans per date) so plans survive page reloads.
+  try { _loadSched(); } catch (e) { console.warn('[GK] _loadSched failed:', e); }
   // Login is now Microsoft 365 only — no password inputs to wire up.
 
   // Try MSAL auto-login first (resumes existing Microsoft session)
