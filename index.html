@@ -12618,7 +12618,7 @@ function renderSchedulerPage() {
             <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
               <input type="checkbox" ${isExcluded?'':'checked'}
                 onchange="toggleSchedJobInclusion('${l.id}')"
-                title="${isExcluded?'Excluded — won\\'t be included in the next build':'Included in the next build'}"
+                title="${isExcluded?'Excluded — will not be included in the next build':'Included in the next build'}"
                 style="margin-top:2px;accent-color:var(--green);cursor:pointer;flex-shrink:0">
               <div style="flex:1">
                 <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
