@@ -692,6 +692,29 @@
 </div>
 
 <!-- SCHEDULE IN OUTLOOK MODAL -->
+<!-- CONFIRMATION REQUEST PREVIEW MODAL -->
+<div class="moverlay" id="conf-preview-modal">
+  <div class="modal" style="max-width:900px;width:92vw;max-height:88vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#3498db" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
+      Preview Confirmation Requests
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5">
+      Pick a recipient on the left to see their email. Uncheck anyone you don't want to send to. Nothing goes out until you click <strong>Send</strong>.
+    </div>
+    <div style="display:grid;grid-template-columns:280px 1fr;gap:12px;flex:1;min-height:0;overflow:hidden">
+      <div id="conf-recipients-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:var(--r);background:var(--bg-elevated);padding:6px"></div>
+      <div style="overflow-y:auto;border:1px solid var(--border);border-radius:var(--r);background:#ffffff;padding:18px">
+        <div id="conf-email-preview" style="color:#1a1a1a"></div>
+      </div>
+    </div>
+    <div class="mact" style="margin-top:12px">
+      <button class="btn btn-g" onclick="closeConfPreview()">Cancel — send nothing</button>
+      <button class="btn btn-p" id="conf-send-btn" style="background:#3498db;border-color:#3498db" onclick="_executeDayConfirmations()">Send 0 confirmations</button>
+    </div>
+  </div>
+</div>
+
 <div class="moverlay" id="sched-modal">
   <div class="modal" style="max-width:600px">
     <div class="mtitle" style="display:flex;align-items:center;gap:8px">
@@ -13472,6 +13495,14 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
 // day. Two-way handshake: each email contains Confirm and Reschedule buttons
 // linking to a token-protected page on the Worker. The Worker records the
 // response; the CRM picks it up via getDaySchedConfirmStatuses.
+// Preview state for the confirmation-send modal. The flow is now:
+//   1. User clicks "Send Confirmations" → sendDayConfirmations() builds a preview list
+//      and opens the preview modal. NO emails are sent yet.
+//   2. User reviews each recipient's email, unchecks anyone they don't want,
+//      and clicks "Send N confirmations" → _executeDayConfirmations() does the actual work.
+//   3. User can click "Cancel" to bail with zero side effects.
+let _confPreviewState = { date: null, techName: '', recipients: [], previewIdx: 0 };
+
 async function sendDayConfirmations(date) {
   // Find the plan for this date. Multi-day mode keeps plans in _sched.dayPlans;
   // single-day mode keeps the active plan on _sched.scheduled directly. If the
@@ -13486,8 +13517,95 @@ async function sendDayConfirmations(date) {
   }
   const tech = plan.techId ? getUsers().find(u => u.id === plan.techId) : null;
   const techName = tech?.name || '(tech to be assigned)';
-  const count = plan.scheduled.length;
-  if (!confirm(`Send confirmation request emails to ${count} customer${count===1?'':'s'} for ${formatSchedDate(date)}?\n\nEach customer gets a Confirm and a Request Reschedule button. Their responses show up as badges on this day's plan.`)) return;
+
+  // Build the recipient list and pre-render each one's email HTML using a
+  // placeholder URL — the real token is minted at send time, not now. This
+  // way the preview shows exactly the content the customer will see (date,
+  // time, tech, scope, prep) without burning unused tokens on cancellations.
+  const recipients = [];
+  for (const slot of plan.scheduled) {
+    if (!slot.lead) continue;  // distributor / utility stops — not a customer
+    const lead = slot.lead;
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const customerEmail = (cust?.email || lead.customerEmail || '').trim();
+    const customerName  = cust ? custFullName(cust) : (lead.customerName || 'Customer');
+    const firstName     = (customerName||'').split(' ')[0] || 'there';
+    const previewHtml = _buildSchedConfirmEmailHtml({
+      firstName,
+      dateLabel: formatSchedDate(date),
+      timeLabel: `${fmtTime(slot.startTime)} – ${fmtTime(slot.endTime)}`,
+      techName, lead,
+      confirmUrl: '[unique link will appear in the real email]'
+    });
+    recipients.push({
+      leadId: lead.id, slot, customerName, customerEmail, firstName,
+      selected: !!customerEmail,             // unselect ones with no email by default
+      errorReason: customerEmail ? null : 'No email on file — will be skipped',
+      previewHtml
+    });
+  }
+  if (!recipients.length) { toast('No customers to email — every slot is a stop or has no lead','warning'); return; }
+
+  _confPreviewState = { date, techName, recipients, previewIdx: 0 };
+  _renderConfPreview();
+  document.getElementById('conf-preview-modal').classList.add('show');
+}
+
+// Render the recipient list (left) and the currently-selected recipient's
+// email preview (right). Re-runs after every checkbox toggle or row click.
+function _renderConfPreview() {
+  const list    = document.getElementById('conf-recipients-list');
+  const preview = document.getElementById('conf-email-preview');
+  const sendBtn = document.getElementById('conf-send-btn');
+  const r = _confPreviewState.recipients;
+  const i = _confPreviewState.previewIdx;
+  list.innerHTML = r.map((rec, idx) => {
+    const isCur = idx === i;
+    const cardStyle = isCur
+      ? 'background:rgba(52,152,219,0.12);border:1px solid #3498db'
+      : 'background:transparent;border:1px solid transparent';
+    return `<div onclick="_setConfPreview(${idx})"
+      style="padding:8px 10px;cursor:pointer;border-radius:6px;${cardStyle};margin-bottom:3px;font-size:12.5px">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <input type="checkbox" ${rec.selected?'checked':''} ${rec.errorReason?'disabled':''}
+          onclick="event.stopPropagation();_toggleConfRecipient(${idx})"
+          style="margin-top:3px;accent-color:var(--green);cursor:pointer;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:500">${escHtml(rec.customerName)}</div>
+          <div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(rec.customerEmail || '(no email)')}</div>
+          ${rec.errorReason ? `<div style="font-size:10.5px;color:var(--red);margin-top:2px">${escHtml(rec.errorReason)}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  const cur = r[i];
+  preview.innerHTML = cur ? cur.previewHtml : '<div style="color:#888;font-style:italic">Click a recipient to preview their email.</div>';
+  const n = r.filter(x => x.selected).length;
+  sendBtn.textContent = `Send ${n} confirmation${n===1?'':'s'}`;
+  sendBtn.disabled = n === 0;
+}
+
+function _setConfPreview(idx) { _confPreviewState.previewIdx = idx; _renderConfPreview(); }
+function _toggleConfRecipient(idx) {
+  const rec = _confPreviewState.recipients[idx];
+  if (rec.errorReason) return;  // can't select recipients with no email
+  rec.selected = !rec.selected;
+  _renderConfPreview();
+}
+function closeConfPreview() {
+  document.getElementById('conf-preview-modal').classList.remove('show');
+  _confPreviewState = { date: null, techName: '', recipients: [], previewIdx: 0 };
+}
+
+// The real send loop — fires only after the user clicks Send in the preview modal.
+// Returns nothing; updates UI via toast and renderSchedulerPage.
+async function _executeDayConfirmations() {
+  const { date, techName, recipients } = _confPreviewState;
+  const selected = recipients.filter(r => r.selected && r.customerEmail);
+  if (!selected.length) { toast('No recipients selected','warning'); return; }
+
+  const sendBtn = document.getElementById('conf-send-btn');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
   // Refresh the Graph (Mail.Send) token — same pattern as @-mention emails.
   let canEmail = false;
@@ -13503,7 +13621,12 @@ async function sendDayConfirmations(date) {
   } catch (e) {
     console.warn('[GK] Confirmation: Graph token refresh failed:', e);
   }
-  if (!canEmail) { toast('Sign in to Microsoft and try again — Mail.Send permission required','error'); return; }
+  // Helper: re-enable the Send button if we abort early due to auth failure.
+  const reEnableBtn = () => {
+    const n = selected.length;
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = `Send ${n} confirmation${n===1?'':'s'}`; }
+  };
+  if (!canEmail) { toast('Sign in to Microsoft and try again — Mail.Send permission required','error'); reEnableBtn(); return; }
 
   // Acquire Worker (SMS Relay API) token for /scheduling/issue-token.
   let workerToken = '';
@@ -13511,23 +13634,20 @@ async function sendDayConfirmations(date) {
     workerToken = await _acquireSMSToken();
   } catch (e) {
     toast('Could not authenticate with Scheduling API: ' + e.message, 'error');
+    reEnableBtn();
     return;
   }
-  if (!workerToken) { toast('No Scheduling API token','error'); return; }
+  if (!workerToken) { toast('No Scheduling API token','error'); reEnableBtn(); return; }
 
-  toast(`Sending ${count} confirmation request${count===1?'':'s'}…`, 'info');
-  const sent = [], skipped = [], failed = [];
+  toast(`Sending ${selected.length} confirmation request${selected.length===1?'':'s'}…`, 'info');
+  const sent = [], failed = [];
 
-  for (const slot of plan.scheduled) {
-    if (!slot.lead) continue;  // distributor / utility stops — no customer to email
-    const lead = slot.lead;
-    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
-    const customerEmail = (cust?.email || lead.customerEmail || '').trim();
-    const customerName  = cust ? custFullName(cust) : (lead.customerName || 'Customer');
-    const firstName     = (customerName||'').split(' ')[0] || 'there';
-
-    if (!customerEmail) { skipped.push(`${customerName} (no email)`); continue; }
-
+  for (const rec of selected) {
+    const slot          = rec.slot;
+    const lead          = slot.lead;
+    const customerEmail = rec.customerEmail;
+    const customerName  = rec.customerName;
+    const firstName     = rec.firstName;
     try {
       // 1. Mint a token on the Worker.
       const tokenResp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/scheduling/issue-token', {
@@ -13591,12 +13711,12 @@ async function sendDayConfirmations(date) {
   }
 
   const parts = [];
-  if (sent.length)    parts.push(`sent ${sent.length}`);
-  if (skipped.length) parts.push(`skipped ${skipped.length} (no email)`);
-  if (failed.length)  parts.push(`failed ${failed.length}`);
+  if (sent.length)   parts.push(`sent ${sent.length}`);
+  if (failed.length) parts.push(`failed ${failed.length}`);
   const msg = `Confirmations: ${parts.join(' · ')}`;
   toast(msg, sent.length && !failed.length ? 'success' : sent.length ? 'warning' : 'error');
   if (failed.length) console.warn('[GK] Confirmation failures:', failed);
+  closeConfPreview();
   renderSchedulerPage();
 }
 
