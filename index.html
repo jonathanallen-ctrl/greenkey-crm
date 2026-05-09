@@ -6914,9 +6914,12 @@ async function emailQuote(qid){
   const addr=lead?.siteStreet?`${lead.siteStreet}, ${lead.siteCity||''}`:'your property';
   // Project phrase derived from job type — used throughout the email copy so
   // platform jobs that aren't EV chargers (HVAC, panel replacement, etc.)
-  // read correctly to the customer.
-  const projectPhrase = (typeof getProjectPhrase === 'function') ? getProjectPhrase(lead) : 'electrical project';
-  const isEVProject = (lead && (lead.jobType === 'ev-residential' || lead.jobType === 'nema-1450'));
+  // read correctly to the customer. Use the QUOTE's jobType, not the lead's
+  // — companion quotes (e.g. energy-management add-on attached to an EV-
+  // charger Qmerit lead) need to read by their own scope, not the lead's.
+  const _phraseJobType = q.jobType || lead?.jobType;
+  const projectPhrase = (typeof getProjectPhrase === 'function') ? getProjectPhrase(_phraseJobType) : 'electrical project';
+  const isEVProject = (q.jobType === 'ev-residential' || q.jobType === 'nema-1450');
 
   if(!toEmail){
     toast('No email address on file for this customer — add one in their profile first','warning');
@@ -7985,7 +7988,7 @@ function _buildNoPermitEmail({ q, custFirst, projectPhrase, total, addr }) {
   const noPermitNote = (q.jobType === 'circuit-replacement')
     ? 'This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.'
     : (q.jobType === 'energy-management')
-      ? 'No permit is required for this device install — it lands on existing wiring downstream of an already-permitted circuit.'
+      ? 'No permit is required for this device install — permitting for this is covered by the EV charger installation itself.'
       : 'No permit is required for this scope of work.';
   const body = `Hi ${custFirst},
 
