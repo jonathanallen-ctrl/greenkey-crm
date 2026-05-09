@@ -13139,7 +13139,7 @@ function renderSchedulerPage() {
       ${slots}
       <div class="sched-drive-row" style="margin-top:4px">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v14M3 6l5-5 5 5M3 11l5 4 5-4"/></svg>
-        Return home ${returnStr} — ${fmtTime(last.endTime)}
+        Return home ${returnStr} — leaves ${fmtTime(last.endTime)}, home ${fmtTime(last.endTime + (_sched.returnDriveHrs||0))}
       </div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center">
         ${_sched.dayPlans[_sched.date]?.locked ? `<span class="chip chip-ok" style="font-size:11px">🔒 Locked — marked as scheduled</span>` : ''}
@@ -13798,7 +13798,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
           ${fmtHrs(totalWork)} work · ${fmtHrs(totalDrive)} drive · ${fmtHrs(plan.returnDriveHrs||0)} return  ·  <span style="color:${barColor};font-weight:600">${fmtHrs(totalHrs)} / ${dayHours}h</span>
         </div>
         ${slots}
-        <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}</div>
+        <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}${plan.scheduled.length ? ` — home ${fmtTime((plan.scheduled[plan.scheduled.length-1].endTime||0) + (plan.returnDriveHrs||0))}` : ''}</div>
         ${(() => {
           // Confirmation roll-up for this day: how many of the scheduled jobs
           // have responses, and which states. Drives the Lock button gating.
