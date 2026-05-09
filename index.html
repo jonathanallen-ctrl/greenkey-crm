@@ -10837,10 +10837,27 @@ function fmProcessFiles(files, jobId, cat, subFolder) {
     }
   };
 
+  // Track whether we silently rerouted any non-image drops away from a photo
+  // category so we can show one consolidated toast at the end (instead of one
+  // per file).
+  let _reroutedCount = 0;
   files.forEach(async f => {
     try {
+      // Per-file destination category: if a non-image file lands on a photo
+      // category (site / install), reroute to Documents based on MIME type.
+      // The user shouldn't have to click the right tab before drag-drop —
+      // images go to photos, anything else goes to Documents.
+      const _isImage = (f.type || '').startsWith('image/');
+      const _isPhotoCat = (cat === 'site' || cat === 'install');
+      let _destCat = cat;
+      let _destSubFolder = subFolder;
+      if (_isPhotoCat && !_isImage) {
+        _destCat = 'documents';
+        _destSubFolder = null; // Documents doesn't use sub-folders
+        _reroutedCount++;
+      }
       let dataUrl;
-      if (f.type.startsWith('image/')) {
+      if (_isImage) {
         const result = await compressImg(f);
         if (result.error) {
           toast(`${f.name}: ${result.error}`, 'error');
@@ -10857,9 +10874,13 @@ function fmProcessFiles(files, jobId, cat, subFolder) {
         });
       }
       if (!dataUrl) { toast(`Could not read ${f.name}`, 'error'); if (++done === files.length) refreshUI(); return; }
-      addFileRecord(jobId, cat, subFolder, f, dataUrl);
+      addFileRecord(jobId, _destCat, _destSubFolder, f, dataUrl);
       if (++done === files.length) {
-        toast(`${done} file${done>1?'s':''} uploaded ✓`, 'success');
+        const baseMsg = `${done} file${done>1?'s':''} uploaded ✓`;
+        const reroutedMsg = _reroutedCount > 0
+          ? ` — ${_reroutedCount} non-image file${_reroutedCount>1?'s':''} routed to Documents`
+          : '';
+        toast(baseMsg + reroutedMsg, 'success');
         refreshUI();
       }
     } catch(err) {
