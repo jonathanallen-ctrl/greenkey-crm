@@ -4740,6 +4740,14 @@ function renderQBForm(q){
   if(!wrap) return;
   if(q.type==='quick') renderQuickQuoteForm(q);
   else renderDetailedQuoteForm(q);
+  // Run the appropriate calc once on initial render so totals reflect the
+  // form's default values (e.g. base install for the pre-selected panel
+  // location). Without this, a brand-new quote shows L&M $0 until the user
+  // nudges a field. Idempotent — recomputes from current form state.
+  try {
+    if (q.type === 'quick'    && typeof onQQChange === 'function') onQQChange(q.id);
+    else if (q.type === 'detailed' && typeof onDQChange === 'function') onDQChange(q.id);
+  } catch(_){}
 }
 
 // ── QUICK QUOTE FORM (dispatcher) ──
