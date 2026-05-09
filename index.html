@@ -4702,10 +4702,24 @@ function renderQuoteBuilder(qid){
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 1H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V5l-4-4z"/><path d="M9 1v4h4"/></svg>
             Download Quote PDF
           </button>
-          <button id="qb-email-btn" class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
-            Email Quote to Customer
-          </button>
+          ${(() => {
+            // Hide the customer-email button for sources that handle their
+            // own customer communications: Qmerit/Electrum/Treehouse (always
+            // platform-paid), and AF1 quotes that are bill-to-referrer (the
+            // homeowner doesn't get the quote from us in that flow).
+            const _hidden = (typeof isQuotePlatformPaid === 'function' && isQuotePlatformPaid(q))
+                         || (typeof isQuoteBilledToReferrer === 'function' && isQuoteBilledToReferrer(q));
+            if (_hidden) {
+              const _why = (isQuotePlatformPaid(q))
+                ? `Customer is contacted through ${q.source} — no direct email`
+                : `Bill-to is the referrer — no homeowner email needed`;
+              return `<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:6px 4px;line-height:1.4">${_why}</div>`;
+            }
+            return `<button id="qb-email-btn" class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
+              Email Quote to Customer
+            </button>`;
+          })()}
           <button class="btn btn-g btn-full" onclick="duplicateQuote('${q.id}')" title="Create another option for this lead starting from a copy of this quote">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="10" height="10" rx="1"/><path d="M2 10V3a1 1 0 0 1 1-1h7"/></svg>
             Duplicate as New Option
@@ -6859,6 +6873,18 @@ let _pendingEmail = null;
 
 async function emailQuote(qid){
   const q=getQuote(qid);if(!q)return;
+  // Defensive guard — the button is hidden for these sources but if it's
+  // triggered another way (legacy keybind, stale render, console, etc.)
+  // confirm before opening the modal so we don't accidentally bypass the
+  // platform / referrer billing flow.
+  const _platformPaid = (typeof isQuotePlatformPaid === 'function') && isQuotePlatformPaid(q);
+  const _referrerBilled = (typeof isQuoteBilledToReferrer === 'function') && isQuoteBilledToReferrer(q);
+  if (_platformPaid || _referrerBilled) {
+    const reason = _platformPaid
+      ? `${q.source} customers receive quotes through the ${q.source} portal — sending a direct GreenKey email is usually wrong here.`
+      : `This quote is billed to the referrer — the homeowner shouldn't receive a direct GreenKey quote email.`;
+    if (!confirm(`${reason}\n\nSend the email anyway?`)) return;
+  }
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
   // For B2B-referrer-billed quotes, default the recipient to the referrer's
