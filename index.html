@@ -4034,6 +4034,26 @@ function upsertQuote(data){
   saveQuotes(a); return data.id||a[a.length-1].id;
 }
 
+// Delete a quote from the job-detail Quote section. Confirms first because
+// this is destructive and irreversible. Refuses to delete approved or
+// invoiced quotes (those represent commitments — go un-set the status first
+// if you really need to remove the record).
+function deleteQuoteFromJobDetail(quoteId, leadId) {
+  const arr = getQuotes();
+  const q = arr.find(x => x.id === quoteId);
+  if (!q) { toast('Quote not found', 'error'); return; }
+  if (q.status === 'approved' || q.status === 'invoiced' || q.status === 'contingent-approved') {
+    toast('Cannot delete an approved/invoiced quote. Change its status first.', 'warning');
+    return;
+  }
+  if (!confirm(`Delete quote ${quoteId} (${fmt$(q.quoteTotal)})?\n\nThis cannot be undone. The job and customer records are not affected.`)) return;
+  saveQuotes(arr.filter(x => x.id !== quoteId));
+  toast('Quote deleted', 'success');
+  // Re-render the active job detail so the row disappears.
+  if (S.jobDetailId === leadId) renderJobDetail(leadId);
+  else if (S.page === 'quotes') renderQuotesPage();
+}
+
 // ── BILL-TO HELPERS ──
 // The "service location" is always the homeowner's property — the customer
 // linked to the lead. The "bill-to" defaults to the same homeowner but can be
@@ -4337,6 +4357,32 @@ function startQuoteBuilder(){
   const leadId=sel?.value||(sel?.options[0]?.value)||'';
   if(!leadId){toast('Please select a job from the list','error');return;}
   const qtype=document.querySelector('input[name="qt-type"]:checked')?.value||'quick';
+
+  // Duplicate-quote guard: if this lead already has a draft quote, ask the
+  // user whether to open the existing one or create another. The "another"
+  // path is for legitimate multi-option scenarios (e.g. customer wants to
+  // see indoor garage vs. outdoor wall pricing) — but the default is to
+  // open the existing draft so accidental clicks don't pile up duplicates.
+  const existingDrafts = getQuotes()
+    .filter(q => q.leadId === leadId && (q.status === 'draft' || !q.status))
+    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (existingDrafts.length) {
+    const list = existingDrafts.map(q =>
+      `  • ${q.id} — ${fmt$(q.quoteTotal)} (${q.type === 'detailed' ? 'Detailed' : 'Quick'})`
+    ).join('\n');
+    const msg =
+      `This customer already has ${existingDrafts.length} draft quote${existingDrafts.length === 1 ? '' : 's'}:\n\n` +
+      list +
+      `\n\nClick OK to open the most recent draft and continue editing.\n` +
+      `Click Cancel to create another quote anyway (use this only when offering multiple options, e.g. different locations).`;
+    if (confirm(msg)) {
+      closeDrawer();
+      openQuoteBuilder(existingDrafts[0].id);
+      return;
+    }
+    // User chose Cancel → falls through to create a new quote intentionally
+  }
+
   closeDrawer();
   const lead=getLead(leadId);
   const _prefs = getPrefs();
@@ -9300,16 +9346,51 @@ function renderJobDetail(id) {
   </div>`;
 
   // ── Job Details ──
-  const quoteLinkHtml = latestQ ? `<div class="qt-link-row">
-    <span style="font-family:var(--mono);font-size:12px;color:var(--text-muted)">${latestQ.id}</span>
-    ${quoteStatusChip(latestQ.status)}
-    <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto">${fmt$(latestQ.quoteTotal)}</span>
-    <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openQuoteBuilder('${latestQ.id}')">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 2l3 3-8 8H3v-3L11 2z"/></svg>
-      Edit Quote
-    </button>
-    <button class="btn btn-g" style="padding:4px 10px;font-size:12px" onclick="openNewQuote_ForJob('${id}')" title="Create a new quote for this job">+ New</button>
-  </div>` : `<div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+  // Show EVERY quote on this lead — not just the latest — so duplicates and
+  // multi-option quotes are both visible. Newest is at the top, with a
+  // "Latest" chip on the first row so the order is obvious. Each row shows
+  // its created date and a tooltip with the last-updated timestamp on hover.
+  const allQuotesForLead = quotes
+    .filter(q => q.leadId === id)
+    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  // Compact date formatter: "May 8" — full timestamp lives in the title attr.
+  const fmtQuoteDate = (iso) => {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch { return iso.slice(0, 10); }
+  };
+  const fmtQuoteFullTs = (iso) => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch { return iso; }
+  };
+  const quoteRowHtml = (q, idx) => {
+    const created = fmtQuoteDate(q.createdAt);
+    const fullTs  = `Created: ${fmtQuoteFullTs(q.createdAt)}` + (q.updatedAt && q.updatedAt !== q.createdAt ? ` · Last edited: ${fmtQuoteFullTs(q.updatedAt)}` : '');
+    const latestChip = idx === 0 && allQuotesForLead.length > 1
+      ? `<span class="chip chip-ok" style="font-size:10px;padding:1px 6px">Latest</span>`
+      : '';
+    return `<div class="qt-link-row">
+      <span style="font-family:var(--mono);font-size:12px;color:var(--text-muted)">${q.id}</span>
+      <span style="font-size:11.5px;color:var(--text-muted)" title="${escHtml(fullTs)}">${created}</span>
+      ${latestChip}
+      ${quoteStatusChip(q.status)}
+      <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto">${fmt$(q.quoteTotal)}</span>
+      <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openQuoteBuilder('${q.id}')">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 2l3 3-8 8H3v-3L11 2z"/></svg>
+        Edit
+      </button>
+      <button class="btn btn-g" style="padding:4px 8px;font-size:11px;color:var(--red);border-color:var(--red-dim)" onclick="deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote — useful for cleaning up duplicates">×</button>
+    </div>`;
+  };
+  const quoteLinkHtml = allQuotesForLead.length ? `
+    ${allQuotesForLead.map((q, i) => quoteRowHtml(q, i)).join('')}
+    <div style="margin-top:6px"><button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="openNewQuote_ForJob('${id}')" title="Create another quote — only when offering multiple options to the customer">+ Add option</button></div>
+  ` : `<div style="display:flex;align-items:center;gap:10px;margin-top:6px">
     <span style="font-size:12px;color:var(--text-muted)">No quote yet</span>
     <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
   </div>`;
@@ -9954,7 +10035,18 @@ function fmBackToJob() {
   if (jobId) setTimeout(() => openJobDetail(jobId), 50);
 }
 function fmSetCat(cat)          { fmState().cat = cat; renderFilesPage(); }
-function fmSetJob(jobId)        { fmState().jobId = jobId; fmState().cat = 'site'; renderFilesPage(); }
+function fmSetJob(jobId, cat) {
+  fmState().jobId = jobId;
+  // If no explicit cat passed, detect the currently-active inline tab from
+  // the DOM so Full View opens to whatever the user was already viewing
+  // (Documents stays on Documents, etc. — instead of resetting to Site).
+  if (!cat) {
+    const active = document.querySelector('[id^="jd-fm-tab-"].active');
+    cat = active?.id?.replace('jd-fm-tab-', '') || 'site';
+  }
+  fmState().cat = cat;
+  renderFilesPage();
+}
 
 // ── FILES PAGE RENDERER ──
 function renderFilesPage() {
@@ -10346,14 +10438,27 @@ function jdFMSetCat(jobId, cat) {
 
 function renderFMJobCat(jobId, cat) {
   if (cat === 'documents') {
-    const docs = getJobFiles(jobId).filter(f => f.category === 'documents');
-    return `<div class="dzone" id="jd-fm-doc-dz" style="padding:14px"
+    const docs = getJobFiles(jobId).filter(f => f.category === 'documents')
+      .sort((a,b) => (b.uploadedAt||'').localeCompare(a.uploadedAt||''));
+    const dzone = `<div class="dzone" id="jd-fm-doc-dz" style="padding:14px"
         ondragover="fmDragOver(event,'jd-fm-doc-dz')" ondragleave="fmDragLeave('jd-fm-doc-dz')" ondrop="fmDrop(event,'${jobId}','documents',null,'jd-fm-doc-dz')">
         <input type="file" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents',null)">
         <div class="dtitle" style="font-size:12px">Drop docs here or click to upload</div>
         <div class="dsub" style="font-size:11px">PDF, Word, Excel, images — all file types accepted</div>
-      </div>
-      ${docs.length ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px">${docs.length} document${docs.length!==1?'s':''} stored — click "Full View →" to manage</div>` : ''}`;
+      </div>`;
+    if (!docs.length) return dzone;
+    // Inline clickable rows — same openFMFile handler as the full Files page.
+    const rows = docs.map(f => {
+      const ext = (f.mimeType||'').split('/')[1]?.split(';')[0]?.toUpperCase() || f.name.split('.').pop()?.toUpperCase() || 'FILE';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--border);font-size:12.5px">
+        <a href="javascript:void(0)" onclick="openFMFile('${f.id}')" style="color:var(--blue);text-decoration:none;cursor:pointer;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</a>
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${ext}</span>
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${fmtSize(f.size)}</span>
+        <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">${f.uploadedAt?.slice(0,10)||''}</span>
+        <button class="li-del" style="flex-shrink:0" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button>
+      </div>`;
+    }).join('');
+    return `${dzone}<div style="margin-top:8px">${rows}</div>`;
   }
 
   const files = getJobFiles(jobId).filter(f => f.category === cat);
@@ -12009,6 +12114,16 @@ const _sched = {
   dayPlans: {}     // 'YYYY-MM-DD' → { techId, scheduled[], unscheduled[], returnDriveHrs, built }
 };
 
+// Day plans are stored keyed by date AND tech, so two crews on the same day
+// each get their own plan (e.g. Chase + JD as one crew, Jonathan solo as
+// another, both on 5/11). When no tech is selected ("Any tech" view), plans
+// land at `${date}___any`. Old plans saved before this change used just
+// `${date}` and stay in localStorage as orphans — accessed only if the user
+// happens to switch back to "Any tech" view on a date that had a legacy plan.
+function _dayPlanKey(date, techId) {
+  return `${date}__${techId || '_any'}`;
+}
+
 // Persisted-to-localStorage scheduler state. Survives page reloads so a plan
 // built yesterday is still visible today. Saved any time a meaningful change
 // happens (build, date change, mark scheduled).
@@ -12061,9 +12176,9 @@ function _loadSched() {
           .filter(Boolean);
       }
     }
-    // If the active single-day plan exists for the persisted date, restore it
-    // into the live single-day fields.
-    const cur = _sched.dayPlans[_sched.date];
+    // If the active single-day plan exists for the persisted date+tech,
+    // restore it into the live single-day fields.
+    const cur = _sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)];
     if (cur && cur.built) {
       _sched.scheduled      = cur.scheduled || [];
       _sched.unscheduled    = cur.unscheduled || [];
@@ -12148,20 +12263,25 @@ async function reorderSchedSlot(idx, dir) {
 // milestones — just throws away the built schedule for that date so the
 // user can start over with a fresh build.
 function clearSchedDayPlan() {
-  if (!_sched.dayPlans[_sched.date]) {
-    toast('No saved plan for this date', 'info'); return;
+  const planKey = _dayPlanKey(_sched.date, _sched.techId);
+  const myTechId = _sched.techId || '';
+  if (!_sched.dayPlans[planKey]) {
+    toast('No saved plan for this date+tech', 'info'); return;
   }
-  const wasLocked = !!_sched.dayPlans[_sched.date].locked;
+  const wasLocked = !!_sched.dayPlans[planKey].locked;
   if (wasLocked) {
-    if (!confirm('This plan is locked (marked as scheduled). Clearing it will:\n  • Remove the saved schedule view for this date\n  • Un-mark every job that was scheduled for this date (their installScheduled milestone is cleared)\n\nThe jobs themselves are not deleted. Continue?')) return;
+    if (!confirm('This plan is locked (marked as scheduled). Clearing it will:\n  • Remove the saved schedule view for this date+tech\n  • Un-mark every job that was scheduled for THIS crew on THIS date (other crews\' plans for the same date are not touched)\n\nThe jobs themselves are not deleted. Continue?')) return;
   }
-  // If the plan was locked, also clear lead milestones for this date.
+  // Only clear milestones that belong to THIS tech on THIS date — leave
+  // other crews' plans for the same date alone.
   if (wasLocked) {
     const arr = getLeads();
     let cleared = 0;
     arr.forEach(l => {
       const ms = l.milestones || {};
-      if (ms.installScheduled?.done && ms.installScheduled.date === _sched.date) {
+      if (ms.installScheduled?.done
+          && ms.installScheduled.date === _sched.date
+          && (ms.installScheduled.techId || '') === myTechId) {
         delete l.milestones.installScheduled;
         l.updatedAt = new Date().toISOString();
         cleared++;
@@ -12169,7 +12289,7 @@ function clearSchedDayPlan() {
     });
     if (cleared) saveLeads(arr);
   }
-  delete _sched.dayPlans[_sched.date];
+  delete _sched.dayPlans[planKey];
   _sched.scheduled = []; _sched.unscheduled = []; _sched.returnDriveHrs = 0; _sched.restroomHrs = 0;
   _sched.built = false;
   _persistSched();
@@ -12177,24 +12297,23 @@ function clearSchedDayPlan() {
   renderSchedulerPage();
 }
 
-// Called from the date input. Restores the previously-built plan if there is
-// one for the new date, or clears the day-plan view if not.
-function _changeSchedDate(newDate) {
-  if (newDate === _sched.date) return;
-  _sched.date = newDate;
-  const cur = _sched.dayPlans[newDate];
+// Restore the live single-day fields from the (date, techId)-keyed plan.
+// Used by both _changeSchedDate and _changeSchedTech — anytime the
+// date↔tech selection changes, look up the right plan and load it.
+function _loadActiveDayPlan() {
+  const key = _dayPlanKey(_sched.date, _sched.techId);
+  const cur = _sched.dayPlans[key];
   if (cur && cur.built) {
     _sched.scheduled      = cur.scheduled || [];
     _sched.unscheduled    = cur.unscheduled || [];
     _sched.returnDriveHrs = cur.returnDriveHrs || 0;
     _sched.restroomHrs    = cur.restroomHrs || 0;
-    _sched.techId         = cur.techId || _sched.techId;
     _sched.startTime      = cur.startTime || _sched.startTime;
     _sched.stopDistributor= !!cur.stopDistributor;
     _sched.stopRestroom   = !!cur.stopRestroom;
+    _sched.allowOT        = !!cur.allowOT;
     _sched.built          = true;
-    // Auto-check the plan's jobs in the pool, so clicking Build right away
-    // would rebuild with the same jobs. User can add/remove from there.
+    // Auto-check this plan's jobs in the pool so a quick rebuild includes them.
     _sched.included = {};
     cur.scheduled.forEach(s => { if (s.lead) _sched.included[s.lead.id] = true; });
   } else {
@@ -12203,8 +12322,27 @@ function _changeSchedDate(newDate) {
     _sched.returnDriveHrs = 0;
     _sched.restroomHrs    = 0;
     _sched.built          = false;
-    _sched.included       = {};   // fresh slate for this date
+    _sched.included       = {};   // fresh slate for this date+tech
   }
+}
+
+// Called from the date input. Restores the previously-built plan if there is
+// one for the new date+current tech, or clears the day-plan view if not.
+function _changeSchedDate(newDate) {
+  if (newDate === _sched.date) return;
+  _sched.date = newDate;
+  _loadActiveDayPlan();
+  _persistSched();
+  renderSchedulerPage();
+}
+
+// Called from the tech dropdown. Each (date, tech) combo has its own plan.
+// Switching tech preserves the previous tech's plan in dayPlans and loads
+// (or clears) the plan for the new tech on the same date.
+function _changeSchedTech(newTechId) {
+  if (newTechId === _sched.techId) return;
+  _sched.techId = newTechId;
+  _loadActiveDayPlan();
   _persistSched();
   renderSchedulerPage();
 }
@@ -12364,20 +12502,24 @@ function getSchedulableJobs(techId) {
   //   1. Gate filter — permit, charger, archive, already-scheduled-for-other-day.
   //   2. Skill filter (optional) — if techId is supplied, drop jobs whose
   //      requiredSkills the tech can't perform.
-  // EXCEPTION: jobs already committed for THE ACTIVE scheduler date stay in
-  // the pool so the user can re-arrange today's schedule (add/remove jobs and
-  // rebuild). Jobs committed for a different date drop out as before.
+  // EXCEPTION: jobs already committed for THE ACTIVE (date, tech) combo stay
+  // in the pool so the user can re-arrange this crew's schedule. Jobs
+  // committed for a different date OR a different tech drop out — booked
+  // elsewhere, not available to this crew.
   const tech = techId ? getUsers().find(u => u.id === techId) : null;
-  const activeDate = _sched.date;
+  const activeDate   = _sched.date;
+  const activeTechId = _sched.techId || '';
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
     if (ms.installScheduled?.done) {
-      // Job has been committed to a date. Include it in the pool ONLY if
-      // that date is the date currently being scheduled — so the user can
-      // re-shape today's plan (drop a job, swap it, add to it) by selecting
-      // and re-building. Jobs scheduled for OTHER dates stay excluded.
+      // Job has been committed. Show it in the pool ONLY if it belongs to the
+      // currently-viewed (date, tech) plan — that's the user's "I'm rebuilding
+      // this crew's day" view. Anything scheduled for a different day OR a
+      // different tech is treated as booked and stays out of the pool.
       if (ms.installScheduled.date !== activeDate) return false;
+      const milestoneTechId = ms.installScheduled.techId || '';
+      if (milestoneTechId !== activeTechId) return false;
       // Falls through — applies skill filter below, but skips gates.
     } else {
       // Not yet committed: apply the normal pre-schedule gates.
@@ -13142,7 +13284,7 @@ function renderSchedulerPage() {
         Return home ${returnStr} — leaves ${fmtTime(last.endTime)}, home ${fmtTime(last.endTime + (_sched.returnDriveHrs||0))}
       </div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        ${_sched.dayPlans[_sched.date]?.locked ? `<span class="chip chip-ok" style="font-size:11px">🔒 Locked — marked as scheduled</span>` : ''}
+        ${_sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)]?.locked ? `<span class="chip chip-ok" style="font-size:11px">🔒 Locked — marked as scheduled</span>` : ''}
         <button class="btn btn-p" onclick="downloadSchedICS()">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="12" rx="1.5"/><path d="M1 7h14M5 1v4M11 1v4"/></svg>
           Download .ics
@@ -13151,7 +13293,7 @@ function renderSchedulerPage() {
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
           Send Confirmations
         </button>
-        <button class="btn btn-g" onclick="markDayScheduled()" ${_sched.dayPlans[_sched.date]?.locked ? 'disabled title="Already marked"' : ''}>✓ Mark all as scheduled</button>
+        <button class="btn btn-g" onclick="markDayScheduled()" ${_sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)]?.locked ? 'disabled title="Already marked"' : ''}>✓ Mark all as scheduled</button>
         <button class="btn btn-g" style="margin-left:auto;color:var(--text-muted);font-size:11px" onclick="clearSchedDayPlan()" title="Wipe this day's saved plan and start over">Clear plan</button>
       </div>
       ${_sched.unscheduled.length ? `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${_sched.unscheduled.length} job(s) didn't fit today — they remain in the pool for another day.</div>` : ''}`;
@@ -13194,8 +13336,8 @@ function renderSchedulerPage() {
       <div>
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Tech</div>
         <select class="psel" id="sched-tech"
-          onchange="_sched.techId=this.value;_sched.built=false;renderSchedulerPage()"
-          title="Filter the pool to jobs this tech is qualified for. 'Any tech' shows everything.">
+          onchange="_changeSchedTech(this.value)"
+          title="Filter the pool to jobs this tech is qualified for. Each tech keeps a separate day plan — switching here loads the right one.">
           ${techOpts}
         </select>
       </div>
@@ -13493,8 +13635,9 @@ async function runScheduler() {
   _sched.restroomHrs    = result.restroomHrs || 0;
   _sched.loading        = false;
   // Persist the built plan into dayPlans so it survives date changes and
-  // page reloads. Mirror the live single-day fields into a per-date snapshot.
-  _sched.dayPlans[_sched.date] = {
+  // page reloads. Keyed by date+tech — two crews on the same day each get
+  // their own slot.
+  _sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)] = {
     scheduled:      _sched.scheduled,
     unscheduled:    _sched.unscheduled,
     returnDriveHrs: _sched.returnDriveHrs,
@@ -13503,6 +13646,7 @@ async function runScheduler() {
     startTime:      _sched.startTime,
     stopDistributor:_sched.stopDistributor,
     stopRestroom:   _sched.stopRestroom,
+    allowOT:        _sched.allowOT,
     built:          true,
     builtAt:        new Date().toISOString()
   };
@@ -13580,12 +13724,18 @@ function setSchedRange(field, val) {
 
 // Build a single day's plan inside multi-day mode. Honors that day's techId.
 async function buildSchedDay(date) {
+  // Multi-day plans are keyed by date alone (the day card's techId is stored
+  // ON the plan). Look up by the bare date for backward compat with how the
+  // multi-day mode was built — single-day per-tech keying lives separately.
   const plan = _sched.dayPlans[date];
   if (!plan) return;
-  // Pool: selected schedulable jobs minus anything already scheduled on a different day in this range.
+  // Pool: selected schedulable jobs minus anything already scheduled on a
+  // different day in this range. Other tech's plans for the SAME date are
+  // already filtered out by the pool's milestone check.
   const otherScheduledIds = new Set();
   Object.entries(_sched.dayPlans).forEach(([d, p]) => {
     if (d === date) return;
+    if (!Array.isArray(p?.scheduled)) return;
     p.scheduled.forEach(s => { if (s.lead) otherScheduledIds.add(s.lead.id); });
   });
   const pool = getSelectedSchedJobs(plan.techId || null).filter(l => !otherScheduledIds.has(l.id));
@@ -14179,13 +14329,14 @@ function lockSchedDay(date) {
 function commitSchedDay(date) {
   const plan = _sched.dayPlans[date];
   if (!plan || !plan.scheduled.length) return;
+  const myTechId = plan.techId || '';
   const arr = getLeads();
   plan.scheduled.forEach(s => {
     if (!s.lead) return;  // distributor / utility stops have no lead
     const idx = arr.findIndex(l => l.id === s.lead.id);
     if (idx < 0) return;
     if (!arr[idx].milestones) arr[idx].milestones = {};
-    arr[idx].milestones.installScheduled = { done: true, date };
+    arr[idx].milestones.installScheduled = { done: true, date, techId: myTechId };
     if (arr[idx].scheduleOverride) delete arr[idx].scheduleOverride;
     arr[idx].updatedAt = new Date().toISOString();
   });
@@ -14201,37 +14352,40 @@ function commitSchedDay(date) {
 // ── MARK AS SCHEDULED ──
 function markDayScheduled() {
   if (!_sched.scheduled.length) return;
+  const planKey  = _dayPlanKey(_sched.date, _sched.techId);
+  const myTechId = _sched.techId || '';
   // Persist the plan (with locked status) into dayPlans BEFORE we update the
   // leads' milestones — the persistent plan should remain visible on this
   // date even after the jobs leave the pool.
-  if (_sched.dayPlans[_sched.date]) {
-    _sched.dayPlans[_sched.date].locked = true;
-    _sched.dayPlans[_sched.date].lockedAt = new Date().toISOString();
+  if (_sched.dayPlans[planKey]) {
+    _sched.dayPlans[planKey].locked = true;
+    _sched.dayPlans[planKey].lockedAt = new Date().toISOString();
   }
   const arr = getLeads();
-  // Build the "in current plan" set for reconciliation below.
   const inPlanIds = new Set(
     _sched.scheduled.filter(s => s.lead).map(s => s.lead.id)
   );
-  // (a) Set installScheduled for every lead in the current plan.
+  // (a) Set installScheduled for every lead in the current plan, tagging the
+  //     tech so other crews' pools know not to show this job.
   _sched.scheduled.forEach(s => {
     if (!s.lead) return;  // distributor / utility stops have no lead
     const idx = arr.findIndex(l => l.id === s.lead.id);
     if (idx < 0) return;
     if (!arr[idx].milestones) arr[idx].milestones = {};
-    arr[idx].milestones.installScheduled = { done: true, date: _sched.date };
-    // Once actually scheduled, the override has served its purpose — clear it.
+    arr[idx].milestones.installScheduled = { done: true, date: _sched.date, techId: myTechId };
     if (arr[idx].scheduleOverride) delete arr[idx].scheduleOverride;
     arr[idx].updatedAt = new Date().toISOString();
   });
   // (b) Reconcile: clear installScheduled for any lead that WAS scheduled for
-  //     THIS date but isn't in the current plan anymore. Without this, removing
-  //     a job from a plan and re-Mark-all-ing would leave a stale milestone.
+  //     THIS (date, tech) combo but isn't in the current plan anymore. Other
+  //     tech's plans for this date are left alone — they belong to a
+  //     different crew and shouldn't be touched by this Mark.
   let removedCount = 0;
   arr.forEach(l => {
     const ms = l.milestones || {};
     if (ms.installScheduled?.done
         && ms.installScheduled.date === _sched.date
+        && (ms.installScheduled.techId || '') === myTechId
         && !inPlanIds.has(l.id)) {
       delete l.milestones.installScheduled;
       l.updatedAt = new Date().toISOString();
