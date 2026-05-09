@@ -1525,7 +1525,11 @@ const JOB_TYPES = [
   // Energy systems (Detailed Quote with templates — Quick Quote forms in a future round)
   {id:'battery-system',      label:'Battery System',                description:'Powerwall / Enphase / Generac / FranklinWH',qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'battery',         category:'Energy Systems'},
   {id:'v2h-system',          label:'V2H System',                    description:'Vehicle-to-Home bidirectional EVSE',     qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'v2h',             category:'Energy Systems'},
-  {id:'generator',           label:'Generator Install',             description:'Standby or portable generator wiring',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'generator',       category:'Energy Systems'}
+  {id:'generator',           label:'Generator Install',             description:'Standby or portable generator wiring',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'generator',       category:'Energy Systems'},
+  {id:'energy-management',   label:'Energy Management Device',      description:'EV Tap, DCC, SimpleSwitch, etc. (load-shed / branch-circuit EMS)', qqEnabled:false, permitDefault:0, permitQmerit:0, noPermit:true, category:'Energy Systems'},
+
+  // Catch-all for one-off scopes that don't fit any of the above
+  {id:'custom',              label:'Custom / Other',                description:'One-off scope — write your own line items', qqEnabled:false, permitDefault:0, permitQmerit:0, noPermit:true, category:'Other'}
 ];
 
 // Lookup helper
@@ -1684,7 +1688,9 @@ const _PROJECT_PHRASES = {
   'v2h-system':          'V2H system installation',
   'new-service':         'new electrical service installation',
   'service-upgrade':     'electrical service upgrade',
-  'generator':           'generator installation'
+  'generator':           'generator installation',
+  'energy-management':   'energy management device installation',
+  'custom':              'electrical project'
 };
 function getProjectPhrase(leadOrJobType) {
   // Accept either a lead object or a raw jobType string for flexibility.
@@ -6058,10 +6064,11 @@ function _autoScopePrimary(q){
     return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}`;
   }
 
-  // Battery / V2H / Service / Generator — fallback (Detailed Quote drives the scope)
+  // Battery / V2H / Service / Generator / EMS / Custom — fallback (Detailed Quote drives the scope)
   if (q.jobType === 'battery-system' || q.jobType === 'v2h-system' ||
       q.jobType === 'new-service'    || q.jobType === 'service-upgrade' ||
-      q.jobType === 'generator') {
+      q.jobType === 'generator'      || q.jobType === 'energy-management' ||
+      q.jobType === 'custom') {
     const t = getJobType(q.jobType);
     return `${t ? t.label : 'Custom installation'} per detailed scope below. All work performed to NEC standards and local code requirements.`;
   }
@@ -6130,6 +6137,9 @@ function autoExclusions(q){
     lines.push('• Battery / V2H equipment (customer or program-supplied unless line-itemed below)');
   } else if (q.jobType === 'new-service' || q.jobType === 'service-upgrade') {
     lines.push('• Utility-side coordination charges (paid by homeowner directly to the utility)');
+  } else if (q.jobType === 'energy-management') {
+    lines.push('• Energy management hardware (customer or program-supplied unless line-itemed below)');
+    lines.push('• Any work outside the device install (panel changes, new circuits, etc.) — separate scope');
   }
   lines.push('• Drywall or wall repair','• Any electrical work not described above');
   if ((q.qq?.runSegs||[]).some(s => s.type && s.type.includes('trench'))) {
