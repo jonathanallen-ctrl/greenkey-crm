@@ -17944,13 +17944,16 @@ function applyAIDraft() {
     aiDraftedAt: new Date().toISOString()
   });
 
-  // Recompute totals via existing detailed-quote pipeline
-  if (typeof onDQChange === 'function') {
-    try { onDQChange(_aiDraftQuoteId); } catch(_){}
-  }
-  // Re-render the form so the new lines, labor, permit etc. are visible
+  // ORDER MATTERS: re-render the form FIRST so the DOM inputs (dq-hours,
+  // dq-rate, dq-permit, dq-travel) reflect the freshly-applied AI values.
+  // onDQChange reads from the DOM — if we recompute before re-rendering,
+  // it'd read the stale "0" hours and clobber the AI's laborHours back to 0.
   if (typeof renderQBForm === 'function') {
     try { renderQBForm(getQuote(_aiDraftQuoteId)); } catch(_){}
+  }
+  // Now recompute totals via the existing detailed-quote pipeline.
+  if (typeof onDQChange === 'function') {
+    try { onDQChange(_aiDraftQuoteId); } catch(_){}
   }
 
   toast('AI draft applied — review before sending', 'success');
