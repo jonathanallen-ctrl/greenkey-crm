@@ -1461,20 +1461,25 @@ const CK = 'gk_customers', LK = 'gk_leads';
 try { localStorage.removeItem('gk_biometric'); } catch(_){}
 
 // ── STAGES ──
+// Naming convention: each stage describes either an active phase ("we're
+// doing this now") or a discrete state we're waiting in ("Awaiting X" =
+// waiting for the named entity to happen). Avoids ambiguous past-tense
+// labels like "Permit Applied" that don't indicate whether the permit is in
+// hand. IDs stay stable so existing data and code don't need to migrate.
 const STAGES = [
   {id:'lead-received',    label:'Lead Received',     col:'blue'},
   {id:'info-gathering',   label:'Info Gathering',    col:'blue'},
   {id:'estimating',       label:'Estimating',        col:'amber'},
-  {id:'quote-delivered',  label:'Quote Delivered',   col:'amber'},
+  {id:'quote-delivered',  label:'Awaiting Customer', col:'amber'},
   {id:'quote-approved',   label:'Quote Approved',    col:'green'},
-  {id:'utility-approval', label:'Utility Approval',  col:'purple'},
-  {id:'permit-applied',   label:'Permit Applied',    col:'amber'},
-  {id:'charger-confirmed',label:'Charger Confirmed', col:'blue'},
+  {id:'utility-approval', label:'Awaiting Utility',  col:'purple'},
+  {id:'permit-applied',   label:'Awaiting Permit',   col:'amber'},
+  {id:'charger-confirmed',label:'Awaiting Charger',  col:'blue'},
   {id:'scheduled',        label:'Scheduled',         col:'green'},
   {id:'pre-install',      label:'Pre-Install',       col:'amber'},
   {id:'installation',     label:'Installation',      col:'green'},
   {id:'post-install-docs',label:'Post-Install Docs', col:'amber'},
-  {id:'final-inspection', label:'Final Inspection',  col:'amber'},
+  {id:'final-inspection', label:'Awaiting Inspection', col:'amber'},
   {id:'invoiced',         label:'Invoiced',          col:'green'},
   {id:'archived',         label:'Archived',          col:'muted'}
 ];
@@ -4029,9 +4034,106 @@ function saveQuotes(a){localStorage.setItem(QK,JSON.stringify(a));queueSPSync();
 function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 function upsertQuote(data){
   const a=getQuotes(),idx=a.findIndex(q=>q.id===data.id),now=new Date().toISOString();
+  const prevStatus = idx >= 0 ? a[idx].status : null;
   if(idx>=0){a[idx]={...a[idx],...data,updatedAt:now};}
   else{a.push({...data,id:data.id||'qt-'+Date.now(),createdAt:now,updatedAt:now});}
-  saveQuotes(a); return data.id||a[a.length-1].id;
+  saveQuotes(a);
+  // Side effect: when a quote transitions INTO an approved state, fire the
+  // pre-install task generator. Detects the transition from any non-approved
+  // status to 'approved' or 'contingent-approved'. Idempotent — if status
+  // didn't actually change, no tasks are created.
+  const newStatus = (idx >= 0 ? a[idx].status : data.status);
+  const becameApproved = (newStatus === 'approved' || newStatus === 'contingent-approved')
+    && prevStatus !== 'approved' && prevStatus !== 'contingent-approved';
+  if (becameApproved) {
+    try { _autoCreatePreInstallTasks(idx >= 0 ? a[idx] : a[a.length-1]); }
+    catch (e) { console.warn('[GK] Auto pre-install tasks failed:', e); }
+  }
+  return data.id||a[a.length-1].id;
+}
+
+// Regex that detects scope language requiring a Miss Utility / locate call.
+// Conservative — false positives are safer than missing one. User can flip
+// the flag manually on the quote builder either way.
+const _MU_SCOPE_REGEX = /\b(ground rod|trench|trenching|underground|service entrance|saw cut|sawcut|directional bore|excavat|dig\s|digging|conduit\s+below\s+grade|underground feeder)\b/i;
+
+// Job types that ALWAYS require a Miss Utility call — these jobs always
+// involve ground rods (NEC requires GES on every new service / service
+// upgrade). Pre-checks the flag regardless of scope wording.
+const _MU_REQUIRED_JOB_TYPES = ['service-upgrade', 'new-service'];
+
+function _scopeRequiresMissUtility(scope, jobType) {
+  if (jobType && _MU_REQUIRED_JOB_TYPES.includes(jobType)) return true;
+  if (!scope) return false;
+  return _MU_SCOPE_REGEX.test(scope);
+}
+
+// On quote approval, generate pre-install tasks for the things that bite us:
+// Miss Utility calls and special-material orders. Due dates anchor to the
+// install date if known; otherwise default to "ASAP" (no due date, high
+// priority). Tasks are deduplicated by a deterministic id so re-approval
+// doesn't pile up duplicates.
+function _autoCreatePreInstallTasks(quote) {
+  if (!quote || !quote.leadId) return;
+  const lead = getLead(quote.leadId);
+  if (!lead) return;
+  const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+  const linkLabel = cust ? custFullName(cust) : (lead.customerName || lead.id);
+  const installDate = lead.milestones?.installScheduled?.date || null;
+
+  const computeDue = (daysBack) => {
+    if (!installDate) return '';  // ASAP
+    const d = new Date(installDate + 'T12:00:00');
+    let count = 0;
+    while (count < daysBack) {
+      d.setDate(d.getDate() - 1);
+      const dow = d.getDay();
+      if (dow !== 0 && dow !== 6) count++;
+    }
+    return d.toISOString().slice(0, 10);
+  };
+
+  // Miss Utility task — only if quote.requiresMissUtility is true (auto-detected
+  // or manually flagged).
+  if (quote.requiresMissUtility) {
+    const taskId = `task-mu-${quote.leadId}`;
+    const existing = getTasks().find(t => t.id === taskId);
+    if (!existing) {
+      upsertTask({
+        id:          taskId,
+        title:       `Call Miss Utility — ${lead.id}`,
+        description: `Quote ${quote.id} requires a locate request before digging.\nCustomer: ${linkLabel}\nSite: ${[lead.siteStreet, lead.siteCity, lead.siteState||'VA'].filter(Boolean).join(', ')}\n\nAfter calling, save the ticket # to the job notes.`,
+        linkedId:    lead.id,
+        linkedLabel: linkLabel,
+        priority:    'high',
+        status:      'open',
+        dueDate:     computeDue(3),
+        source:      'auto-pre-install',
+        createdBy:   S.user?.id || ''
+      });
+    }
+  }
+
+  // Special materials task — only if quote.specialMaterials has content.
+  const materials = (quote.specialMaterials || '').trim();
+  if (materials) {
+    const taskId = `task-mat-${quote.leadId}`;
+    const existing = getTasks().find(t => t.id === taskId);
+    if (!existing) {
+      upsertTask({
+        id:          taskId,
+        title:       `Order materials — ${lead.id}`,
+        description: `Quote ${quote.id} has non-stock items to order:\n\n${materials}\n\nCustomer: ${linkLabel}`,
+        linkedId:    lead.id,
+        linkedLabel: linkLabel,
+        priority:    'high',
+        status:      'open',
+        dueDate:     computeDue(5),
+        source:      'auto-pre-install',
+        createdBy:   S.user?.id || ''
+      });
+    }
+  }
 }
 
 // Delete a quote from the job-detail Quote section. Confirms first because
@@ -4412,6 +4514,10 @@ function startQuoteBuilder(){
     contingentOnUtility: _isUtilityNew,
     utilityDelayed:      _isUtilityNew,
     billToCustomerId:    _autoBillTo,
+    // Pre-install action items — populated as the quote is built. On
+    // customer accept (or manual status='approved'), tasks are auto-created.
+    requiresMissUtility: false,
+    specialMaterials:    '',
   };
   upsertQuote(nq);
   openQuoteBuilder(nq.id);
@@ -6156,7 +6262,42 @@ function renderDetailedQuoteForm(q){
       <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
         <textarea class="fta" id="dq-exc" rows="2" style="min-height:60px" oninput="onDQExcChange('${q.id}')">${q.exclusions||''}</textarea>
       </div>
+      ${_renderPreInstallSection(q)}
     </div>`;
+}
+
+// Pre-install items captured on the quote — Miss Utility flag + special
+// materials. On quote approval, these auto-create high-priority tasks.
+// Embedded inside the scope section so they're visible while the user is
+// thinking about the job's scope (where these requirements emerge).
+function _renderPreInstallSection(q) {
+  const muAuto = _scopeRequiresMissUtility(q.scope || '', q.jobType);
+  const muReason = _MU_REQUIRED_JOB_TYPES.includes(q.jobType)
+    ? 'always required for new services / service upgrades (ground rods)'
+    : 'auto-detected from scope';
+  // Treat undefined as auto-detected default; once user toggles it explicitly,
+  // the explicit value wins.
+  const muChecked = (q.requiresMissUtility !== undefined) ? !!q.requiresMissUtility : muAuto;
+  return `<div style="margin-top:14px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r)">
+    <div style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Pre-Install Action Items</div>
+    <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;line-height:1.5">When this quote is approved, tasks are auto-created for these so they don't slip through. Heads-up: a task only fires once per quote.</div>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px">
+      <input type="checkbox" id="dq-requires-mu" ${muChecked?'checked':''} onchange="_onDQMissUtilityChange('${q.id}', this.checked)" style="accent-color:var(--green)">
+      <span><strong>Requires Miss Utility</strong> ${muAuto && q.requiresMissUtility===undefined ? `<span style="font-size:11px;color:var(--amber)">— ${muReason}</span>` : ''}</span>
+    </label>
+    <div><div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:4px">Special materials to order (non-stock items)</div>
+      <textarea id="dq-special-mats" rows="2" placeholder="e.g., 2× BRH260, 75ft #6 SEU red, post-mount sonotube" oninput="_onDQSpecialMaterialsChange('${q.id}', this.value)" style="width:100%;min-height:54px;padding:8px 10px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);font-family:var(--font);font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none">${escHtml(q.specialMaterials||'')}</textarea>
+    </div>
+  </div>`;
+}
+
+function _onDQMissUtilityChange(qid, checked) {
+  const q = getQuote(qid); if (!q) return;
+  upsertQuote({ ...q, requiresMissUtility: !!checked });
+}
+function _onDQSpecialMaterialsChange(qid, value) {
+  const q = getQuote(qid); if (!q) return;
+  upsertQuote({ ...q, specialMaterials: value });
 }
 
 // ── LINE ITEM CRUD ──
@@ -8482,6 +8623,246 @@ function closeJobDetail() {
   renderPipeline();
 }
 
+// ── PRE-INSTALL STATUS STRIP ──
+// Compact replacement for the giant milestone checklist. Shows 6 chips that
+// reflect the items that actually bite us pre-install. Auto-derived where
+// possible (Quote Approved from quote.status, Charger Confirmed from
+// chargerInfo.make+model on EV jobs). Manual where required (Permit Received,
+// Final Inspection Passed) with both upload and toggle paths. Auto-from-task
+// for Miss Utility and Materials.
+function _renderPreInstallStrip(lead) {
+  const ms       = lead.milestones || {};
+  const isEV     = lead.jobType === 'ev-residential';
+  const quotes   = getQuotes().filter(q => q.leadId === lead.id);
+  // Latest quote determines whether the customer accepted; auto-derived chip.
+  const latestApproved = quotes
+    .filter(q => q.status === 'approved' || q.status === 'contingent-approved')
+    .sort((a,b) => new Date(b.updatedAt||b.createdAt) - new Date(a.updatedAt||a.createdAt))[0];
+  const tasks    = getTasks().filter(t => t.linkedId === lead.id);
+  const muTask   = tasks.find(t => t.id === 'task-mu-'  + lead.id);
+  const matTask  = tasks.find(t => t.id === 'task-mat-' + lead.id);
+
+  const muRequired   = quotes.some(q => q.requiresMissUtility);
+  const matsRequired = quotes.some(q => (q.specialMaterials || '').trim());
+
+  const states = [];
+
+  // Quote Approved (read-only, derived).
+  states.push(latestApproved
+    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: (latestApproved.customerActionAt||latestApproved.updatedAt||'').slice(0,10), tip: 'Auto-set when customer clicks Accept on the email or status is set to Approved.' }
+    : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', tip: 'Customer hasn\'t accepted yet. Auto-flips when they click Accept.' });
+
+  // Charger Confirmed (EV-only, derived from chargerInfo).
+  if (!isEV) {
+    states.push({ state: 'na', icon: '—', label: 'Charger N/A', meta: '', tip: 'Only relevant for EV residential jobs.' });
+  } else if (lead.chargerInfo?.make && lead.chargerInfo?.model) {
+    const desc = [lead.chargerInfo.make, lead.chargerInfo.model].filter(Boolean).join(' ');
+    states.push({ state: 'done', icon: '✓', label: 'Charger', meta: desc, tip: 'Auto-set when Charger Info has both make and model filled in.' });
+  } else {
+    states.push({ state: 'pending', icon: '·', label: 'Charger TBD', meta: '', tip: 'Fill in Charger Info make + model to mark this confirmed.' });
+  }
+
+  // Permit Received — manual upload-or-toggle.
+  states.push(ms.permitReceived?.done
+    ? { state: 'done',    icon: '✓', label: 'Permit',  meta: (ms.permitReceived.date||'').slice(0,10), click: `clickPermitChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
+    : { state: 'pending', icon: '·', label: 'Permit',  meta: '', click: `clickPermitChip('${lead.id}')`, tip: 'Click to upload permit doc or mark received without doc.' });
+
+  // Miss Utility — only show if any quote requires it.
+  if (!muRequired) {
+    states.push({ state: 'na', icon: '—', label: 'MU N/A', meta: '', tip: 'No quote on this job requires Miss Utility.' });
+  } else {
+    states.push(muTask?.status === 'done'
+      ? { state: 'done',    icon: '✓', label: 'MU Called', meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Auto-flips when the Miss Utility task is marked done.' }
+      : { state: 'pending', icon: '·', label: 'MU Call',   meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Click to open the Miss Utility task. Created automatically on quote approval.' });
+  }
+
+  // Materials Ordered — only show if any quote has special materials.
+  if (!matsRequired) {
+    states.push({ state: 'na', icon: '—', label: 'Materials N/A', meta: '', tip: 'No quote on this job has special materials listed.' });
+  } else {
+    states.push(matTask?.status === 'done'
+      ? { state: 'done',    icon: '✓', label: 'Materials Ordered', meta: '', click: `clickMaterialsChip('${lead.id}')`, tip: 'Auto-flips when the Order Materials task is marked done.' }
+      : { state: 'pending', icon: '·', label: 'Order Materials',   meta: '', click: `clickMaterialsChip('${lead.id}')`, tip: 'Click to open the Materials task. Created automatically on quote approval.' });
+  }
+
+  // Final Inspection — manual upload-or-toggle.
+  states.push(ms.finalInspPassed?.done
+    ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: (ms.finalInspPassed.date||'').slice(0,10), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
+    : { state: 'pending', icon: '·', label: 'Inspection',  meta: '', click: `clickInspectionChip('${lead.id}')`, tip: 'Click to upload pass cert or mark passed without doc.' });
+
+  const chipColor = (s) => ({
+    done:    'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
+    pending: 'background:rgba(243,156,18,0.10);color:#b9770e;border-color:#f39c12',
+    na:      'background:var(--bg-elevated);color:var(--text-muted);border-color:var(--border)'
+  })[s] || '';
+
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px">${states.map(c => `
+    <div onclick="${c.click||''}" title="${escHtml(c.tip||'')}"
+      style="${chipColor(c.state)};padding:5px 10px;border:1px solid;border-radius:14px;font-size:11.5px;font-weight:500;display:inline-flex;align-items:center;gap:5px;cursor:${c.click?'pointer':'default'};transition:transform 0.1s"
+      onmouseover="if('${c.click||''}')this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+      <span style="font-size:12.5px">${c.icon}</span>
+      ${escHtml(c.label)}
+      ${c.meta ? `<span style="font-size:10.5px;opacity:0.75">· ${escHtml(c.meta)}</span>` : ''}
+    </div>`).join('')}</div>`;
+}
+
+// Click handlers for the strip's chips. Each pending chip offers two paths:
+// upload the supporting document (preferred) or mark the item as done with a
+// follow-up task to upload it later. Done chips offer to undo.
+
+function clickPermitChip(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const done = !!lead.milestones?.permitReceived?.done;
+  if (done) {
+    if (confirm('Permit is currently marked as received. Undo and mark pending again?')) {
+      _setMilestone(leadId, 'permitReceived', false);
+      renderJobDetail(leadId);
+    }
+    return;
+  }
+  // Pending — let user choose: upload or mark-only
+  const choice = confirm(
+    'Mark permit received:\n\n' +
+    'OK — Upload the permit document (preferred)\n' +
+    'Cancel — See more options'
+  );
+  if (choice) { _uploadJobDocument(leadId, 'permit'); return; }
+  // Second-chance: mark without upload
+  if (confirm('Mark permit received WITHOUT uploading the document?\n\nA follow-up task will be created to upload it later.')) {
+    _setMilestone(leadId, 'permitReceived', true);
+    _createUploadFollowupTask(leadId, 'permit');
+    renderJobDetail(leadId);
+  }
+}
+
+function clickInspectionChip(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const done = !!lead.milestones?.finalInspPassed?.done;
+  if (done) {
+    if (confirm('Final inspection is marked as passed. Undo?')) {
+      _setMilestone(leadId, 'finalInspPassed', false);
+      renderJobDetail(leadId);
+    }
+    return;
+  }
+  const choice = confirm(
+    'Mark final inspection passed:\n\n' +
+    'OK — Upload the pass certificate (preferred)\n' +
+    'Cancel — See more options'
+  );
+  if (choice) { _uploadJobDocument(leadId, 'inspection-pass'); return; }
+  if (confirm('Mark final inspection passed WITHOUT uploading the certificate?\n\nA follow-up task will be created to upload it later.')) {
+    _setMilestone(leadId, 'finalInspPassed', true);
+    _createUploadFollowupTask(leadId, 'inspection-pass');
+    renderJobDetail(leadId);
+  }
+}
+
+function clickMissUtilityChip(leadId) {
+  const tasks = getTasks().filter(t => t.linkedId === leadId);
+  const muTask = tasks.find(t => t.id === 'task-mu-' + leadId);
+  if (muTask) {
+    openTaskDetail(muTask.id);
+  } else {
+    toast('No Miss Utility task yet — auto-created when the quote is approved.', 'info');
+  }
+}
+
+function clickMaterialsChip(leadId) {
+  const tasks = getTasks().filter(t => t.linkedId === leadId);
+  const matTask = tasks.find(t => t.id === 'task-mat-' + leadId);
+  if (matTask) {
+    openTaskDetail(matTask.id);
+  } else {
+    toast('No Materials task yet — auto-created when the quote is approved.', 'info');
+  }
+}
+
+// Set a milestone done/undone with optional date and persist.
+function _setMilestone(leadId, key, done) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  if (!arr[idx].milestones) arr[idx].milestones = {};
+  if (done) {
+    arr[idx].milestones[key] = { done: true, date: new Date().toISOString().slice(0,10) };
+  } else {
+    delete arr[idx].milestones[key];
+  }
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+}
+
+// Trigger a hidden file input that uploads to the job's Documents.
+// docType is informational metadata stored on the file record so we can
+// later detect "this is the permit" without filename-sniffing.
+function _uploadJobDocument(leadId, docType) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'application/pdf,image/*';
+  inp.style.display = 'none';
+  document.body.appendChild(inp);
+  inp.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    document.body.removeChild(inp);
+    if (!file) return;
+    // Read the file, save as a job document with docType tag.
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const dataUrl = reader.result;
+        const rec = addFileRecord(leadId, 'documents', null, file, dataUrl);
+        // Tag with docType so the chip auto-derives state on next render.
+        if (rec) {
+          rec.docType = docType;
+          // Persist the tag — addFileRecord already saved, but the tag was added after.
+          if (typeof _idbPut === 'function') { try { await _idbPut(rec); } catch(_){} }
+        }
+        // Also flip the milestone since the doc is now in hand.
+        if (docType === 'permit')          _setMilestone(leadId, 'permitReceived', true);
+        else if (docType === 'inspection-pass') _setMilestone(leadId, 'finalInspPassed', true);
+        toast(`Uploaded — ${docType.replace('-', ' ')} marked complete.`, 'success');
+        renderJobDetail(leadId);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.warn('[GK] Document upload failed:', err);
+      toast('Upload failed: ' + (err.message||err), 'error');
+    }
+  });
+  inp.click();
+}
+
+// Create a high-priority task to upload the document later, when the user
+// chose to mark a milestone done without uploading the supporting doc.
+function _createUploadFollowupTask(leadId, docType) {
+  const lead = getLead(leadId);
+  const cust = lead?.customerId ? getCustomer(lead.customerId) : null;
+  const linkLabel = cust ? custFullName(cust) : (lead?.customerName || leadId);
+  const titleMap = {
+    'permit':          'Upload permit document',
+    'inspection-pass': 'Upload final inspection pass certificate'
+  };
+  const title = titleMap[docType] || `Upload ${docType} document`;
+  const taskId = `task-upload-${docType}-${leadId}`;
+  const existing = getTasks().find(t => t.id === taskId);
+  if (existing && existing.status !== 'done') return; // already pending
+  upsertTask({
+    id:          taskId,
+    title:       `${title} — ${leadId}`,
+    description: `${title} for ${linkLabel}.\n\nThis task was auto-created because the milestone was marked done without uploading the supporting document. Please upload it to the job's Documents tab and mark this task complete.`,
+    linkedId:    leadId,
+    linkedLabel: linkLabel,
+    priority:    'high',
+    status:      'open',
+    dueDate:     '',
+    source:      'milestone-bypass',
+    createdBy:   S.user?.id || ''
+  });
+}
+
 // ── MILESTONE SAVE HELPERS ──
 function saveMsToggle(leadId, key, checked) {
   const arr = getLeads();
@@ -9786,18 +10167,24 @@ function renderJobDetail(id) {
     const _blk = scheduleBlockReason(lead);
     const _ov  = lead.scheduleOverride;
     if (_ov?.reason) {
+      // Override is purely an audit note now — no "valid"/"invalid" state.
       msHtml += `<div style="margin:4px 12px 8px;padding:8px 10px;border:1px solid var(--amber);background:var(--amber-dim);border-radius:var(--r);font-size:11.5px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div>
-          <span style="color:var(--amber);font-weight:500">⚠ Schedule override active</span>
+          <span style="color:var(--amber);font-weight:500">📝 Schedule note</span>
           <span style="color:var(--text-secondary)"> — ${escHtml(_ov.reason)}</span>
-          <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">Set by ${escHtml(_ov.setBy||'—')} on ${(_ov.setAt||'').slice(0,10)}</div>
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">Added by ${escHtml(_ov.setBy||'—')} on ${(_ov.setAt||'').slice(0,10)}</div>
         </div>
         <button class="btn btn-g" style="padding:3px 8px;font-size:11px" onclick="clearScheduleOverrideAndRerender('${id}')">Clear</button>
       </div>`;
     } else if (_blk) {
+      // Soft heads-up — never blocks. Job is already in the pool; this just
+      // surfaces what's still outstanding so it doesn't slip past the team.
       msHtml += `<div style="margin:4px 12px 8px;padding:8px 10px;border:1px dashed var(--border);border-radius:var(--r);font-size:11.5px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="color:var(--text-secondary)">Blocked: <span style="color:var(--text-muted)">${escHtml(_blk)}</span></div>
-        <button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="promptScheduleOverride('${id}')">+ Add to Scheduler</button>
+        <div style="color:var(--text-secondary)">Heads up: <span style="color:var(--text-muted)">${escHtml(_blk)}</span></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-g" style="padding:3px 10px;font-size:11px" onclick="promptScheduleOverride('${id}')" title="Optional — leave a note explaining why this is OK to schedule out of order">+ Note</button>
+          <button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="scheduleNow('${id}')">Schedule</button>
+        </div>
       </div>`;
     }
   }
@@ -9834,13 +10221,24 @@ function renderJobDetail(id) {
     </div>
   </div>`;
 
+  // Compact Pre-Install Status Strip — shows the items that actually bite us
+  // (permit, miss utility, materials, etc.) as state-colored chips at a glance.
+  // Replaces the giant milestone checklist. The legacy detailed milestone bar
+  // is kept available as an Advanced collapsible for users who want the full
+  // checklist for unusual jobs.
+  const preInstallStripHtml = _renderPreInstallStrip(lead);
   const milestoneSec = `<div class="jd-sec" style="position:sticky;top:14px">
     <div class="jd-sh">
-      <div class="jd-st">Milestones</div>
-      <span id="ms-done-count" style="font-size:10px;color:var(--text-muted)">${doneCount} done</span>
+      <div class="jd-st">Pre-Install Status</div>
     </div>
-    <div style="max-height:calc(100vh - 180px);overflow-y:auto;padding:4px 0">
-      ${msHtml}
+    <div style="padding:10px 12px">
+      ${preInstallStripHtml}
+      <details style="margin-top:14px">
+        <summary style="cursor:pointer;font-size:11.5px;color:var(--text-muted);user-select:none;padding:4px 0">Advanced — full milestone checklist</summary>
+        <div style="max-height:calc(100vh - 320px);overflow-y:auto;padding:8px 0;margin-top:6px;border-top:1px solid var(--border)">
+          ${msHtml}
+        </div>
+      </details>
     </div>
   </div>`;
 
@@ -12393,11 +12791,55 @@ function scheduleBlockReason(lead) {
   return null;
 }
 
+// ── OVERRIDE-NOTE HELPERS (currently informational only) ───────────────────
+// These were originally used to enforce a strict "override + open task = valid"
+// rule. The schedule pool no longer uses them — every non-archived job is
+// schedulable regardless of override state. Helpers are kept for surfaces that
+// still want to show whether a follow-up task is open (e.g. a future audit
+// dashboard).
+function _findOverrideFollowupTask(leadId) {
+  if (!leadId) return null;
+  const tasks = getTasks() || [];
+  return tasks.find(t =>
+    t && t.linkedId === leadId &&
+    t.status !== 'done' &&
+    (t.source === 'schedule-override' || t.source === 'milestone-bypass')
+  ) || null;
+}
+
+function _overrideIsValid(lead) {
+  if (!lead?.scheduleOverride?.reason) return false;
+  return !!_findOverrideFollowupTask(lead.id);
+}
+
+// Same as scheduleBlockReason() but factors in the override-must-have-task rule.
+// Returns null if the lead can be scheduled, otherwise a human-readable reason.
+function strictScheduleBlockReason(lead) {
+  if (!lead) return null;
+  if (lead.stage === 'archived') return 'Job is archived';
+  const ms = lead.milestones || {};
+  if (ms.installScheduled?.done) return null;
+  // No gates triggered — pure pass.
+  const baseBlock = scheduleBlockReason(lead);
+  if (!baseBlock) return null;
+  // Gate is failing. Override only counts if a task is still open for it.
+  if (lead.scheduleOverride?.reason) {
+    if (_findOverrideFollowupTask(lead.id)) return null;       // override + open task = OK
+    return `${baseBlock} (override task was closed — re-override or upload doc)`;
+  }
+  return baseBlock;
+}
+
 function setScheduleOverride(leadId, reason) {
-  if (!reason || !reason.trim()) return;
+  if (!reason || !reason.trim()) return false;
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
-  if (idx < 0) return;
+  if (idx < 0) return false;
+
+  // Record the audit note on the lead. This is informational only — it does
+  // NOT gate the schedule pool. The note shows in the job-detail Scheduling
+  // section and as an amber chip in the pool row so context isn't lost.
+  const lead = arr[idx];
   arr[idx].scheduleOverride = {
     reason: reason.trim(),
     setAt:  new Date().toISOString(),
@@ -12405,12 +12847,54 @@ function setScheduleOverride(leadId, reason) {
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+
+  // Best-effort follow-up task — useful as a reminder, but if it fails we
+  // still keep the note. Deterministic ID prevents pile-ups on re-entry.
+  try {
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const linkLabel = cust ? custFullName(cust) : (lead.customerName || lead.id);
+    const taskId = `task-overridefollowup-${lead.id}`;
+    const existing = (getTasks() || []).find(t => t.id === taskId);
+    if (!existing || existing.status === 'done') {
+      upsertTask({
+        id:          taskId,
+        title:       `Schedule note follow-up — ${lead.id}`,
+        description: `Note: ${reason.trim()}\n\nAdded by ${S.user?.name||'Unknown'} on ${new Date().toLocaleDateString()}. Mark complete once the underlying item is resolved (permit received, charger confirmed, etc.). Closing this task does NOT remove the job from the Scheduler — the note is purely informational.`,
+        linkedId:    lead.id,
+        linkedLabel: linkLabel,
+        priority:    'medium',
+        status:      'open',
+        dueDate:     existing?.dueDate || '',
+        source:      'schedule-override',
+        createdBy:   S.user?.id || (existing?.createdBy || '')
+      });
+    }
+  } catch (e) { console.warn('[GK] Override follow-up task creation failed (non-fatal):', e); }
+
+  toast('Schedule note recorded.', 'success');
+  return true;
 }
 
 function clearScheduleOverride(leadId) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0 || !arr[idx].scheduleOverride) return;
+  // Also close the linked follow-up task so it doesn't sit in the task list
+  // forever once the override is no longer in play. The user can always
+  // re-open the task from the Tasks page if they cleared by accident.
+  try {
+    const linkedTaskId = arr[idx].scheduleOverride.followupTask
+                       || `task-overridefollowup-${leadId}`;
+    const tasks = getTasks() || [];
+    const tIdx = tasks.findIndex(t => t.id === linkedTaskId);
+    if (tIdx >= 0 && tasks[tIdx].status !== 'done') {
+      tasks[tIdx].status = 'done';
+      tasks[tIdx].completedAt = new Date().toISOString();
+      tasks[tIdx].notes = (tasks[tIdx].notes ? tasks[tIdx].notes + '\n' : '')
+                        + `Auto-closed when schedule override was cleared on ${new Date().toLocaleDateString()}.`;
+      saveTasks(tasks);
+    }
+  } catch (e) { console.warn('[GK] override task auto-close failed:', e); }
   delete arr[idx].scheduleOverride;
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
@@ -12425,27 +12909,18 @@ function scheduleNow(leadId) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found','error'); return; }
 
-  // Inspect what's blocking. If nothing, no override needed.
+  // SOFT GATES: never block. If something's missing we just toast a heads-up
+  // and proceed. The dispatcher always has a clear path to the Scheduler.
   const ms = lead.milestones || {};
-  const reasons = [];
-  if (lead.stage === 'archived') reasons.push('Lead is archived');
-  if (ms.installScheduled?.done) reasons.push('Already marked scheduled');
-  if (!ms.permitReceived?.done && !lead.scheduleOverride?.reason) reasons.push('Permit not yet received');
-  if (lead.jobType === 'ev-residential' && !ms.chargerConfirmed?.done && !lead.scheduleOverride?.reason) {
-    reasons.push('Charger not yet confirmed');
+  const heads = [];
+  if (!ms.permitReceived?.done) heads.push('permit not yet captured');
+  if (lead.jobType === 'ev-residential' && !ms.chargerConfirmed?.done) heads.push('charger not yet confirmed');
+  if (heads.length) {
+    toast(`Heads up — ${heads.join(', ')}. Job is in the pool; tag the docs when they come in.`, 'warning');
   }
 
-  if (reasons.length && !lead.scheduleOverride?.reason) {
-    const note = prompt(
-      `This job doesn't pass the standard schedule gates yet:\n\n• ${reasons.join('\n• ')}\n\nIf you want to schedule it anyway, enter a quick reason (e.g. "permit pending — confident it'll land by Tue", "charger arriving Mon AM"). The override is recorded with your name and date so it shows up in the pool with a warning chip.`,
-      ''
-    );
-    if (note === null) return;                        // cancelled
-    if (!note.trim()) { toast('A reason is required to override the schedule gates.', 'warning'); return; }
-    setScheduleOverride(leadId, note.trim());
-    toast('Schedule override recorded — opening Scheduler…', 'success');
-  } else if (ms.installScheduled?.done) {
-    // Already scheduled — clear that milestone so we can re-schedule.
+  // If already marked scheduled, offer to re-open for re-scheduling.
+  if (ms.installScheduled?.done) {
     if (!confirm('This job is already marked as scheduled. Re-open it for re-scheduling?')) return;
     const arr = getLeads();
     const idx = arr.findIndex(l => l.id === leadId);
@@ -12457,10 +12932,9 @@ function scheduleNow(leadId) {
   }
 
   // Hand off to the Scheduler. _sched.preselectId tells renderSchedulerPage
-  // to scroll-into-view and highlight this lead's row in the pool. Also narrow
-  // the pool selection to ONLY this lead — pre-select just it (everything else
-  // unchecked by default) so clicking Build immediately gives a plan with just
-  // this job. They can check more from the pool to add to the build.
+  // to scroll-into-view and highlight this lead's row in the pool. Pre-select
+  // ONLY this lead so clicking Build immediately gives a plan with just this
+  // job; the user can check more from the pool to add.
   if (typeof _sched === 'object' && _sched) {
     _sched.preselectId = leadId;
     _sched.included = { [leadId]: true };
@@ -12471,22 +12945,23 @@ function scheduleNow(leadId) {
   navigate('scheduler');
 }
 
+// Optional: capture a written reason for an out-of-order schedule. Now purely
+// for audit/record purposes — it is NEVER required to put a job into the pool.
+// The "Add note" entry point on the job detail uses this when the dispatcher
+// wants to leave a paper trail (e.g. "permit incoming Tue, customer confirmed").
 function promptScheduleOverride(leadId) {
   const lead = getLead(leadId);
   if (!lead) return;
   const blocked = scheduleBlockReason(lead);
-  if (!blocked) {
-    if (!confirm('This job already meets the scheduling prerequisites — no override needed. Open the Scheduler page?')) return;
-    navigate('scheduler');
-    return;
-  }
-  const suggestion = blocked.startsWith('Permit') ? 'No permit required — like-for-like'
-                   : blocked.startsWith('Charger') ? 'Charger incoming — confirmed by customer'
+  const suggestion = blocked && blocked.startsWith('Permit') ? 'No permit required — like-for-like'
+                   : blocked && blocked.startsWith('Charger') ? 'Charger incoming — confirmed by customer'
                    : '';
-  const reason = window.prompt(`Add this job to the Scheduler despite: "${blocked}".\n\nEnter a short reason (required):`, suggestion);
+  const reason = window.prompt(
+    `Add an audit note for this job's schedule${blocked ? ' (currently flagged: '+blocked+')' : ''}.\n\nThis is optional — it just records context. Leave blank to cancel.`,
+    suggestion);
   if (!reason || !reason.trim()) return;
   setScheduleOverride(leadId, reason);
-  toast('Added to Scheduler — override active', 'success');
+  toast('Note recorded.', 'success');
   renderJobDetail(leadId);
 }
 
@@ -12522,20 +12997,13 @@ function getSchedulableJobs(techId) {
       if (milestoneTechId !== activeTechId) return false;
       // Falls through — applies skill filter below, but skips gates.
     } else {
-      // Not yet committed: apply the normal pre-schedule gates.
-      const passesGates = (() => {
-        // Pipeline shortcut: dragging a job into the 'Scheduled' column on the
-        // kanban (or selecting it from the stage dropdown) is an explicit signal
-        // that this job is ready to be placed on the calendar. Bypass the
-        // milestone gates — the user has already decided.
-        if (l.stage === 'scheduled') return true;
-        if (l.scheduleOverride?.reason) return true;    // manual override bypasses gates
-        if (!ms.permitReceived?.done) return false;     // need permit in hand
-        const isEV = l.jobType === 'ev-residential';
-        if (isEV && !ms.chargerConfirmed?.done) return false; // need charger confirmed
-        return true;
-      })();
-      if (!passesGates) return false;
+      // Not yet committed. SOFT GATES ONLY: every non-archived job appears
+      // in the pool so the dispatcher always has a path forward without
+      // edits to the code. Missing prerequisites (permit, charger) surface
+      // as warning chips on the pool row — they no longer block selection.
+      // Stage 'lead-received' is the lone exception: brand-new leads with
+      // no quote yet shouldn't clutter the schedule pool.
+      if (l.stage === 'lead-received') return false;
     }
     if (tech && !userCanDoJob(tech, l)) return false; // skill filter (if a tech is selected)
     return true;
@@ -13132,7 +13600,7 @@ function renderSchedulerPage() {
 
   // Job pool
   const poolHtml = jobs.length === 0
-    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs ready to schedule.<br><span style="font-size:12px">Jobs need: permit received ✓ + charger confirmed ✓ (EV jobs) + not yet scheduled.<br>Use <strong>Schedule Now</strong> on a job detail page to override gates.</span></div>`
+    ? `<div style="padding:20px;font-size:13px;color:var(--text-muted);text-align:center">No jobs available to schedule.<br><span style="font-size:12px">Pool shows everything past the lead-received stage that isn't archived or already on another tech's calendar.</span></div>`
     : poolHeader + jobs.map(l => {
         const cust = custs.find(c => c.id === l.customerId);
         const name = cust ? custFullName(cust) : (l.customerName||'Unknown');
@@ -13144,6 +13612,19 @@ function renderSchedulerPage() {
         const overrideChip = l.scheduleOverride?.reason
           ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${(l.scheduleOverride.setAt||'').slice(0,10)}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
           : '';
+        // ── Missing-prereq warning chips (non-blocking) ──
+        // Surface what's not yet captured so the dispatcher can see at a
+        // glance which jobs are still missing supporting docs. Selecting
+        // them is allowed; this is a nudge, not a gate.
+        const _ms = l.milestones || {};
+        const _isEV = l.jobType === 'ev-residential';
+        let prereqChips = '';
+        if (!_ms.permitReceived?.done) {
+          prereqChips += `<span class="chip chip-warn" style="font-size:10.5px" title="Permit not yet captured. Open the job detail to upload or mark received.">⚠ No permit</span>`;
+        }
+        if (_isEV && !_ms.chargerConfirmed?.done) {
+          prereqChips += `<span class="chip chip-warn" style="font-size:10.5px" title="Charger details not confirmed at customer location.">⚠ No charger</span>`;
+        }
         // "Already in today's schedule" chip: shows when this job has an
         // installScheduled milestone set to the active date. Lets the user
         // distinguish jobs they're rebuilding vs. fresh adds.
@@ -13160,7 +13641,7 @@ function renderSchedulerPage() {
               <div style="flex:1">
                 <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
                 <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${overrideChip}${inTodayChip}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${prereqChips}${overrideChip}${inTodayChip}</div>
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
@@ -16681,6 +17162,27 @@ async function hydrateQuoteStatusFromServer(qid) {
       customerActionUA: data.userAgent || null,
       customerDeclineReason: data.reason || null
     });
+
+    // When the customer accepts (or contingent-accepts), advance the lead's
+    // pipeline stage to "Quote Approved" so the team sees it move forward
+    // automatically. Only advance EARLIER stages — don't bump back from
+    // later stages (Scheduled, Pre-Install, etc.) just because the quote
+    // got re-accepted via a stale link.
+    if ((newStatus === 'approved' || newStatus === 'contingent-approved') && q.leadId) {
+      const lead = getLead(q.leadId);
+      if (lead) {
+        const earlyStages = ['lead-received','info-gathering','estimating','quote-delivered'];
+        if (earlyStages.includes(lead.stage)) {
+          upsertLead({ ...lead, stage: 'quote-approved', stageAt: new Date().toISOString() });
+          if (S.page === 'jobs' && S.jobDetailId === q.leadId && typeof renderJobDetail === 'function') {
+            try { renderJobDetail(q.leadId); } catch(_){}
+          } else if (S.page === 'jobs' && typeof renderPipeline === 'function') {
+            try { renderPipeline(); } catch(_){}
+          }
+        }
+      }
+    }
+
     // Toast + re-render if the builder is open on this quote
     try {
       const labels = { accepted:'accepted', declined:'declined', contingent_accepted:'contingent-accepted' };
