@@ -1436,6 +1436,7 @@
 <div id="lb-overlay" onclick="if(event.target===this)closeLightbox()">
   <div id="lb-img-wrap">
     <img id="lb-img" src="" alt="">
+    <video id="lb-video" controls playsinline style="max-width:100%;max-height:100%;display:none;border-radius:4px"></video>
     <button class="lb-nav" id="lb-prev" onclick="lbNav(-1)">&#8249;</button>
     <button class="lb-nav" id="lb-next" onclick="lbNav(1)">&#8250;</button>
   </div>
@@ -10575,9 +10576,9 @@ function _imgSrc(f) {
 }
 
 const FM_CATS = [
-  { id:'site',      label:'Site Photos',    accept:'image/*' },
-  { id:'install',   label:'Install Photos', accept:'image/*' },
-  { id:'documents', label:'Documents',      accept:'*/*'     }
+  { id:'site',      label:'Site Photos & Videos',    accept:'image/*,video/*' },
+  { id:'install',   label:'Install Photos & Videos', accept:'image/*,video/*' },
+  { id:'documents', label:'Documents',               accept:'*/*'             }
 ];
 
 function addFileRecord(jobId, category, subFolder, file, dataUrl) {
@@ -10714,7 +10715,7 @@ function renderFMPhotos(jobId, cat) {
 
   const dzone = `<div class="dzone" id="${dzId}"
     ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','${cat}',null,'${dzId}')">
-    <input type="file" id="${inpId}" multiple accept="image/*" onchange="fmFileInput(event,'${jobId}','${cat}',null)">
+    <input type="file" id="${inpId}" multiple accept="image/*,video/*" onchange="fmFileInput(event,'${jobId}','${cat}',null)">
     <div class="dico">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -10722,8 +10723,8 @@ function renderFMPhotos(jobId, cat) {
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
     </div>
-    <div class="dtitle">Drop photos here or click to upload</div>
-    <div class="dsub">JPG, PNG, HEIC — drag multiple files at once</div>
+    <div class="dtitle">Drop photos or videos here or click to upload</div>
+    <div class="dsub">JPG, PNG, HEIC, MP4, MOV — drag multiple files at once</div>
   </div>
   <div style="text-align:center;margin-top:8px">
     <button class="cambtn" onclick="fmOpenCamera('${jobId}','${cat}')">
@@ -10739,21 +10740,36 @@ function renderFMPhotos(jobId, cat) {
     </div>`;
   }
 
-  const thumbs = files.map((f,i) => `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer">
-    <img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-    <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>
-    <div class="plabel">${escHtml(f.name)}</div>
-    <button class="prem" onclick="event.stopPropagation();fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button>
-  </div>`).join('');
+  const thumbs = files.map((f,i) => {
+    const _isVid = ((f.mimeType||'')||(f.type||'')).startsWith('video/');
+    const _media = _isVid
+      ? `<video src="${_imgSrc(f)}" preload="metadata" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>
+         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+           <svg width="36" height="36" viewBox="0 0 24 24" fill="rgba(0,0,0,0.55)" stroke="white" stroke-width="1.5"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.55)"/><polygon points="10,8 16,12 10,16" fill="white" stroke="none"/></svg>
+         </div>`
+      : `<img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>`;
+    return `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer;position:relative">
+      ${_media}
+      <div class="plabel">${escHtml(f.name)}</div>
+      <button class="prem" onclick="event.stopPropagation();fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button>
+    </div>`;
+  }).join('');
 
-  const listRows = files.map((f,i) => `<tr>
-    <td><div class="fm-mini-thumb" onclick="openLightbox('${jobId}','${cat}',${i})"><img src="${_imgSrc(f)}" alt=""></div></td>
+  const listRows = files.map((f,i) => {
+    const _isVid = ((f.mimeType||'')||(f.type||'')).startsWith('video/');
+    const _miniMedia = _isVid
+      ? `<div style="width:100%;height:100%;background:#000;color:white;display:flex;align-items:center;justify-content:center;font-size:9px">VIDEO</div>`
+      : `<img src="${_imgSrc(f)}" alt="">`;
+    return `<tr>
+    <td><div class="fm-mini-thumb" onclick="openLightbox('${jobId}','${cat}',${i})">${_miniMedia}</div></td>
     <td style="font-size:12.5px">${escHtml(f.name)}</td>
     <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
     <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
     <td style="font-size:11px;color:var(--text-muted)">${escHtml(f.uploadedBy||'—')}</td>
     <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button></td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
 
   return dzone +
     `<div class="pgrid" style="margin-top:14px">${thumbs}</div>
@@ -10904,15 +10920,17 @@ function fmProcessFiles(files, jobId, cat, subFolder) {
   let _reroutedCount = 0;
   files.forEach(async f => {
     try {
-      // Per-file destination category: if a non-image file lands on a photo
-      // category (site / install), reroute to Documents based on MIME type.
-      // The user shouldn't have to click the right tab before drag-drop —
-      // images go to photos, anything else goes to Documents.
+      // Per-file destination category: photo categories accept images AND
+      // videos (customers send both). Anything else (PDFs, docs, audio, etc.)
+      // gets rerouted to Documents so the dispatcher doesn't have to click
+      // the right tab first.
       const _isImage = (f.type || '').startsWith('image/');
+      const _isVideo = (f.type || '').startsWith('video/');
+      const _isMedia = _isImage || _isVideo;
       const _isPhotoCat = (cat === 'site' || cat === 'install');
       let _destCat = cat;
       let _destSubFolder = subFolder;
-      if (_isPhotoCat && !_isImage) {
+      if (_isPhotoCat && !_isMedia) {
         _destCat = 'documents';
         _destSubFolder = null; // Documents doesn't use sub-folders
         _reroutedCount++;
@@ -10974,7 +10992,12 @@ function openLightbox(jobId, cat, idx) {
   // Filter on mimeType (not dataUrl) so SharePoint-hydrated photos (dataUrl=null
   // but downloadUrl/spUrl populated) aren't excluded. Must match the same
   // filter the calling thumbnail grids use, otherwise the click index drifts.
-  const files = getJobFiles(jobId).filter(f => f.category === cat && (f.mimeType||'').startsWith('image/'));
+  // Include videos alongside images so the lightbox cycles through both.
+  const files = getJobFiles(jobId).filter(f => {
+    if (f.category !== cat) return false;
+    const mt = f.mimeType || '';
+    return mt.startsWith('image/') || mt.startsWith('video/');
+  });
   if (!files.length) return;
   LBFiles = files;
   LBIdx   = Math.max(0, Math.min(idx, files.length-1));
@@ -10986,6 +11009,13 @@ function openLightbox(jobId, cat, idx) {
 function closeLightbox() {
   document.getElementById('lb-overlay').classList.remove('show');
   document.body.style.overflow = '';
+  // Stop video playback so audio doesn't continue after the lightbox closes.
+  const vidEl = document.getElementById('lb-video');
+  if (vidEl) {
+    try { vidEl.pause(); } catch(_){}
+    vidEl.removeAttribute('src');
+    try { vidEl.load(); } catch(_){}
+  }
   LBFiles = []; LBIdx = 0;
 }
 
@@ -10998,9 +11028,24 @@ function renderLB() {
   const f = LBFiles[LBIdx];
   if (!f) return;
   const imgEl  = document.getElementById('lb-img');
+  const vidEl  = document.getElementById('lb-video');
   const infoEl = document.getElementById('lb-info');
   const ctrEl  = document.getElementById('lb-ctr');
-  if (imgEl)  imgEl.src = _imgSrc(f);
+  const _isVid = (f.mimeType||'').startsWith('video/');
+  if (vidEl) {
+    if (_isVid) {
+      vidEl.src = _imgSrc(f);
+      vidEl.style.display = 'block';
+      if (imgEl) imgEl.style.display = 'none';
+    } else {
+      vidEl.pause && vidEl.pause();
+      vidEl.removeAttribute('src');
+      vidEl.load && vidEl.load();
+      vidEl.style.display = 'none';
+      if (imgEl) imgEl.style.display = 'block';
+    }
+  }
+  if (imgEl && !_isVid)  imgEl.src = _imgSrc(f);
   if (infoEl) infoEl.innerHTML = `
     <span style="font-weight:500;color:white;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(f.name)}</span>
     <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${f.uploadedAt?.slice(0,10)||'—'} · ${escHtml(f.uploadedBy||'—')}</span>`;
@@ -11079,7 +11124,7 @@ function renderFMJobCat(jobId, cat) {
   const dzId  = `jd-fm-dz-${cat}`;
   const dzone = `<div class="dzone" id="${dzId}" style="padding:14px"
     ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','${cat}',null,'${dzId}')">
-    <input type="file" multiple accept="image/*" onchange="fmFileInput(event,'${jobId}','${cat}',null)">
+    <input type="file" multiple accept="image/*,video/*" onchange="fmFileInput(event,'${jobId}','${cat}',null)">
     <div class="dtitle" style="font-size:12px">Drop photos here or click to upload</div>
     <div class="dsub" style="font-size:11px">JPG, PNG, HEIC</div>
   </div>
@@ -13550,7 +13595,7 @@ function renderTechPage(leadId) {
       <button onclick="fmOpenCamera('${leadId}','install')" style="flex:1;min-width:120px;padding:14px;background:var(--green);color:#0f1117;border:none;border-radius:var(--r);font-weight:600;font-size:14px;cursor:pointer">📷 Take Photo</button>
       <label style="flex:1;min-width:120px;padding:14px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--r);font-weight:500;font-size:14px;cursor:pointer;text-align:center">
         Upload Files
-        <input type="file" multiple accept="image/*" style="display:none" onchange="fmFileInput(event,'${leadId}','install',null)">
+        <input type="file" multiple accept="image/*,video/*" style="display:none" onchange="fmFileInput(event,'${leadId}','install',null)">
       </label>
     </div>
     ${installGrid}
