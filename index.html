@@ -3563,12 +3563,12 @@ function showLeadForm(lead, prefillCustId) {
       </div>
       <div id="cust-fields" style="margin-top:12px;display:${prefillCust&&isNew?'none':'block'}">
         <div class="frow2" style="display:${prefillCust?'none':'flex'}">
-          <div class="fg"><div class="fl">First Name</div><input class="fi" id="lf-fn" placeholder="First" value="${prefillCust?.firstName||l.customerFirstName||''}"></div>
-          <div class="fg"><div class="fl">Last Name</div><input class="fi" id="lf-ln" placeholder="Last" value="${prefillCust?.lastName||l.customerLastName||''}"></div>
+          <div class="fg"><div class="fl">First Name</div><input class="fi" id="lf-fn" placeholder="First" autocomplete="off" value="${prefillCust?.firstName||l.customerFirstName||''}"></div>
+          <div class="fg"><div class="fl">Last Name</div><input class="fi" id="lf-ln" placeholder="Last" autocomplete="off" value="${prefillCust?.lastName||l.customerLastName||''}"></div>
         </div>
         <div class="frow2">
-          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" value="${prefillCust?.email||l.customerEmail||''}" onblur="checkLeadFormDuplicate()"></div>
-          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" value="${prefillCust?.phone||l.customerPhone||''}" oninput="fmtPhone(this)" onblur="checkLeadFormDuplicate()"></div>
+          <div class="fg"><div class="fl">Email</div><input class="fi" id="lf-email" type="email" placeholder="email@example.com" autocomplete="off" value="${prefillCust?.email||l.customerEmail||''}" onblur="checkLeadFormDuplicate()"></div>
+          <div class="fg"><div class="fl">Phone</div><input class="fi" id="lf-phone" placeholder="(540) 000-0000" autocomplete="off" value="${prefillCust?.phone||l.customerPhone||''}" oninput="fmtPhone(this)" onblur="checkLeadFormDuplicate()"></div>
         </div>
         <div id="lf-dupe-banner" style="display:none"></div>
       </div>
@@ -3608,11 +3608,11 @@ function showLeadForm(lead, prefillCustId) {
     </div>
     <div class="fsec">
       <div class="fsec-title">Site Address</div>
-      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" value="${l.siteStreet||prefillCust?.street||''}"></div>
+      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" autocomplete="off" value="${l.siteStreet||prefillCust?.street||''}"></div>
       <div class="frow3">
-        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" value="${l.siteCity||prefillCust?.city||''}" oninput="onCityInput(this.value)"></div>
-        <div class="fg"><div class="fl">State</div><input class="fi" id="lf-state" value="${l.siteState||prefillCust?.state||'VA'}"></div>
-        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" value="${l.siteZip||prefillCust?.zip||''}"></div>
+        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" autocomplete="off" value="${l.siteCity||prefillCust?.city||''}" oninput="onCityInput(this.value)"></div>
+        <div class="fg"><div class="fl">State</div><input class="fi" id="lf-state" autocomplete="off" value="${l.siteState||prefillCust?.state||'VA'}"></div>
+        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" autocomplete="off" value="${l.siteZip||prefillCust?.zip||''}"></div>
       </div>
       <div id="juris-banner-wrap">${jurisHtml}</div>
     </div>
@@ -3850,21 +3850,21 @@ function showCustomerForm(c) {
     <div class="fsec">
       <div class="fsec-title">Contact Info</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">First Name</div><input class="fi" id="cf-fn" value="${c?.firstName||''}" placeholder="First"></div>
-        <div class="fg"><div class="fl">Last Name</div><input class="fi" id="cf-ln" value="${c?.lastName||''}" placeholder="Last"></div>
+        <div class="fg"><div class="fl">First Name</div><input class="fi" id="cf-fn" value="${c?.firstName||''}" placeholder="First" autocomplete="off"></div>
+        <div class="fg"><div class="fl">Last Name</div><input class="fi" id="cf-ln" value="${c?.lastName||''}" placeholder="Last" autocomplete="off"></div>
       </div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Email</div><input class="fi" id="cf-email" type="email" value="${c?.email||''}" placeholder="email@example.com"></div>
-        <div class="fg"><div class="fl">Phone</div><input class="fi" id="cf-phone" value="${c?.phone||''}" placeholder="(540) 000-0000" oninput="fmtPhone(this)"></div>
+        <div class="fg"><div class="fl">Email</div><input class="fi" id="cf-email" type="email" value="${c?.email||''}" placeholder="email@example.com" autocomplete="off"></div>
+        <div class="fg"><div class="fl">Phone</div><input class="fi" id="cf-phone" value="${c?.phone||''}" placeholder="(540) 000-0000" autocomplete="off" oninput="fmtPhone(this)"></div>
       </div>
     </div>
     <div class="fsec">
       <div class="fsec-title">Address</div>
-      <div class="fg"><div class="fl">Street</div><input class="fi" id="cf-street" value="${c?.street||''}" placeholder="123 Main St"></div>
+      <div class="fg"><div class="fl">Street</div><input class="fi" id="cf-street" value="${c?.street||''}" placeholder="123 Main St" autocomplete="off"></div>
       <div class="frow3">
-        <div class="fg"><div class="fl">City</div><input class="fi" id="cf-city" value="${c?.city||''}" placeholder="City"></div>
-        <div class="fg"><div class="fl">State</div><input class="fi" id="cf-state" value="${c?.state||'VA'}"></div>
-        <div class="fg"><div class="fl">Zip</div><input class="fi" id="cf-zip" value="${c?.zip||''}" placeholder="22401"></div>
+        <div class="fg"><div class="fl">City</div><input class="fi" id="cf-city" value="${c?.city||''}" placeholder="City" autocomplete="off"></div>
+        <div class="fg"><div class="fl">State</div><input class="fi" id="cf-state" value="${c?.state||'VA'}" autocomplete="off"></div>
+        <div class="fg"><div class="fl">Zip</div><input class="fi" id="cf-zip" value="${c?.zip||''}" placeholder="22401" autocomplete="off"></div>
       </div>
     </div>
     <div class="fsec">
