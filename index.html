@@ -2296,7 +2296,8 @@ const SECS = {
     <div class="srow"><div><div class="srl">Quote validity period</div></div><input class="sinput" value="30 days"></div>
     <div style="margin:18px 0 6px 0;padding-top:14px;border-top:1px solid var(--border);font-size:12px;font-weight:600;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">Payment Processing</div>
     <div class="srow"><div><div class="srl">Payment processing buffer (%)</div><div class="srd">Added to every new quote as a separate line so card payments break even. <strong>Direct jobs only</strong> — not applied to Qmerit, Electrum, or Treehouse (those platforms pay us directly). Existing quotes keep their current value.</div></div><input class="sinput" id="set-payment-buffer" type="number" step="0.1" min="0" max="10" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().paymentBuffer==='number') ? getPrefs().paymentBuffer : 3}"></div>
-    <div class="srow"><div><div class="srl">Non-card discount (%)</div><div class="srd">Shown on direct-job quote PDFs as the ACH / check / Zelle savings vs the card price.</div></div><input class="sinput" id="set-noncard-discount" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().nonCardDiscount==='number') ? getPrefs().nonCardDiscount : 2}"></div>
+    <div class="srow"><div><div class="srl">ACH buffer (%)</div><div class="srd">Effective buffer baked into the ACH price tier (between the CC price and the cash/Zelle price). Typical: 1.</div></div><input class="sinput" id="set-ach-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.achBuffer==='number')return p.achBuffer;return 1;})()}"></div>
+    <div class="srow"><div><div class="srl">Cash / Zelle / Check buffer (%)</div><div class="srd">Effective buffer for cash, Zelle, or check payments. Usually 0 — the customer gets the un-marked-up base price.</div></div><input class="sinput" id="set-cash-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.cashBuffer==='number')return p.cashBuffer;return 0;})()}"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Jurisdictions':`<div class="stitle">Special Jurisdictions</div><div class="sdesc">Jobs here auto-get adjusted permit fee and in-person inspection flag.</div>
@@ -2987,15 +2988,23 @@ function editUserNotifyEmail(userId) {
 function saveSets() {
   const p = getPrefs();
   const pb = document.getElementById('set-payment-buffer');
-  const nd = document.getElementById('set-noncard-discount');
+  const ab = document.getElementById('set-ach-buffer');
+  const cb = document.getElementById('set-cash-buffer');
   if (pb) {
     const v = parseFloat(pb.value);
     if (!isNaN(v) && v >= 0 && v <= 10) p.paymentBuffer = v;
   }
-  if (nd) {
-    const v = parseFloat(nd.value);
-    if (!isNaN(v) && v >= 0 && v <= 5) p.nonCardDiscount = v;
+  if (ab) {
+    const v = parseFloat(ab.value);
+    if (!isNaN(v) && v >= 0 && v <= 5) p.achBuffer = v;
   }
+  if (cb) {
+    const v = parseFloat(cb.value);
+    if (!isNaN(v) && v >= 0 && v <= 5) p.cashBuffer = v;
+  }
+  // Drop the legacy single-discount knob now that we've migrated to per-tier
+  // buffers — keeps prefs tidy and avoids confusion if both are present.
+  if ('nonCardDiscount' in p) delete p.nonCardDiscount;
   savePrefs(p);
   toast('Settings saved','success');
 }
@@ -6604,11 +6613,29 @@ function calcQuoteTotals(q){
   // Buffer is force-zeroed for platform-paid jobs (Qmerit/Electrum/Treehouse)
   // and for B2B referrer-billed jobs (e.g., AF1 paying us directly via ACH).
   const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
-  const buffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  const ccBufferPct = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
+  // ACH and Cash/Zelle/Check buffers come from global prefs. They are still
+  // zeroed for platform/referrer flows so the 3-tier display only appears on
+  // direct-customer-pay jobs where it actually matters.
+  const _prefs = (typeof getPrefs === 'function') ? getPrefs() : {};
+  const achBufferPct  = _zeroBuf ? 0 : ((typeof _prefs.achBuffer  === 'number') ? _prefs.achBuffer  : 1);
+  const cashBufferPct = _zeroBuf ? 0 : ((typeof _prefs.cashBuffer === 'number') ? _prefs.cashBuffer : 0);
   const lmAfterDiscount = (q.laborAndMaterials||0) - (q.veteranDiscount||0);
   const preProcessingTotal = lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0);
-  const paymentProcessingFee = Math.round(preProcessingTotal * buffer / 100 * 100) / 100;
-  const finalTotal = preProcessingTotal + paymentProcessingFee;
+  const _round2 = (x) => Math.round(x * 100) / 100;
+  // Per-tier processing fees — each computed independently from the base, so
+  // the math is exact (avoids the "discount-off-discounted-price" rounding
+  // weirdness of the old non-card-discount model).
+  const ccFee   = _round2(preProcessingTotal * ccBufferPct  / 100);
+  const achFee  = _round2(preProcessingTotal * achBufferPct / 100);
+  const cashFee = _round2(preProcessingTotal * cashBufferPct/ 100);
+  const ccTotal   = preProcessingTotal + ccFee;
+  const achTotal  = preProcessingTotal + achFee;
+  const cashTotal = preProcessingTotal + cashFee;
+  // Headline quoteTotal stays at the CC-included price — it's what the
+  // customer accepts in the contract and what the deposit/invoice flows key
+  // off. ACH/cash are surfaced as savings options.
+  const finalTotal = ccTotal;
   return {
     matSubtotal:q.matSubtotal||0,
     matAllowance:q.matAllowance||0,
@@ -6620,9 +6647,13 @@ function calcQuoteTotals(q){
     qmeritFee:q.qmeritFee||0,
     permitFee:q.permitFee||0,
     preProcessingTotal,
-    paymentBuffer: buffer,
-    paymentProcessingFee,
-    quoteTotal: finalTotal
+    paymentBuffer: ccBufferPct,
+    paymentProcessingFee: ccFee,
+    quoteTotal: finalTotal,
+    // 3-tier payment options
+    ccBufferPct, achBufferPct, cashBufferPct,
+    ccFee, achFee, cashFee,
+    ccTotal, achTotal, cashTotal
   };
 }
 
@@ -6787,23 +6818,29 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   }
   rows.push(`<div class="tot-row total"><span>Quote Total</span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
   // Payment options: non-card discount (from settings, default 2%)
-  // Only show when a payment buffer is in effect — otherwise we'd give away margin we didn't bake in.
-  const _qtBox = totals.quoteTotal||0;
-  const _prefsBox = (typeof getPrefs === 'function') ? getPrefs() : {};
-  const _ncPctBox = (typeof _prefsBox.nonCardDiscount === 'number') ? _prefsBox.nonCardDiscount : 2;
-  const _discAmtBox = Math.round(_qtBox * (_ncPctBox/100) * 100) / 100;
-  const _discTotalBox = _qtBox - _discAmtBox;
+  // 3-tier payment options box. Only shown when at least one tier differs
+  // from the headline (CC) price — otherwise there's nothing to choose.
+  const _ccBox   = totals.ccTotal   != null ? totals.ccTotal   : (totals.quoteTotal||0);
+  const _achBox  = totals.achTotal  != null ? totals.achTotal  : _ccBox;
+  const _cashBox = totals.cashTotal != null ? totals.cashTotal : _ccBox;
+  const _ccPctBox   = totals.ccBufferPct   || 0;
+  const _achPctBox  = totals.achBufferPct  || 0;
+  const _cashPctBox = totals.cashBufferPct || 0;
+  const _hasTiers = (_ccBox > 0) && (_ccBox !== _achBox || _ccBox !== _cashBox);
   let payHtml = '';
-  if(_qtBox > 0 && _ncPctBox > 0 && (totals.paymentBuffer||0) > 0){
+  if (_hasTiers) {
+    const _row = (label, amt, isHeadline, isBest) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;${isBest?'font-weight:600;color:var(--green);':isHeadline?'color:var(--text-primary);':'color:var(--text-secondary);'}padding:2px 0">
+        <span>${label}</span><span style="font-family:var(--mono)">${fmt$(amt)}</span>
+      </div>`;
+    const _achSavings  = _ccBox - _achBox;
+    const _cashSavings = _ccBox - _cashBox;
     payHtml = `<div style="margin-top:10px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:6px">
       <div style="font-size:10.5px;font-weight:600;letter-spacing:0.4px;color:var(--green);text-transform:uppercase;margin-bottom:6px">Payment Options</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--text-primary);padding:2px 0">
-        <span>By credit card</span><span style="font-family:var(--mono)">${fmt$(_qtBox)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;color:var(--green);padding:2px 0">
-        <span>By ACH, check, or Zelle</span><span style="font-family:var(--mono)">${fmt$(_discTotalBox)}</span>
-      </div>
-      <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Save ${fmt$(_discAmtBox)} (${_ncPctBox}%) by paying via ACH, check, or Zelle</div>
+      ${_row(`By credit card${_ccPctBox?` (+${_ccPctBox}%)`:''}`, _ccBox, true, false)}
+      ${_achBox  !== _ccBox ? _row(`By ACH${_achPctBox?` (+${_achPctBox}%)`:''}`, _achBox, false, _cashBox === _achBox ? false : false) : ''}
+      ${_cashBox !== _ccBox ? _row(`By cash, Zelle, or check${_cashPctBox?` (+${_cashPctBox}%)`:''}`, _cashBox, false, true) : ''}
+      ${_cashSavings > 0 ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Save ${fmt$(_cashSavings)} by paying via cash, Zelle, or check</div>` : ''}
     </div>`;
   }
   return `<div class="tot-box">${rows.join('')}${payHtml}</div>`;
@@ -8223,29 +8260,45 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     _pdfRows.push({desc:`Payment Processing (${_totalsPDF.paymentBuffer}%)`,amt:_totalsPDF.paymentProcessingFee});
   }
   y=pdfTable(doc,y,W,_pdfRows,'TOTAL',_totalsPDF.quoteTotal||0);
-  // Payment options block — show ACH/Check/Zelle discounted price
-  // Only shown when a buffer is baked in, otherwise we'd give away margin.
-  const _qt = _totalsPDF.quoteTotal||0;
-  const _prefsPDF = (typeof getPrefs === 'function') ? getPrefs() : {};
-  const _ncPctPDF = (typeof _prefsPDF.nonCardDiscount === 'number') ? _prefsPDF.nonCardDiscount : 2;
-  const _discAmt = Math.round(_qt * (_ncPctPDF/100) * 100) / 100;
-  const _discTotal = _qt - _discAmt;
-  if(_qt > 0 && _ncPctPDF > 0 && (_totalsPDF.paymentBuffer||0) > 0){
-    const _boxH = 62;
+  // 3-tier payment options block — only shown when at least one non-CC tier
+  // differs from the CC price. Suppressed for platform/referrer flows where
+  // every tier collapses to the same price.
+  const _ccPDF   = _totalsPDF.ccTotal   != null ? _totalsPDF.ccTotal   : (_totalsPDF.quoteTotal||0);
+  const _achPDF  = _totalsPDF.achTotal  != null ? _totalsPDF.achTotal  : _ccPDF;
+  const _cashPDF = _totalsPDF.cashTotal != null ? _totalsPDF.cashTotal : _ccPDF;
+  const _ccBufPct  = _totalsPDF.ccBufferPct  || 0;
+  const _achBufPct = _totalsPDF.achBufferPct || 0;
+  const _cashBufPct= _totalsPDF.cashBufferPct|| 0;
+  const _hasTiersPDF = (_ccPDF > 0) && (_ccPDF !== _achPDF || _ccPDF !== _cashPDF);
+  if (_hasTiersPDF) {
+    // Each tier line is ~15pt; 14pt header padding top, ~14pt footnote at end.
+    const _tierLines = [
+      { label: `By credit card${_ccBufPct?` (+${_ccBufPct}%)`:''}`,    amt: _ccPDF,   bold: false, color: 'dark' },
+      ...(_achPDF  !== _ccPDF ? [{ label: `By ACH${_achBufPct?` (+${_achBufPct}%)`:''}`,                          amt: _achPDF,  bold: false, color: 'dark' }] : []),
+      ...(_cashPDF !== _ccPDF ? [{ label: `By cash, Zelle, or check${_cashBufPct?` (+${_cashBufPct}%)`:''}`,      amt: _cashPDF, bold: true,  color: 'green' }] : [])
+    ];
+    const _bestSavings = _ccPDF - Math.min(_achPDF, _cashPDF);
+    const _footnote = _bestSavings > 0 ? `Save ${fmt$(_bestSavings)} by paying via cash, Zelle, or check` : '';
+    const _boxH = 22 + _tierLines.length * 15 + (_footnote ? 14 : 4);
     doc.setFillColor(235,250,225);
     doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
     doc.setDrawColor(...GREEN);doc.setLineWidth(0.75);
     doc.roundedRect(36,y,W-72,_boxH,4,4,'S');
     doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);
     doc.text('PAYMENT OPTIONS',46,y+14);
-    doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(...DARK);
-    doc.text('By credit card',46,y+30);
-    doc.text(fmt$(_qt),W-46,y+30,{align:'right'});
-    doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(...GREEN);
-    doc.text('By ACH, check, or Zelle',46,y+45);
-    doc.text(fmt$(_discTotal),W-46,y+45,{align:'right'});
-    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
-    doc.text(`Save ${fmt$(_discAmt)} (${_ncPctPDF}%) by paying via ACH, check, or Zelle`,46,y+57);
+    let _tierY = y + 30;
+    _tierLines.forEach(t => {
+      doc.setFont('helvetica', t.bold ? 'bold' : 'normal');
+      doc.setFontSize(9.5);
+      if (t.color === 'green') doc.setTextColor(...GREEN); else doc.setTextColor(...DARK);
+      doc.text(t.label, 46, _tierY);
+      doc.text(fmt$(t.amt), W-46, _tierY, {align:'right'});
+      _tierY += 15;
+    });
+    if (_footnote) {
+      doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
+      doc.text(_footnote, 46, _tierY);
+    }
     y += _boxH + 10;
   }
   // payment schedule — direct-customer-pay only
