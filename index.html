@@ -3555,7 +3555,11 @@ function showLeadForm(lead, prefillCustId) {
       <div class="frow2">
         <div class="fg"><div class="fl">Source</div>
           <select class="fsel" id="lf-source" onchange="onSourceChange(this.value)">
-            ${SOURCES.map(s=>`<option${s===l.source?' selected':''}>${s}</option>`).join('')}
+            ${(() => {
+              // New leads default to Website. Existing leads keep whatever they were.
+              const defaultSrc = l.source || (isNew ? 'Website' : '');
+              return SOURCES.map(s=>`<option${s===defaultSrc?' selected':''}>${s}</option>`).join('');
+            })()}
           </select>
         </div>
         <div class="fg"><div class="fl">Job Type</div>
@@ -3581,11 +3585,11 @@ function showLeadForm(lead, prefillCustId) {
     </div>
     <div class="fsec">
       <div class="fsec-title">Site Address</div>
-      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" value="${l.siteStreet||''}"></div>
+      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" value="${l.siteStreet||prefillCust?.street||''}"></div>
       <div class="frow3">
-        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" value="${l.siteCity||''}" oninput="onCityInput(this.value)"></div>
-        <div class="fg"><div class="fl">State</div><input class="fi" id="lf-state" value="${l.siteState||'VA'}"></div>
-        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" value="${l.siteZip||''}"></div>
+        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" value="${l.siteCity||prefillCust?.city||''}" oninput="onCityInput(this.value)"></div>
+        <div class="fg"><div class="fl">State</div><input class="fi" id="lf-state" value="${l.siteState||prefillCust?.state||'VA'}"></div>
+        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" value="${l.siteZip||prefillCust?.zip||''}"></div>
       </div>
       <div id="juris-banner-wrap">${jurisHtml}</div>
     </div>
@@ -3619,6 +3623,13 @@ function showLeadForm(lead, prefillCustId) {
 
   // Address autocomplete
   setupAddrAutocomplete('lf-street','lf-city','lf-state','lf-zip');
+
+  // If we pre-filled the city from the customer record, run the jurisdiction
+  // check so the Stafford/Spotsy banner shows up without the user having to
+  // re-type the city.
+  if (prefillCust && prefillCust.city && !l.siteCity) {
+    onCityInput(prefillCust.city);
+  }
 }
 
 function onSourceChange(val) {
@@ -3658,6 +3669,26 @@ function selectExistingCust(id, name) {
   document.getElementById('lf-custname').value = name;
   document.getElementById('csd').classList.remove('show');
   document.getElementById('cust-fields').style.display = 'none';
+
+  // Auto-populate the site address from the customer record — but only if
+  // the address fields are currently empty so we don't clobber a different
+  // service address the dispatcher may have already typed in.
+  const c = getCustomer(id);
+  if (c) {
+    const setIfEmpty = (elId, val) => {
+      const el = document.getElementById(elId);
+      if (el && !el.value && val) el.value = val;
+    };
+    setIfEmpty('lf-street', c.street);
+    setIfEmpty('lf-city',   c.city);
+    setIfEmpty('lf-zip',    c.zip);
+    // State is special — it pre-fills to 'VA' on render, so treat that as
+    // empty and overwrite if the customer has a stored state.
+    const stEl = document.getElementById('lf-state');
+    if (stEl && c.state && (!stEl.value || stEl.value === 'VA')) stEl.value = c.state;
+    // Re-run the jurisdiction check on the populated city.
+    if (c.city) onCityInput(c.city);
+  }
 }
 
 function showNewCustFields() {
@@ -6279,6 +6310,14 @@ function renderDetailedQuoteForm(q){
       <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
         <textarea class="fta" id="dq-exc" rows="2" style="min-height:60px" oninput="onDQExcChange('${q.id}')">${q.exclusions||''}</textarea>
       </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)">
+        <div class="scope-lbl" style="display:flex;align-items:center;gap:8px">
+          Customer Note
+          <span style="font-weight:400;font-size:11px;color:var(--text-muted)">— optional, prepended to the quote email</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin:4px 0 6px;line-height:1.5">Use this for context the customer needs before reading the quote — dual-quote acceptance, contingencies, payment-terms exceptions, anything outside the standard template. Plain text. Leave blank for the default email body.</div>
+        <textarea class="fta" id="dq-cnote" rows="3" style="min-height:72px" oninput="onDQCustomerNoteChange('${q.id}')" placeholder="e.g. This quote is separate from your Qmerit/Dominion program quote and must be accepted in addition to it for the project to move forward.">${q.customerNote||''}</textarea>
+      </div>
       ${_renderPreInstallSection(q)}
     </div>`;
 }
@@ -6535,6 +6574,7 @@ function onDQBufferChange(qid){
 }
 function onDQIncChange(qid){const v=document.getElementById('dq-inc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,inclusions:v});}
 function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,exclusions:v});}
+function onDQCustomerNoteChange(qid){const v=document.getElementById('dq-cnote')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,customerNote:v});}
 
 // ── TOTALS & MARGIN ──
 function calcQuoteTotals(q){
@@ -7706,26 +7746,42 @@ function pdfTable(doc,y,W,items,totalLabel,totalAmt){
 // existing platform branches use, so the email modal renders consistently.
 function _buildDirectQuoteEmail(ctx) {
   const { q, lead } = ctx;
+  // Build the body via the per-job-type template, then inject any per-quote
+  // Customer Note at the top (between greeting and opener line) so dispatchers
+  // can prepend custom framing — dual-quote acceptance language, contingent
+  // notes, payment-terms exceptions, etc. — without us having to formalize
+  // the linkage between quotes.
+  const _injectCustomerNote = (result) => {
+    const note = ((q && q.customerNote) || '').trim();
+    if (!note) return result;
+    result.body = result.body.replace(
+      /^(Hi [^,\n]+,)\n\n/,
+      `$1\n\n${note}\n\n`
+    );
+    return result;
+  };
   // Utility-coordinated jobs use a totally different "contingent acceptance"
   // story regardless of the deposit schedule.
   if ((typeof isUtilityDelayedJob === 'function' && isUtilityDelayedJob(q)) ||
       q.contingentOnUtility) {
-    return _buildUtilityCoordinatedEmail(ctx);
+    return _injectCustomerNote(_buildUtilityCoordinatedEmail(ctx));
   }
   // EV-style — for ev-residential and nema-1450
   if (q.jobType === 'ev-residential' || q.jobType === 'nema-1450') {
-    return _buildEVStyleQuoteEmail(ctx);
+    return _injectCustomerNote(_buildEVStyleQuoteEmail(ctx));
   }
   // Equipment-required — battery, V2H, generator
   if (q.jobType === 'battery-system' || q.jobType === 'v2h-system' || q.jobType === 'generator') {
-    return _buildEquipmentRequiredEmail(ctx);
+    return _injectCustomerNote(_buildEquipmentRequiredEmail(ctx));
   }
-  // No-permit — circuit replacement
-  if (q.jobType === 'circuit-replacement') {
-    return _buildNoPermitEmail(ctx);
+  // No-permit — circuit replacement, energy-management add-ons, custom one-offs
+  if (q.jobType === 'circuit-replacement' ||
+      q.jobType === 'energy-management' ||
+      q.jobType === 'custom') {
+    return _injectCustomerNote(_buildNoPermitEmail(ctx));
   }
   // Default — permit-required-standard (HVAC circuit, panel replacement, anything else)
-  return _buildPermitStandardEmail(ctx);
+  return _injectCustomerNote(_buildPermitStandardEmail(ctx));
 }
 
 // Build the "SCOPE OF WORK" block as plain text for inclusion in direct
@@ -7897,11 +7953,19 @@ ${_DIRECT_QUOTE_SIGNOFF}`;
 // Circuit replacement — no permit, fast turnaround.
 function _buildNoPermitEmail({ q, custFirst, projectPhrase, total, addr }) {
   const subject = `Your GreenKey Quote — ${q.id}`;
+  // Job-type-specific opener line — circuit replacement explains the
+  // like-for-like rationale; energy-management / custom just note that no
+  // permit is needed, with no copy that doesn't apply.
+  const noPermitNote = (q.jobType === 'circuit-replacement')
+    ? 'This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.'
+    : (q.jobType === 'energy-management')
+      ? 'No permit is required for this device install — it lands on existing wiring downstream of an already-permitted circuit.'
+      : 'No permit is required for this scope of work.';
   const body = `Hi ${custFirst},
 
 Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
 
-This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.
+${noPermitNote}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
