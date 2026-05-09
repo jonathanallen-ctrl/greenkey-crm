@@ -1475,7 +1475,7 @@ const STAGES = [
   {id:'utility-approval', label:'Awaiting Utility',  col:'purple'},
   {id:'permit-applied',   label:'Awaiting Permit',   col:'amber'},
   {id:'charger-confirmed',label:'Awaiting Charger',  col:'blue'},
-  {id:'scheduled',        label:'Scheduled',         col:'green'},
+  {id:'scheduled',        label:'Scheduling',        col:'green'},
   {id:'pre-install',      label:'Pre-Install',       col:'amber'},
   {id:'installation',     label:'Installation',      col:'green'},
   {id:'post-install-docs',label:'Post-Install Docs', col:'amber'},
@@ -12695,6 +12695,128 @@ function clearSchedDayPlan() {
   renderSchedulerPage();
 }
 
+// ── CUSTOM STOPS ─────────────────────────────────────────────────────────
+// Lightweight slots the dispatcher can insert into a built day plan without
+// having to create a full job record. Use cases: meetings, supplier pickups,
+// inspections, lunches with someone, etc. They render in the timeline
+// alongside real jobs and export to .ics.
+function openCustomStopDialog() {
+  if (!_sched.scheduled || !_sched.scheduled.length) {
+    toast('Build a day plan first, then add custom stops to it.', 'warning');
+    return;
+  }
+  const title = window.prompt('Custom stop title (e.g. "Pickup at Capitol Light", "County permits office")', '');
+  if (!title || !title.trim()) return;
+  const durStr = window.prompt('Duration in minutes (e.g. 30)', '30');
+  if (durStr === null) return;
+  const durMin = Math.max(15, parseInt(durStr, 10) || 30);
+  const startStr = window.prompt('Optional start time (HH:MM in 24hr, e.g. 13:30). Leave blank to append at the end of the day.', '');
+  let startHrs = null;
+  if (startStr && /^\d{1,2}:\d{2}$/.test(startStr.trim())) {
+    const [h, m] = startStr.trim().split(':').map(Number);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) startHrs = h + m/60;
+  }
+  const note = window.prompt('Optional note / address (one line)', '') || '';
+  insertCustomStop({ title: title.trim(), durMin, startHrs, note: note.trim() });
+}
+
+function insertCustomStop({ title, durMin, startHrs, note }) {
+  const durHrs = durMin / 60;
+  // If no fixed start time, append at the very end (after the last slot).
+  if (startHrs == null) {
+    const last = _sched.scheduled[_sched.scheduled.length - 1];
+    startHrs = last ? last.endTime : 8.0;
+  }
+  const slot = {
+    lead: null,
+    stopType: 'custom',
+    title, note,
+    driveStart: startHrs,
+    driveHrs:   0,
+    startTime:  startHrs,
+    jobHrs:     durHrs,
+    endTime:    startHrs + durHrs
+  };
+  // Insert in chronological order based on startTime.
+  const idx = _sched.scheduled.findIndex(s => (s.startTime || 0) > startHrs);
+  if (idx === -1) _sched.scheduled.push(slot);
+  else _sched.scheduled.splice(idx, 0, slot);
+  // Persist into the day plan and re-render.
+  const planKey = _dayPlanKey(_sched.date, _sched.techId);
+  if (_sched.dayPlans[planKey]) {
+    _sched.dayPlans[planKey].scheduled = _sched.scheduled;
+  }
+  _persistSched();
+  toast('Custom stop added.', 'success');
+  renderSchedulerPage();
+}
+
+// ── PER-JOB TIME WINDOW ─────────────────────────────────────────────────
+// Customer-driven constraints: "no earlier than 10 AM" (someone leaves for
+// work), "no later than 2 PM" (someone has to pick up kids). Stored on the
+// lead at scheduling.timeWindow so it survives across schedule rebuilds.
+// The optimizer respects both: a too-early arrival inserts a wait; a
+// too-late arrival sends the job to unscheduled with the reason logged.
+function editJobTimeWindow(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const tw = lead.scheduling?.timeWindow || {};
+  const eStr = window.prompt(
+    `Earliest arrival time for ${lead.id}? Format HH:MM (24hr, e.g. 09:30).\nLeave blank to clear / no constraint.`,
+    tw.earliestStart || ''
+  );
+  if (eStr === null) return; // cancelled
+  const lStr = window.prompt(
+    `Latest arrival time for ${lead.id}? Format HH:MM (24hr, e.g. 15:00).\nLeave blank to clear / no constraint.`,
+    tw.latestStart || ''
+  );
+  if (lStr === null) return; // cancelled
+  // Validate
+  const valid = (s) => !s || /^\d{1,2}:\d{2}$/.test(s.trim());
+  if (!valid(eStr) || !valid(lStr)) {
+    toast('Time format must be HH:MM in 24-hour format (e.g. 09:30, 14:00).', 'error');
+    return;
+  }
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  if (!arr[idx].scheduling) arr[idx].scheduling = {};
+  arr[idx].scheduling.timeWindow = {
+    earliestStart: eStr.trim() || null,
+    latestStart:   lStr.trim() || null
+  };
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  // Force a rebuild on next click — the constraints affect ordering.
+  _sched.built = false;
+  toast('Time window saved.', 'success');
+  renderSchedulerPage();
+}
+
+// Convert 'HH:MM' (24hr) to decimal hours, or null if missing/invalid.
+function _parseHHMM(s) {
+  if (!s || typeof s !== 'string') return null;
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10), mn = parseInt(m[2], 10);
+  if (isNaN(h) || isNaN(mn) || h < 0 || h > 23 || mn < 0 || mn > 59) return null;
+  return h + mn/60;
+}
+
+function removeCustomStop(idx) {
+  if (!_sched.scheduled || !_sched.scheduled[idx]) return;
+  if (_sched.scheduled[idx].stopType !== 'custom') return;
+  if (!confirm(`Remove "${_sched.scheduled[idx].title || 'this custom stop'}"?`)) return;
+  _sched.scheduled.splice(idx, 1);
+  const planKey = _dayPlanKey(_sched.date, _sched.techId);
+  if (_sched.dayPlans[planKey]) {
+    _sched.dayPlans[planKey].scheduled = _sched.scheduled;
+  }
+  _persistSched();
+  toast('Custom stop removed.', 'success');
+  renderSchedulerPage();
+}
+
 // Restore the live single-day fields from the (date, techId)-keyed plan.
 // Used by both _changeSchedDate and _changeSchedTech — anytime the
 // date↔tech selection changes, look up the right plan and load it.
@@ -12973,39 +13095,69 @@ function clearScheduleOverrideAndRerender(leadId) {
 }
 
 function getSchedulableJobs(techId) {
-  // Pool filtering with two layers:
-  //   1. Gate filter — permit, charger, archive, already-scheduled-for-other-day.
-  //   2. Skill filter (optional) — if techId is supplied, drop jobs whose
-  //      requiredSkills the tech can't perform.
-  // EXCEPTION: jobs already committed for THE ACTIVE (date, tech) combo stay
-  // in the pool so the user can re-arrange this crew's schedule. Jobs
-  // committed for a different date OR a different tech drop out — booked
-  // elsewhere, not available to this crew.
+  // Pool filtering layers:
+  //   1. Stage filter — drop archived, drop new lead-received (no quote yet).
+  //   2. Already-committed filter — installScheduled milestone routes the lead
+  //      ONLY into its own (date, tech) plan; everything else excludes it.
+  //   3. Cross-plan filter — even before commit, leads that are already drafted
+  //      into ANOTHER day's or another tech's day plan (in _sched.dayPlans) are
+  //      excluded from the active pool. This is what stops Day 1's jobs from
+  //      reappearing in Day 2's pool, and Tech A's jobs from showing up in
+  //      Tech B's pool on the same day.
+  //   4. Skill filter — if techId is supplied, drop jobs whose requiredSkills
+  //      the tech can't perform.
   const tech = techId ? getUsers().find(u => u.id === techId) : null;
   const activeDate   = _sched.date;
   const activeTechId = _sched.techId || '';
+  const activeKey    = (typeof _dayPlanKey === 'function')
+                        ? _dayPlanKey(activeDate, activeTechId)
+                        : `${activeDate}__${activeTechId||'_any'}`;
+
+  // Build the set of lead IDs that are drafted into OTHER day plans (any plan
+  // whose key is not the currently-active one). dayPlans values may store
+  // either an array of slots in `scheduled` (newer shape) or an object with a
+  // `scheduled` array (older shape) — handle both defensively.
+  // Plans are keyed two ways across the codebase:
+  //   • single-day mode: `${date}__${techId||'_any'}` via _dayPlanKey
+  //   • multi-day mode:   bare ISO date (e.g. '2026-05-12')
+  // To recognize the active plan in both shapes, treat any of the following
+  // as equivalent to the active plan: the exact activeKey, the bare activeDate
+  // (multi-day case), or a key whose plan.techId matches activeTechId on activeDate.
+  const reservedElsewhere = new Set();
+  if (_sched && _sched.dayPlans && typeof _sched.dayPlans === 'object') {
+    for (const [planKey, plan] of Object.entries(_sched.dayPlans)) {
+      const planTech = plan?.techId || '';
+      const isActivePlan =
+        planKey === activeKey ||
+        (planKey === activeDate && planTech === activeTechId) ||
+        (planKey.startsWith(activeDate) && planTech === activeTechId);
+      if (isActivePlan) continue;
+      const slots = Array.isArray(plan?.scheduled) ? plan.scheduled : [];
+      for (const s of slots) {
+        const lid = s?.lead?.id;
+        if (lid) reservedElsewhere.add(lid);
+      }
+    }
+  }
+
   return getLeads().filter(l => {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
     if (ms.installScheduled?.done) {
-      // Job has been committed. Show it in the pool ONLY if it belongs to the
-      // currently-viewed (date, tech) plan — that's the user's "I'm rebuilding
-      // this crew's day" view. Anything scheduled for a different day OR a
-      // different tech is treated as booked and stays out of the pool.
+      // Committed. Show it in the pool ONLY if it belongs to the active (date, tech)
+      // plan — that's the user's "I'm rebuilding this crew's day" view. Anything
+      // committed elsewhere is booked and stays out.
       if (ms.installScheduled.date !== activeDate) return false;
       const milestoneTechId = ms.installScheduled.techId || '';
       if (milestoneTechId !== activeTechId) return false;
       // Falls through — applies skill filter below, but skips gates.
     } else {
-      // Not yet committed. SOFT GATES ONLY: every non-archived job appears
-      // in the pool so the dispatcher always has a path forward without
-      // edits to the code. Missing prerequisites (permit, charger) surface
-      // as warning chips on the pool row — they no longer block selection.
-      // Stage 'lead-received' is the lone exception: brand-new leads with
-      // no quote yet shouldn't clutter the schedule pool.
+      // Not yet committed.
       if (l.stage === 'lead-received') return false;
+      // Cross-plan exclusion: don't let a lead appear in two pools at once.
+      if (reservedElsewhere.has(l.id)) return false;
     }
-    if (tech && !userCanDoJob(tech, l)) return false; // skill filter (if a tech is selected)
+    if (tech && !userCanDoJob(tech, l)) return false; // skill filter
     return true;
   });
 }
@@ -13631,6 +13783,18 @@ function renderSchedulerPage() {
         const inTodayChip = l.milestones?.installScheduled?.done && l.milestones.installScheduled.date === _sched.date
           ? `<span class="chip chip-ok" style="font-size:10.5px" title="Already committed to this date — uncheck and rebuild to remove from the schedule">📅 In today's plan</span>`
           : '';
+        // Time-window chip: shows the customer's earliest/latest start
+        // constraints (e.g. "🕘 ≥ 10:00", "🕘 ≤ 14:00", or "🕘 10:00–14:00").
+        // Click opens an editor; if no window set, the chip shows "🕘 Set time".
+        const _tw = l.scheduling?.timeWindow || {};
+        const _twHas = !!(_tw.earliestStart || _tw.latestStart);
+        let _twLabel = '🕘 Set time';
+        if (_twHas) {
+          if (_tw.earliestStart && _tw.latestStart) _twLabel = `🕘 ${_tw.earliestStart}–${_tw.latestStart}`;
+          else if (_tw.earliestStart) _twLabel = `🕘 ≥ ${_tw.earliestStart}`;
+          else if (_tw.latestStart)   _twLabel = `🕘 ≤ ${_tw.latestStart}`;
+        }
+        const _twChip = `<span class="chip${_twHas?' chip-info':''}" style="font-size:10.5px;cursor:pointer;${_twHas?'background:rgba(52,152,219,0.12);color:#3498db':''}" onclick="event.stopPropagation();editJobTimeWindow('${l.id}')" title="${_twHas ? 'Edit the customer time window. Click to change.' : 'Customer time window not set. Click to add an earliest or latest arrival constraint.'}">${_twLabel}</span>`;
         return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}" style="${isExcluded?'opacity:0.45;background:var(--bg-elevated)':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
             <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
@@ -13641,7 +13805,7 @@ function renderSchedulerPage() {
               <div style="flex:1">
                 <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
                 <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${prereqChips}${overrideChip}${inTodayChip}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${prereqChips}${overrideChip}${inTodayChip}${_twChip}</div>
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
@@ -13699,28 +13863,39 @@ function renderSchedulerPage() {
       const driveStr = driveMin >= 60 ? `${Math.floor(driveMin/60)}h ${driveMin%60}m` : `${driveMin}m`;
       const driveRow = s.driveHrs > 0 ? `<div class="sched-drive-row">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v14M3 6l5-5 5 5M3 11l5 4 5-4"/></svg>
-        Drive ${driveStr} — ${fmtTime(s.driveStart)}
+        Drive ${driveStr} — ${fmtTimeFloor(s.driveStart)}
       </div>` : '';
       // Distributor / utility stops have no lead. Render them with a distinct style.
       if (s.stopType === 'distributor') {
         const distAddr = getPrefs().distributorAddress || '(distributor address not set)';
         return `${driveRow}
           <div class="sched-slot" style="background:rgba(243,156,18,0.06);border-left:3px solid #f39c12">
-            <div class="sched-time">${fmtTime(s.startTime)}</div>
+            <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
             <div class="sched-slot-body">
               <div style="font-weight:500;font-size:13.5px;color:#f39c12">📦 Distributor stop</div>
               <div style="font-size:12px;color:var(--text-muted)">${escHtml(distAddr)}</div>
-              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTime(s.endTime)}</div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTimeCeil(s.endTime)}</div>
             </div>
           </div>`;
       }
       if (s.stopType === 'break') {
         return `<div class="sched-slot" style="background:rgba(149,165,166,0.08);border-left:3px solid #95a5a6">
-          <div class="sched-time">${fmtTime(s.startTime)}</div>
+          <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
           <div class="sched-slot-body">
             <div style="font-weight:500;font-size:13.5px;color:#7f8c8d">🍔 Gas / restroom break</div>
-            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTime(s.endTime)}</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTimeCeil(s.endTime)}</div>
           </div>
+        </div>`;
+      }
+      if (s.stopType === 'custom') {
+        return `<div class="sched-slot" style="background:rgba(52,152,219,0.06);border-left:3px solid #3498db;display:flex;align-items:center;gap:10px">
+          <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
+          <div class="sched-slot-body" style="flex:1">
+            <div style="font-weight:500;font-size:13.5px;color:#3498db">📌 ${escHtml(s.title || 'Custom stop')}</div>
+            ${s.note ? `<div style="font-size:12px;color:var(--text-muted)">${escHtml(s.note)}</div>` : ''}
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${fmtHrs(s.jobHrs)} · ends ${fmtTimeCeil(s.endTime)}</div>
+          </div>
+          <button onclick="removeCustomStop(${i})" title="Remove this custom stop" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;width:24px;height:22px;cursor:pointer;color:var(--text-muted);font-size:13px;line-height:1;padding:0;flex-shrink:0">×</button>
         </div>`;
       }
       const cust = custs.find(c => c.id === s.lead.customerId);
@@ -13728,13 +13903,17 @@ function renderSchedulerPage() {
       const addr = [s.lead.siteStreet, s.lead.siteCity].filter(Boolean).join(', ');
       const upDisabled   = i === 0 ? 'disabled style="opacity:0.3;cursor:not-allowed"' : '';
       const downDisabled = i === _sched.scheduled.length - 1 ? 'disabled style="opacity:0.3;cursor:not-allowed"' : '';
+      const waitNote = s.waitHrs && s.waitHrs > 0
+        ? `<div style="font-size:11.5px;color:#3498db;margin-top:2px">⏱ Wait ${fmtHrs(s.waitHrs)} for customer time window</div>`
+        : '';
       return `${driveRow}
         <div class="sched-slot" style="display:flex;align-items:center;gap:10px">
-          <div class="sched-time">${fmtTime(s.startTime)}</div>
+          <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
           <div class="sched-slot-body" style="flex:1">
             <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
             <div style="font-size:12px;color:var(--text-muted)">${escHtml(addr)}</div>
-            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${s.lead.id} · ${fmtHrs(s.jobHrs)} · ends ${fmtTime(s.endTime)}</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${s.lead.id} · ${fmtHrs(s.jobHrs)} · ends ${fmtTimeCeil(s.endTime)}</div>
+            ${waitNote}
           </div>
           <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
             <button onclick="reorderSchedSlot(${i},-1)" ${upDisabled} title="Move earlier" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;width:24px;height:18px;cursor:pointer;color:var(--text-secondary);font-size:11px;line-height:1;padding:0">▲</button>
@@ -13762,7 +13941,7 @@ function renderSchedulerPage() {
       ${slots}
       <div class="sched-drive-row" style="margin-top:4px">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v14M3 6l5-5 5 5M3 11l5 4 5-4"/></svg>
-        Return home ${returnStr} — leaves ${fmtTime(last.endTime)}, home ${fmtTime(last.endTime + (_sched.returnDriveHrs||0))}
+        Return home ${returnStr} — leaves ${fmtTimeFloor(last.endTime)}, home ${fmtTimeCeil(last.endTime + (_sched.returnDriveHrs||0))}
       </div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center">
         ${_sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)]?.locked ? `<span class="chip chip-ok" style="font-size:11px">🔒 Locked — marked as scheduled</span>` : ''}
@@ -13775,6 +13954,7 @@ function renderSchedulerPage() {
           Send Confirmations
         </button>
         <button class="btn btn-g" onclick="markDayScheduled()" ${_sched.dayPlans[_dayPlanKey(_sched.date, _sched.techId)]?.locked ? 'disabled title="Already marked"' : ''}>✓ Mark all as scheduled</button>
+        <button class="btn btn-g" onclick="openCustomStopDialog()" title="Add a custom stop — meeting, errand, lunch, supplier visit, etc. — without creating a formal job">+ Add custom stop</button>
         <button class="btn btn-g" style="margin-left:auto;color:var(--text-muted);font-size:11px" onclick="clearSchedDayPlan()" title="Wipe this day's saved plan and start over">Clear plan</button>
       </div>
       ${_sched.unscheduled.length ? `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${_sched.unscheduled.length} job(s) didn't fit today — they remain in the pool for another day.</div>` : ''}`;
@@ -13843,7 +14023,7 @@ function renderSchedulerPage() {
         </label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--amber)" title="Pack every selected job into the day even if it pushes past your work-day budget. The plan will run long; the day-utilization bar shows the overtime.">
           <input type="checkbox" ${_sched.allowOT?'checked':''}
-            onchange="_sched.allowOT=this.checked;_sched.built=false;renderSchedulerPage()"
+            onchange="_sched.allowOT=this.checked;_sched.built=false;(_sched.scheduled&&_sched.scheduled.length?runScheduler():renderSchedulerPage())"
             style="accent-color:var(--amber)">
           Allow overtime (force all selected)
         </label>
@@ -13908,6 +14088,23 @@ function fmtTime(decHrs) {
   const mm = String(m).padStart(2,'0');
   return `${hh}:${mm} ${h < 12 ? 'AM' : 'PM'}`;
 }
+// Conservative half-hour rounding for customer-facing schedule display.
+//   fmtTimeFloor — round DOWN to the nearest :00 or :30. Used for ARRIVAL
+//                  times so customers always expect us a bit earlier than
+//                  reality and we never beat their expectation.
+//   fmtTimeCeil  — round UP to the nearest :00 or :30. Used for END times
+//                  so customers don't expect us done before we actually are.
+// The underlying decimal hours stay exact for math; this only affects display.
+function _floorHalfHour(decHrs) {
+  if (decHrs == null) return decHrs;
+  return Math.floor(decHrs * 2) / 2;
+}
+function _ceilHalfHour(decHrs) {
+  if (decHrs == null) return decHrs;
+  return Math.ceil(decHrs * 2) / 2;
+}
+function fmtTimeFloor(decHrs) { return fmtTime(_floorHalfHour(decHrs)); }
+function fmtTimeCeil(decHrs)  { return fmtTime(_ceilHalfHour(decHrs)); }
 function fmtHrsLabel(h) { return h === 1 ? '1 hr' : `${h} hrs`; }
 function formatSchedDate(iso) {
   if (!iso) return '—';
@@ -14002,19 +14199,40 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
   }
 
   while (available.length > 0) {
-    let bestIdx = -1, bestDrive = Infinity;
+    // Find the best candidate: shortest drive that fits the day budget (or any
+    // candidate when allowOT is on). Time-window constraints are also honored:
+    //   - earliestStart: if arrival is too early, a wait is inserted (cost
+    //     penalty so other jobs are preferred when one fills the gap)
+    //   - latestStart:  if arrival is too late, the job is permanently
+    //     unschedulable today (pushed to unscheduled, with reason)
+    let bestIdx = -1, bestScore = Infinity;
+    let bestWait = 0;
     for (let i = 0; i < available.length; i++) {
       const l = available[i];
       const c = coords[l.id];
       if (!c) { unscheduled.push(l); available.splice(i,1); i--; continue; }
       const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
       const jobH  = durationsMap[l.id] || estimateJobDuration(l);
-      // Default behavior: only consider jobs that fit in the remaining day budget.
-      // allowOT: ignore the budget — pack everything in geographically optimal order
-      // and let the day run long. Scheduler shows the OT amount in the utilization summary.
-      const fits = allowOT || (drive + jobH <= remaining + 0.05);
-      if (fits && drive < bestDrive) {
-        bestDrive = drive; bestIdx = i;
+      const arrival = clockHrs + drive;
+      const tw = l.scheduling?.timeWindow || {};
+      const earliestHrs = _parseHHMM(tw.earliestStart);
+      const latestHrs   = _parseHHMM(tw.latestStart);
+      // Latest constraint — hard stop. If we'd arrive after the cutoff, this
+      // job can't be scheduled today. Skip; will fall through to unscheduled
+      // when no other candidate fits.
+      if (latestHrs != null && arrival > latestHrs + 0.0001) continue;
+      // Earliest constraint — soft. Insert a wait if we'd arrive too early.
+      let waitH = 0;
+      if (earliestHrs != null && arrival < earliestHrs) {
+        waitH = earliestHrs - arrival;
+      }
+      // Day-budget fit check (drive + wait + job).
+      const fits = allowOT || (drive + waitH + jobH <= remaining + 0.05);
+      // Score: drive time + half-weighted wait. Drive matters most, but waiting
+      // is real wasted time so we still penalize it when ranking candidates.
+      const score = drive + waitH * 0.5;
+      if (fits && score < bestScore) {
+        bestScore = score; bestIdx = i; bestWait = waitH;
       }
     }
     if (bestIdx === -1) break;
@@ -14023,13 +14241,15 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
     const c = coords[l.id];
     const jobH   = durationsMap[l.id] || estimateJobDuration(l);
     const driveH = driveTimeHrs(curLat, curLon, c.lat, c.lon);
+    const waitH  = bestWait;
     scheduled.push({
       lead: l, driveStart: clockHrs, driveHrs: driveH,
-      startTime: clockHrs + driveH, jobHrs: jobH,
-      endTime: clockHrs + driveH + jobH
+      waitHrs: waitH || undefined,
+      startTime: clockHrs + driveH + waitH, jobHrs: jobH,
+      endTime: clockHrs + driveH + waitH + jobH
     });
-    clockHrs += driveH + jobH;
-    remaining -= driveH + jobH;
+    clockHrs += driveH + waitH + jobH;
+    remaining -= driveH + waitH + jobH;
     curLat = c.lat; curLon = c.lon;
     available.splice(bestIdx, 1);
   }
@@ -14105,11 +14325,24 @@ async function runScheduler() {
     if (c) coords[key] = c;
   }
 
+  // Preserve any custom stops the user added — the optimizer doesn't know
+  // about them, so we re-insert them after the build completes (chronologically).
+  const carryCustom = (Array.isArray(_sched.scheduled) ? _sched.scheduled : [])
+    .filter(s => s?.stopType === 'custom');
+
   // Build the optimizer options from prefs + per-day toggles.
   const opts = await _buildSchedOpts();
 
   // Run the optimizer.
   const result = _optimizeDayPlan(jobs, coords, homeCoords, dayHours, _sched.durations, opts);
+  // Re-insert custom stops chronologically (sorted by startTime).
+  if (carryCustom.length) {
+    for (const cs of carryCustom) {
+      const insertIdx = result.scheduled.findIndex(s => (s.startTime || 0) > (cs.startTime || 0));
+      if (insertIdx === -1) result.scheduled.push(cs);
+      else result.scheduled.splice(insertIdx, 0, cs);
+    }
+  }
   _sched.scheduled      = result.scheduled;
   _sched.unscheduled    = result.unscheduled;
   _sched.returnDriveHrs = result.returnDriveHrs;
@@ -14380,7 +14613,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
         if (s.stopType === 'distributor') {
           return `${s.driveHrs > 0 ? `<div class="sched-drive-row">↳ Drive ${driveStr}</div>` : ''}
             <div class="sched-slot" style="background:rgba(243,156,18,0.06);border-left:3px solid #f39c12">
-              <div class="sched-time">${fmtTime(s.startTime)}</div>
+              <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
               <div class="sched-slot-body">
                 <div style="font-weight:500;font-size:13px;color:#f39c12">📦 Distributor stop</div>
                 <div style="font-size:11.5px;color:var(--text-secondary)">${fmtHrs(s.jobHrs)}</div>
@@ -14389,7 +14622,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
         }
         if (s.stopType === 'break') {
           return `<div class="sched-slot" style="background:rgba(149,165,166,0.08);border-left:3px solid #95a5a6">
-            <div class="sched-time">${fmtTime(s.startTime)}</div>
+            <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
             <div class="sched-slot-body">
               <div style="font-weight:500;font-size:13px;color:#7f8c8d">🍔 Gas / restroom break</div>
               <div style="font-size:11.5px;color:var(--text-secondary)">${fmtHrs(s.jobHrs)}</div>
@@ -14411,7 +14644,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
           : '';
         return `${s.driveHrs > 0 ? `<div class="sched-drive-row">↳ Drive ${driveStr}</div>` : ''}
           <div class="sched-slot">
-            <div class="sched-time">${fmtTime(s.startTime)}</div>
+            <div class="sched-time">${fmtTimeFloor(s.startTime)}</div>
             <div class="sched-slot-body">
               <div style="font-weight:500;font-size:13px;display:flex;align-items:center;flex-wrap:wrap">${escHtml(name)}${badgeHtml}</div>
               <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(addr)}</div>
@@ -14429,7 +14662,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
           ${fmtHrs(totalWork)} work · ${fmtHrs(totalDrive)} drive · ${fmtHrs(plan.returnDriveHrs||0)} return  ·  <span style="color:${barColor};font-weight:600">${fmtHrs(totalHrs)} / ${dayHours}h</span>
         </div>
         ${slots}
-        <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}${plan.scheduled.length ? ` — home ${fmtTime((plan.scheduled[plan.scheduled.length-1].endTime||0) + (plan.returnDriveHrs||0))}` : ''}</div>
+        <div class="sched-drive-row" style="margin-top:4px">↩ Return home ${returnStr}${plan.scheduled.length ? ` — home ${fmtTimeCeil((plan.scheduled[plan.scheduled.length-1].endTime||0) + (plan.returnDriveHrs||0))}` : ''}</div>
         ${(() => {
           // Confirmation roll-up for this day: how many of the scheduled jobs
           // have responses, and which states. Drives the Lock button gating.
@@ -14557,7 +14790,7 @@ async function sendDayConfirmations(date) {
     const previewHtml = _buildSchedConfirmEmailHtml({
       firstName,
       dateLabel: formatSchedDate(date),
-      timeLabel: `${fmtTime(slot.startTime)} – ${fmtTime(slot.endTime)}`,
+      timeLabel: `${fmtTimeFloor(slot.startTime)} – ${fmtTimeCeil(slot.endTime)}`,
       techName, lead,
       confirmUrl: '[unique link will appear in the real email]'
     });
@@ -14682,8 +14915,8 @@ async function _executeDayConfirmations() {
           customerEmail,
           customerName,
           proposedDate: date,
-          proposedStartTime: fmtTime(slot.startTime),
-          proposedEndTime:   fmtTime(slot.endTime),
+          proposedStartTime: fmtTimeFloor(slot.startTime),
+          proposedEndTime:   fmtTimeCeil(slot.endTime),
           techName,
           scopeSummary: (lead.scopeOfWork || lead.description || '').slice(0, 1500),
           siteAddress: [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ')
@@ -14700,7 +14933,7 @@ async function _executeDayConfirmations() {
       const subject = `Please confirm your GreenKey appointment on ${formatSchedDate(date)}`;
       const html = _buildSchedConfirmEmailHtml({
         firstName, dateLabel: formatSchedDate(date),
-        timeLabel: `${fmtTime(slot.startTime)} – ${fmtTime(slot.endTime)}`,
+        timeLabel: `${fmtTimeFloor(slot.startTime)} – ${fmtTimeCeil(slot.endTime)}`,
         techName, lead, confirmUrl
       });
       await _graphFetch('/me/sendMail', {
@@ -14908,11 +15141,39 @@ function downloadSchedICS() {
         'BEGIN:VEVENT',
         `UID:distributor-${dateStr}-${Math.round(s.startTime*60)}@greenkey-crm`,
         `DTSTAMP:${now}`,
-        `DTSTART:${icsDate(dateStr, s.startTime)}`,
-        `DTEND:${icsDate(dateStr, s.endTime)}`,
+        `DTSTART:${icsDate(dateStr, _floorHalfHour(s.startTime))}`,
+        `DTEND:${icsDate(dateStr, _ceilHalfHour(s.endTime))}`,
         `SUMMARY:Distributor stop`,
         `DESCRIPTION:Pickup at distributor before first job. Duration: ${fmtHrs(s.jobHrs)}`,
         `LOCATION:${distAddr.replace(/,/g,'\\,')}`,
+        'STATUS:CONFIRMED',
+        'END:VEVENT'
+      ].join('\r\n');
+    }
+    if (s.stopType === 'custom') {
+      const summary = (s.title || 'Custom stop').replace(/,/g, '\\,');
+      const desc    = (s.note || '').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+      return [
+        'BEGIN:VEVENT',
+        `UID:custom-${dateStr}-${Math.round(s.startTime*60)}-${(s.title||'').replace(/[^a-z0-9]/gi,'').slice(0,16) || 'stop'}@greenkey-crm`,
+        `DTSTAMP:${now}`,
+        `DTSTART:${icsDate(dateStr, _floorHalfHour(s.startTime))}`,
+        `DTEND:${icsDate(dateStr, _ceilHalfHour(s.endTime))}`,
+        `SUMMARY:${summary}`,
+        desc ? `DESCRIPTION:${desc}` : 'DESCRIPTION:Custom stop',
+        'STATUS:CONFIRMED',
+        'END:VEVENT'
+      ].join('\r\n');
+    }
+    if (s.stopType === 'break') {
+      return [
+        'BEGIN:VEVENT',
+        `UID:break-${dateStr}-${Math.round(s.startTime*60)}@greenkey-crm`,
+        `DTSTAMP:${now}`,
+        `DTSTART:${icsDate(dateStr, _floorHalfHour(s.startTime))}`,
+        `DTEND:${icsDate(dateStr, _ceilHalfHour(s.endTime))}`,
+        `SUMMARY:Gas / restroom break`,
+        `DESCRIPTION:Break time`,
         'STATUS:CONFIRMED',
         'END:VEVENT'
       ].join('\r\n');
@@ -14934,8 +15195,8 @@ function downloadSchedICS() {
       'BEGIN:VEVENT',
       `UID:${s.lead.id}-${dateStr}@greenkey-crm`,
       `DTSTAMP:${now}`,
-      `DTSTART:${icsDate(dateStr, s.startTime)}`,
-      `DTEND:${icsDate(dateStr, s.endTime)}`,
+      `DTSTART:${icsDate(dateStr, _floorHalfHour(s.startTime))}`,
+      `DTEND:${icsDate(dateStr, _ceilHalfHour(s.endTime))}`,
       `SUMMARY:Install — ${name.replace(/,/g,'\\,')}`,
       `DESCRIPTION:${desc}`,
       `LOCATION:${addr.replace(/,/g,'\\,')}`,
