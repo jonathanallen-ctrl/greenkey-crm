@@ -4260,7 +4260,7 @@ const _DEFAULT_MATERIALS = [
   // ── Equipment ──
   {id:'m-015', name:'Emporia Vue Monitor',  category:'Equipment', unit:'each', unitCost:160, markup:25},
   {id:'m-016', name:'Generac Smart Module', category:'Equipment', unit:'each', unitCost:225, markup:25},
-  {id:'m-017', name:'EV Tap (J1772/NACS)',  category:'Equipment', unit:'each', unitCost:95,  markup:25},
+  {id:'m-017', name:'EV Tap energy management device',  category:'Equipment', unit:'each', unitCost:95,  markup:25},
 
   // ── Hardware ──
   {id:'m-018', name:'4x4 Treated Post w/ Sonotube', category:'Hardware', unit:'each',    unitCost:55, markup:45},
@@ -4509,9 +4509,16 @@ function startQuoteBuilder(){
     const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
     if (ref) _autoBillTo = ref.id;
   }
+  // Permit default: respect the job type's noPermit flag. New job types like
+  // energy-management and custom default to $0; everything else falls through
+  // to the lead's permit fee or the source-based default ($250 Qmerit / $200).
+  const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
+  const _defaultPermit = (_jt && _jt.noPermit)
+    ? 0
+    : (lead.permitFee || (lead.source==='Qmerit' ? 250 : 200));
   const nq={
     id:'qt-'+Date.now(), leadId, customerId:lead.customerId, source:lead.source, jobType:lead.jobType,
-    type:qtype, status:'draft', permitFee: lead.permitFee || (lead.source==='Qmerit' ? 250 : 200),
+    type:qtype, status:'draft', permitFee: _defaultPermit,
     specialJurisdiction:lead.specialJurisdiction||false, jurisdiction:lead.jurisdiction||'',
     qq:{panelLocation:'garage',addlDist:0,routingType:'surface',machineFt:50,mountType:'wall',tandemBreakers:0,difficultyFee:0,travelFee:0,travelFeeType:'baked',extras:[]},
     lines:[], laborHours:0, laborRate:160, rentals:[],
@@ -6223,7 +6230,7 @@ function renderDetailedQuoteForm(q){
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onDQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${(typeof q.permitFee === 'number') ? q.permitFee : (((typeof getJobType==='function' && getJobType(q.jobType))||{}).noPermit ? 0 : (q.source==='Qmerit' ? 250 : 200))}" oninput="onDQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
@@ -6459,15 +6466,35 @@ function updateRental(qid,idx,field,val){const q=getQuote(qid);if(!q)return;cons
 function onDQChange(qid){
   const q=getQuote(qid);if(!q)return;
   const p=getQQPricing();
-  const laborHours=parseFloat(document.getElementById('dq-hours')?.value)||q.laborHours||0;
-  const laborRate=parseFloat(document.getElementById('dq-rate')?.value)||q.laborRate||160;
-  const permitFee=parseFloat(document.getElementById('dq-permit')?.value)||q.permitFee||(q.source==='Qmerit'?250:200);
-  const travelFee=parseFloat(document.getElementById('dq-travel')?.value)||q.travelFee||0;
+  // Read numeric inputs honoring an explicit "0" — the old `|| fallback`
+  // pattern treated 0 as falsy and snapped back to the previous value, so
+  // users couldn't actually clear hours / permit / travel to zero.
+  const _readNum = (id, fallback) => {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const raw = el.value;
+    if (raw === '' || raw == null) return fallback;
+    const n = parseFloat(raw);
+    return isNaN(n) ? fallback : n;
+  };
+  const _jtDQ = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  const _permitFallback = (typeof q.permitFee === 'number')
+    ? q.permitFee
+    : ((_jtDQ && _jtDQ.noPermit) ? 0 : (q.source==='Qmerit'?250:200));
+  const laborHours = _readNum('dq-hours', q.laborHours||0);
+  const laborRate  = _readNum('dq-rate',  q.laborRate||160);
+  const permitFee  = _readNum('dq-permit', _permitFallback);
+  const travelFee  = _readNum('dq-travel', q.travelFee||0);
   const travelFeeType=document.getElementById('dq-travtype')?.value||q.travelFeeType||'baked';
   const isVeteran=!!document.getElementById('dq-veteran')?.checked;
   const lines=q.lines||[], rentals=q.rentals||[];
   const matSub=lines.reduce((s,ln)=>s+calcLine(ln),0);
-  const matAllowance=matSub*p.materialsBuffer;
+  // Materials allowance — skip for tiny add-on quotes (energy-management,
+  // custom). User can opt back in via q.skipMatAllowance=false on the quote.
+  const _skipMatAllowance = (typeof q.skipMatAllowance === 'boolean')
+    ? q.skipMatAllowance
+    : (q.jobType === 'energy-management' || q.jobType === 'custom');
+  const matAllowance = _skipMatAllowance ? 0 : (matSub*p.materialsBuffer);
   const matTotal=matSub+matAllowance;
   const laborTotal=laborHours*laborRate;
   const rentalTotal=rentals.reduce((s,r)=>s+(parseFloat(r.cost)||0),0);
@@ -6673,7 +6700,9 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   const lmBaked = (totals.laborAndMaterials||0) + (isQmerit ? (totals.qmeritFee||0) : 0);
   if(q.type==='detailed'){
     rows.push(`<div class="tot-row"><span>Materials</span><span class="tot-num">${fmt$(totals.matSubtotal)}</span></div>`);
-    rows.push(`<div class="tot-row"><span>10% Materials Allowance</span><span class="tot-num">${fmt$(totals.matAllowance)}</span></div>`);
+    if((totals.matAllowance||0) > 0) {
+      rows.push(`<div class="tot-row"><span>10% Materials Allowance</span><span class="tot-num">${fmt$(totals.matAllowance)}</span></div>`);
+    }
     rows.push(`<div class="tot-row"><span>Labor</span><span class="tot-num">${fmt$(totals.laborTotal)}</span></div>`);
     if(totals.rentalTotal>0) rows.push(`<div class="tot-row"><span>Rentals</span><span class="tot-num">${fmt$(totals.rentalTotal)}</span></div>`);
   }
@@ -6688,7 +6717,9 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   if((totals.veteranDiscount||0)>0){
     rows.push(`<div class="tot-row" style="color:var(--green)"><span>− Military Veteran Discount</span><span class="tot-num">−${fmt$(totals.veteranDiscount)}</span></div>`);
   }
-  rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
+  if((totals.permitFee||0) > 0) {
+    rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
+  }
   if((totals.paymentProcessingFee||0) > 0){
     rows.push(`<div class="tot-row"><span>Payment Processing (${totals.paymentBuffer}%)</span><span class="tot-num">${fmt$(totals.paymentProcessingFee)}</span></div>`);
   }
