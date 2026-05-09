@@ -13312,9 +13312,15 @@ function clearScheduleOverrideAndRerender(leadId) {
 
 function getSchedulableJobs(techId) {
   // Pool filtering layers:
-  //   1. Stage filter — drop archived, drop new lead-received (no quote yet).
+  //   1. Stage filter — only leads in the "Scheduling" pipeline column
+  //      (stage === 'scheduled') are eligible. Everything else (Lead Received,
+  //      Estimating, Quote Delivered, Quote Approved, awaiting-utility/permit/
+  //      charger/inspection, etc.) stays out of the scheduler until the
+  //      dispatcher explicitly moves it into the Scheduling column.
   //   2. Already-committed filter — installScheduled milestone routes the lead
   //      ONLY into its own (date, tech) plan; everything else excludes it.
+  //      Committed leads bypass the stage filter so already-scheduled jobs
+  //      stay visible on their own day even if their stage has drifted.
   //   3. Cross-plan filter — even before commit, leads that are already drafted
   //      into ANOTHER day's or another tech's day plan (in _sched.dayPlans) are
   //      excluded from the active pool. This is what stops Day 1's jobs from
@@ -13368,8 +13374,12 @@ function getSchedulableJobs(techId) {
       if (milestoneTechId !== activeTechId) return false;
       // Falls through — applies skill filter below, but skips gates.
     } else {
-      // Not yet committed.
-      if (l.stage === 'lead-received') return false;
+      // Not yet committed — only leads explicitly moved to the Scheduling
+      // column in the kanban are eligible. The dispatcher decides when a
+      // job is ready by dragging it into Scheduling, regardless of whether
+      // permits/chargers/etc. are in hand (loose-gates philosophy preserved
+      // — we still don't block on prereqs, we just respect the column).
+      if (l.stage !== 'scheduled') return false;
       // Cross-plan exclusion: don't let a lead appear in two pools at once.
       if (reservedElsewhere.has(l.id)) return false;
     }
