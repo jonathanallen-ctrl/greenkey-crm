@@ -10889,11 +10889,23 @@ function renderFMDocuments(jobId) {
   const dzone = `<div class="dzone" id="${dzId}" style="padding:20px"
     ondragover="fmDragOver(event,'${dzId}')" ondragleave="fmDragLeave('${dzId}')" ondrop="fmDrop(event,'${jobId}','documents',null,'${dzId}')">
     <input type="file" id="fm-doc-inp" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents',null)">
+    <input type="file" id="fm-pdf-inp" accept="application/pdf,.pdf" style="display:none" onchange="fmFileInput(event,'${jobId}','documents',null)">
     <div class="dico">
       <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.6">${ICONS.file}</svg>
     </div>
     <div class="dtitle" style="font-size:13px">Drop files here or click to upload</div>
     <div class="dsub">PDF, Word, Excel, images — all file types accepted. Filename makes the contents obvious.</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+    <button onclick="document.getElementById('fm-pdf-inp').click()" style="display:flex;align-items:center;gap:6px;background:var(--blue-dim);border:1px solid var(--blue);border-radius:var(--r);padding:6px 14px;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--blue);font-family:var(--font)">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h6l4 4v8H4V2z"/><path d="M10 2v4h4"/><path d="M6 9h4M8 7v4"/></svg>
+      Import PDF
+    </button>
+    <span style="font-size:11.5px;color:var(--text-muted);line-height:1.4">
+      To save a PDF from Qmerit or another site: open it in your browser →
+      press <kbd style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:10.5px">Ctrl+P</kbd>
+      → set destination to <strong>Save as PDF</strong> → then click <em>Import PDF</em> above.
+    </span>
   </div>`;
 
   const listRows = files.map(f => {
@@ -11204,8 +11216,16 @@ function renderFMJobCat(jobId, cat) {
     const dzone = `<div class="dzone" id="jd-fm-doc-dz" style="padding:14px"
         ondragover="fmDragOver(event,'jd-fm-doc-dz')" ondragleave="fmDragLeave('jd-fm-doc-dz')" ondrop="fmDrop(event,'${jobId}','documents',null,'jd-fm-doc-dz')">
         <input type="file" multiple accept="*/*" onchange="fmFileInput(event,'${jobId}','documents',null)">
+        <input type="file" id="jd-pdf-inp-${jobId}" accept="application/pdf,.pdf" style="display:none" onchange="fmFileInput(event,'${jobId}','documents',null)">
         <div class="dtitle" style="font-size:12px">Drop docs here or click to upload</div>
         <div class="dsub" style="font-size:11px">PDF, Word, Excel, images — all file types accepted</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <button onclick="document.getElementById('jd-pdf-inp-${jobId}').click()" style="display:flex;align-items:center;gap:5px;background:var(--blue-dim);border:1px solid var(--blue);border-radius:var(--r);padding:4px 10px;cursor:pointer;font-size:11.5px;font-weight:500;color:var(--blue);font-family:var(--font)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h6l4 4v8H4V2z"/><path d="M10 2v4h4"/><path d="M6 9h4M8 7v4"/></svg>
+          Import PDF
+        </button>
+        <span style="font-size:10.5px;color:var(--text-muted)">Qmerit PDF: open in browser → <kbd style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:3px;padding:0 4px;font-size:10px">Ctrl+P</kbd> → Save as PDF → Import PDF</span>
       </div>`;
     if (!docs.length) return dzone;
     // Inline clickable rows — same openFMFile handler as the full Files page.
@@ -16942,38 +16962,50 @@ function fmDownloadFile(fileId) {
   const f = _filesCache.find(x => x.id === fileId);
   if (!f) { toast('File not found', 'error'); return; }
 
-  if (f.dataUrl) {
-    try {
-      const blob = _dataUrlToBlob(f.dataUrl);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = f.name || 'download';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 3000);
-      toast(`Downloading "${f.name}"`, 'success');
-      return;
-    } catch(e) {
-      console.warn('[GK] fmDownloadFile: blob download failed:', e);
-    }
-  }
-
-  // SharePoint direct download link
-  if (f.downloadUrl) {
-    const a    = document.createElement('a');
-    a.href     = f.downloadUrl;
-    a.download = f.name || 'download';
-    a.target   = '_blank';
+  // Helper: trigger a save-to-disk download from a data URL or blob URL.
+  // Using the data URL directly (not a blob: URL) is the most reliable way to
+  // force a download rather than an inline preview, because browsers treat
+  // blob: URLs for PDFs as navigatable and open them in a new tab instead.
+  const _triggerDownload = (href, filename) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = filename || 'download';
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => a.remove(), 1000);
+    setTimeout(() => a.remove(), 500);
+  };
+
+  if (f.dataUrl) {
+    // Use the data URL directly — this reliably triggers Save As / Downloads.
+    _triggerDownload(f.dataUrl, f.name || 'download');
+    toast(`Downloading "${f.name}"`, 'success');
     return;
   }
 
-  // Fallback — open SharePoint page so user can download from there
+  // SharePoint: fetch the bytes and build a local blob so the download
+  // attribute is honoured (it's ignored on cross-origin URLs without this).
+  if (f.downloadUrl) {
+    toast('Preparing download…', 'success');
+    fetch(f.downloadUrl)
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        _triggerDownload(url, f.name || 'download');
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        toast(`Downloading "${f.name}"`, 'success');
+      })
+      .catch(() => {
+        // Fetch blocked (CORS) — fall back to opening the SP download page
+        window.open(f.downloadUrl, '_blank');
+      });
+    return;
+  }
+
+  // Last resort — open the SharePoint page so the user can save from there
   if (f.spUrl) {
     window.open(f.spUrl, '_blank');
+    toast('Opening SharePoint — use File → Save As to download', 'info');
     return;
   }
 
