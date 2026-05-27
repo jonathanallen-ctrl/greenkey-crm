@@ -3359,6 +3359,14 @@ function renderCustomersPage() {
 }
 
 function openCustomerDetail(custId) {
+  // Guard: make sure the customer actually exists before hiding the list.
+  // If it can't be found, stay on the list view so the user isn't stranded.
+  const exists = !!getCustomer(custId);
+  if (!exists) {
+    renderCustomersPage();
+    toast('Customer record not found — it may have been deleted or not yet synced', 'warning');
+    return;
+  }
   S.custView = custId;
   document.getElementById('cust-list-view').style.display = 'none';
   document.getElementById('cust-detail-view').style.display = 'block';
@@ -3997,8 +4005,10 @@ function doGlobalSearch(q) {
 function gotoCustomer(id) {
   document.getElementById('sdrop').classList.remove('show');
   document.getElementById('gsearch').value = '';
+  // showPage('customers') is fully synchronous — no setTimeout needed.
+  // Calling openCustomerDetail immediately after navigate is reliable.
   navigate('customers');
-  setTimeout(()=>openCustomerDetail(id),50);
+  openCustomerDetail(id);
 }
 function gotoLead(id) {
   document.getElementById('sdrop').classList.remove('show');
