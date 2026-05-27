@@ -3947,11 +3947,13 @@ function doGlobalSearch(q) {
   const leads = getLeads().filter(l=>{
     const lc = leadCusts.find(x=>x.id===l.customerId);
     const bn = lc && lc.propertyType==='commercial' ? (lc.businessName||'') : '';
+    const lcName = lc ? custFullName(lc).toLowerCase() : '';
     return (
       l.id.toLowerCase().includes(ql)||
       (l.siteStreet||'').toLowerCase().includes(ql)||
       (l.siteCity||'').toLowerCase().includes(ql)||
       (l.customerName||'').toLowerCase().includes(ql)||
+      lcName.includes(ql)||
       bn.toLowerCase().includes(ql)||
       (l.description||'').toLowerCase().includes(ql)
     );
@@ -4726,21 +4728,20 @@ function renderQuoteBuilder(qid){
             Download Quote PDF
           </button>
           ${(() => {
-            // Hide the customer-email button for sources that handle their
-            // own customer communications: Qmerit/Electrum/Treehouse (always
-            // platform-paid), and AF1 quotes that are bill-to-referrer (the
-            // homeowner doesn't get the quote from us in that flow).
-            const _hidden = (typeof isQuotePlatformPaid === 'function' && isQuotePlatformPaid(q))
-                         || (typeof isQuoteBilledToReferrer === 'function' && isQuoteBilledToReferrer(q));
-            if (_hidden) {
-              const _why = (isQuotePlatformPaid(q))
-                ? `Customer is contacted through ${q.source} — no direct email`
-                : `Bill-to is the referrer — no homeowner email needed`;
-              return `<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:6px 4px;line-height:1.4">${_why}</div>`;
+            // Platform-paid sources (Qmerit/Electrum/Treehouse) handle their own
+            // customer communications — hide the direct email button entirely.
+            // Referrer-billed (AF1 etc.) quotes still need an email button so we
+            // can send the quote to the referrer — emailQuote() already routes to
+            // the referrer's email when isQuoteBilledToReferrer is true.
+            if (typeof isQuotePlatformPaid === 'function' && isQuotePlatformPaid(q)) {
+              return `<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:6px 4px;line-height:1.4">Customer is contacted through ${q.source} — no direct email</div>`;
             }
+            const _isRef = typeof isQuoteBilledToReferrer === 'function' && isQuoteBilledToReferrer(q);
+            const _refName = _isRef ? (q.source || 'Referrer') : '';
+            const _btnLabel = _isRef ? `Email Quote to ${_refName}` : 'Email Quote to Customer';
             return `<button id="qb-email-btn" class="btn btn-g btn-full" onclick="emailQuote('${q.id}')">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
-              Email Quote to Customer
+              ${_btnLabel}
             </button>`;
           })()}
           <button class="btn btn-g btn-full" onclick="duplicateQuote('${q.id}')" title="Create another option for this lead starting from a copy of this quote">
@@ -7331,12 +7332,13 @@ async function sendQuoteEmail(){
 
   if (canGraph) {
     try {
+      const htmlContent = (typeof _buildHtmlEmail === 'function') ? _buildHtmlEmail(body) : body;
       await _graphFetch('/me/sendMail', {
         method: 'POST',
         body: JSON.stringify({
           message: {
             subject,
-            body: { contentType: 'Text', content: body },
+            body: { contentType: 'HTML', content: htmlContent },
             toRecipients: [{ emailAddress: { address: toEmail } }],
             attachments
           },
@@ -7832,6 +7834,67 @@ function pdfTable(doc,y,W,items,totalLabel,totalAmt){
 // Returns { subject, body } strings ready to send. Body is plain-text format
 // (newlines, bullet hierarchy with leading whitespace) — same shape the
 // existing platform branches use, so the email modal renders consistently.
+// ── HTML EMAIL BUILDER ──
+// Converts the plain-text email body (with ━━━ section dividers) into a clean
+// HTML email and appends the GreenKey branded signature table.
+function _buildHtmlEmail(plainBody) {
+  // Escape HTML entities in the plain text
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Split into paragraphs/sections. ━━━ lines become visual dividers.
+  const lines = plainBody.split('\n');
+  let html = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^━{5,}/.test(line)) {
+      // Section divider — render as a styled <hr>
+      html += '<hr style="border:none;border-top:1px solid #e0e0e0;margin:14px 0;">';
+    } else if (/^[A-Z][A-Z\s\/&]{4,}$/.test(line.trim()) && line.trim().length < 60) {
+      // ALL-CAPS section heading
+      html += `<p style="margin:10px 0 4px;font-size:11px;font-weight:700;color:#555;letter-spacing:0.06em;text-transform:uppercase">${esc(line)}</p>`;
+    } else if (line.trim() === '') {
+      html += '<br>';
+    } else if (/^\s{2,}/.test(line)) {
+      // Indented lines — preserve indent as padded paragraph
+      html += `<p style="margin:2px 0;padding-left:16px;font-size:13.5px;color:#222">${esc(line.trim())}</p>`;
+    } else {
+      html += `<p style="margin:3px 0;font-size:13.5px;color:#222;line-height:1.55">${esc(line)}</p>`;
+    }
+  }
+
+  // Build the signature table
+  const logoSrc = (typeof GK_LOGO_B64 !== 'undefined') ? GK_LOGO_B64 : '';
+  const logoHtml = logoSrc
+    ? `<img src="${logoSrc}" alt="GreenKey" style="width:180px;max-width:180px;display:block;height:auto;">`
+    : '<strong style="font-size:16px;color:#2e7d32;">GreenKey</strong>';
+
+  const sig = `
+<table cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;border-top:1px solid #e0e0e0;padding-top:16px;font-family:Arial,sans-serif;">
+  <tr>
+    <td style="width:190px;padding-right:16px;vertical-align:top;padding-top:4px;">
+      ${logoHtml}
+    </td>
+    <td style="border-left:3px solid #2e7d32;padding-left:16px;vertical-align:top;">
+      <p style="margin:0 0 2px;font-size:14px;font-weight:700;color:#111;">Jonathan Allen</p>
+      <p style="margin:0 0 2px;font-size:12.5px;color:#444;">Cofounder &amp; President | <span style="color:#2e7d32;font-weight:600;">GreenKey</span></p>
+      <p style="margin:0 0 6px;font-size:12px;color:#555;">Class A Electrical Contractor | Licensed &amp; Insured</p>
+      <p style="margin:0 0 2px;font-size:12px;color:#444;">📞 (804) 770-2210 &nbsp;|&nbsp; 📱 (804) 310-5368</p>
+      <p style="margin:0;font-size:12px;">
+        <a href="mailto:jonathan.allen@greenkey-usa.com" style="color:#2e7d32;text-decoration:none;">jonathan.allen@greenkey-usa.com</a>
+        &nbsp;|&nbsp;
+        <a href="https://greenkey-usa.com" style="color:#2e7d32;text-decoration:none;">greenkey-usa.com</a>
+      </p>
+    </td>
+  </tr>
+</table>`;
+
+  return `<!DOCTYPE html>
+<html><body style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:0 8px;">
+${html}
+${sig}
+</body></html>`;
+}
+
 function _buildDirectQuoteEmail(ctx) {
   const { q, lead } = ctx;
   // Build the body via the per-job-type template, then inject any per-quote
@@ -10825,7 +10888,10 @@ function renderFMDocuments(jobId) {
       <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
       <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
       <td style="font-size:11px;color:var(--text-muted)">${escHtml(f.uploadedBy||'—')}</td>
-      <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button></td>
+      <td style="white-space:nowrap">
+        <button onclick="fmDownloadFile('${f.id}')" title="Download to disk" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--text-secondary);font-size:11px;margin-right:4px" onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">↓</button>
+        <button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button>
+      </td>
     </tr>`;
   }).join('');
 
@@ -11127,6 +11193,7 @@ function renderFMJobCat(jobId, cat) {
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${ext}</span>
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${fmtSize(f.size)}</span>
         <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">${f.uploadedAt?.slice(0,10)||''}</span>
+        <button onclick="fmDownloadFile('${f.id}')" title="Download to disk" style="background:none;border:1px solid var(--border);border-radius:4px;padding:1px 6px;cursor:pointer;color:var(--text-secondary);font-size:11px;flex-shrink:0" onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">↓</button>
         <button class="li-del" style="flex-shrink:0" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button>
       </div>`;
     }).join('');
@@ -16846,6 +16913,50 @@ function _fileBestUrl(f) {
 // large base64 PDFs, AND it doesn't work at all for SharePoint-hydrated files
 // where dataUrl is null. This routes through the right mechanism for each
 // source: Blob+ObjectURL for local dataUrls, direct window.open for SP URLs.
+// Download a file from the CRM to the user's disk — works for both local
+// (dataUrl) files and SharePoint-hosted files (downloadUrl / spUrl).
+function fmDownloadFile(fileId) {
+  const f = _filesCache.find(x => x.id === fileId);
+  if (!f) { toast('File not found', 'error'); return; }
+
+  if (f.dataUrl) {
+    try {
+      const blob = _dataUrlToBlob(f.dataUrl);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = f.name || 'download';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 3000);
+      toast(`Downloading "${f.name}"`, 'success');
+      return;
+    } catch(e) {
+      console.warn('[GK] fmDownloadFile: blob download failed:', e);
+    }
+  }
+
+  // SharePoint direct download link
+  if (f.downloadUrl) {
+    const a    = document.createElement('a');
+    a.href     = f.downloadUrl;
+    a.download = f.name || 'download';
+    a.target   = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 1000);
+    return;
+  }
+
+  // Fallback — open SharePoint page so user can download from there
+  if (f.spUrl) {
+    window.open(f.spUrl, '_blank');
+    return;
+  }
+
+  toast('No downloadable source for this file', 'error');
+}
+
 function openFMFile(fileId) {
   const f = _filesCache.find(x => x.id === fileId);
   if (!f) { toast('File not found', 'error'); return; }
