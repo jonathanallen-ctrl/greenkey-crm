@@ -3359,14 +3359,6 @@ function renderCustomersPage() {
 }
 
 function openCustomerDetail(custId) {
-  // Guard: make sure the customer actually exists before hiding the list.
-  // If it can't be found, stay on the list view so the user isn't stranded.
-  const exists = !!getCustomer(custId);
-  if (!exists) {
-    renderCustomersPage();
-    toast('Customer record not found — it may have been deleted or not yet synced', 'warning');
-    return;
-  }
   S.custView = custId;
   document.getElementById('cust-list-view').style.display = 'none';
   document.getElementById('cust-detail-view').style.display = 'block';
@@ -3382,7 +3374,17 @@ function closeCustomerDetail() {
 
 function renderCustomerDetail(custId) {
   const c = getCustomer(custId);
-  if (!c) { closeCustomerDetail(); return; }
+  if (!c) {
+    // Customer not found — show the list with a helpful message rather than a blank screen.
+    S.custView = null;
+    document.getElementById('cust-list-view').style.display = '';
+    document.getElementById('cust-detail-view').style.display = 'none';
+    renderCustomersPage();
+    toast('Customer record not found — they may not have synced yet', 'warning');
+    return;
+  }
+  const wrap = document.getElementById('cust-detail-view');
+  if (!wrap) return;
   const leads = getLeads().filter(l=>l.customerId===custId);
   leads.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   const addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')||'—';
@@ -3391,7 +3393,6 @@ function renderCustomerDetail(custId) {
   const personName = custFullName(c);
   const headName = biz || personName || '—';
   const subName = biz && personName ? personName : '';
-  const wrap = document.getElementById('cust-detail-view');
   wrap.innerHTML = `
     <div class="det-hdr">
       <button class="det-back" onclick="closeCustomerDetail()">
@@ -4005,9 +4006,21 @@ function doGlobalSearch(q) {
 function gotoCustomer(id) {
   document.getElementById('sdrop').classList.remove('show');
   document.getElementById('gsearch').value = '';
-  // showPage('customers') is fully synchronous — no setTimeout needed.
-  // Calling openCustomerDetail immediately after navigate is reliable.
-  navigate('customers');
+  // Activate the customers page in the sidebar nav
+  document.querySelectorAll('.ni').forEach(i => i.classList.remove('active'));
+  const navItem = document.querySelector('[data-page="customers"]');
+  if (navItem) navItem.classList.add('active');
+  // Switch the visible page without calling renderCustomersPage() — that
+  // intermediate list render can interfere with immediately opening the detail.
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const pg = document.getElementById('page-customers');
+  if (pg) pg.classList.add('active');
+  S.page = 'customers';
+  const ptitle = document.getElementById('ptitle');
+  if (ptitle) ptitle.textContent = 'Customers';
+  const lbl = document.getElementById('topbarbtn-lbl');
+  if (lbl) lbl.textContent = 'New Customer';
+  // Go directly to the customer detail
   openCustomerDetail(id);
 }
 function gotoLead(id) {
