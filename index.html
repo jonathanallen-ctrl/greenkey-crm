@@ -10830,6 +10830,16 @@ function renderFMPhotos(jobId, cat) {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M20 7h-3.5L15 5H9L7.5 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
       Use camera
     </button>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="flex-shrink:0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    <input id="fm-url-inp-${cat}" type="url" placeholder="Paste photo URL (e.g. from GoHighLevel)…"
+      style="flex:1;min-width:160px;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);font-size:12.5px;background:var(--bg-card);color:var(--text-primary);font-family:var(--font)"
+      onkeydown="if(event.key==='Enter')fmImportFromUrl('fm-url-inp-${cat}','${jobId}','${cat}')">
+    <button onclick="fmImportFromUrl('fm-url-inp-${cat}','${jobId}','${cat}')"
+      style="display:flex;align-items:center;gap:5px;background:var(--green-dim,#e8f5e9);border:1px solid var(--green,#2e7d32);border-radius:var(--r);padding:5px 12px;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--green,#2e7d32);font-family:var(--font);white-space:nowrap">
+      Import
+    </button>
   </div>`;
 
   if (!files.length) {
@@ -11099,6 +11109,58 @@ function fmOpenCamera(jobId, cat) {
   openCamera();
 }
 
+async function fmImportFromUrl(inputId, jobId, cat) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const raw = inp.value.trim();
+  if (!raw) { toast('Paste an image URL first', 'error'); return; }
+  let url;
+  try { url = new URL(raw); } catch(_) { toast('That doesn\'t look like a valid URL', 'error'); return; }
+
+  inp.disabled = true;
+  const btn = inp.nextElementSibling;
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  toast('Fetching image from URL…', 'success');
+
+  try {
+    const res = await fetch(url.href);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('URL does not point to an image (got ' + (blob.type||'unknown type') + ')');
+
+    // Build a filename from the URL path
+    const pathParts = url.pathname.split('/');
+    let fname = pathParts[pathParts.length - 1] || 'imported-photo';
+    if (!fname.includes('.')) fname += '.' + (blob.type.split('/')[1] || 'jpg');
+
+    const dataUrl = await new Promise((res2, rej2) => {
+      const fr = new FileReader();
+      fr.onload = e => res2(e.target.result);
+      fr.onerror = rej2;
+      fr.readAsDataURL(blob);
+    });
+
+    const fakeFile = { name: fname, type: blob.type, size: blob.size };
+    addFileRecord(jobId, cat, null, fakeFile, dataUrl);
+    toast(`Imported "${fname}" ✓`, 'success');
+    inp.value = '';
+
+    // Refresh UI
+    if (S.page === 'files') renderFilesPage();
+    const jdBody = document.getElementById('jd-fm-body');
+    if (jdBody) {
+      const activeTab = document.querySelector('[id^="jd-fm-tab-"].active');
+      const activeCat = activeTab?.id?.replace('jd-fm-tab-','') || cat;
+      jdFMSetCat(jobId, activeCat);
+    }
+  } catch(err) {
+    toast('Could not import from URL: ' + (err.message||'unknown error') + '. Try right-click → Save image as, then upload.', 'error');
+  } finally {
+    inp.disabled = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Import'; }
+  }
+}
+
 // ── LIGHTBOX ──
 let LBFiles = []; let LBIdx = 0;
 
@@ -11255,6 +11317,16 @@ function renderFMJobCat(jobId, cat) {
     <button class="cambtn" style="font-size:12px;padding:6px 12px" onclick="fmOpenCamera('${jobId}','${cat}')">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M20 7h-3.5L15 5H9L7.5 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
       Camera
+    </button>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="flex-shrink:0"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    <input id="jd-url-inp-${jobId}-${cat}" type="url" placeholder="Paste photo URL…"
+      style="flex:1;min-width:120px;padding:4px 8px;border:1px solid var(--border);border-radius:var(--r);font-size:11.5px;background:var(--bg-card);color:var(--text-primary);font-family:var(--font)"
+      onkeydown="if(event.key==='Enter')fmImportFromUrl('jd-url-inp-${jobId}-${cat}','${jobId}','${cat}')">
+    <button onclick="fmImportFromUrl('jd-url-inp-${jobId}-${cat}','${jobId}','${cat}')"
+      style="display:flex;align-items:center;gap:4px;background:var(--green-dim,#e8f5e9);border:1px solid var(--green,#2e7d32);border-radius:var(--r);padding:4px 10px;cursor:pointer;font-size:11.5px;font-weight:500;color:var(--green,#2e7d32);font-family:var(--font);white-space:nowrap">
+      Import
     </button>
   </div>`;
 
@@ -17244,14 +17316,97 @@ async function _bellPollOnce() {
     const data = await resp.json().catch(() => ({}));
     const fresh = Array.isArray(data.messages) ? data.messages : [];
     if (!fresh.length) return;
-    // Merge into cache, dedupe by id, keep newest first, cap length.
+    // Determine which messages are truly new (not already in cache) before merging.
     const seenIds = new Set(_bellRecentCache.map(m => m.id));
+    const lastSeen = _bellGetLastSeen();
+    const brandNew = fresh.filter(m => !seenIds.has(m.id) && (m.created_at||'') > lastSeen);
+    // Merge into cache, dedupe by id, keep newest first, cap length.
     fresh.forEach(m => { if (!seenIds.has(m.id)) _bellRecentCache.unshift(m); });
     _bellRecentCache.sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
     if (_bellRecentCache.length > BELL_RECENT_CAP) _bellRecentCache.length = BELL_RECENT_CAP;
     _bellRefreshUI();
+    // Fire desktop notification + sound for each truly new inbound message.
+    if (brandNew.length) _bellNotify(brandNew);
   } catch (_) {
     // Silent — polling failures shouldn't toast.
+  }
+}
+
+// ── Desktop push notifications for inbound texts ──────────────────────────
+//
+// Requests Notification permission once (on first inbound message or on
+// explicit user action). Fires a system pop-up even when the tab is in the
+// background (as long as the browser is open). Clicking the notification
+// brings the tab to the front and opens the lead.
+
+function _bellRequestPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function _bellNotify(messages) {
+  if (!('Notification' in window)) return;
+  // Request permission if we haven't yet — user gesture not required for
+  // silent re-request; the browser will show its own prompt if needed.
+  if (Notification.permission === 'default') {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') _bellFireNotifications(messages);
+    });
+    return;
+  }
+  if (Notification.permission === 'granted') _bellFireNotifications(messages);
+}
+
+function _bellFireNotifications(messages) {
+  // Play a soft notification sound (generated via Web Audio — no file needed).
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch(_) { /* audio blocked — skip silently */ }
+
+  // Show one notification per new message (capped at 3 to avoid spam).
+  const toShow = messages.slice(0, 3);
+  toShow.forEach(m => {
+    const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
+    const cust = (lead?.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
+    const name = cust
+      ? (typeof custFullName === 'function' ? custFullName(cust) : (cust.firstName+' '+cust.lastName).trim())
+      : (lead?.customerName || m.from_number || 'Customer');
+    const preview = (m.body || '').slice(0, 100);
+    try {
+      const n = new Notification('New text — GreenKey CRM', {
+        body: `${name}: ${preview}`,
+        icon: typeof GK_LOGO_B64 !== 'undefined' ? GK_LOGO_B64 : undefined,
+        tag:  'gk-sms-' + (m.id || Date.now()),  // prevents duplicate stacking
+        requireInteraction: false
+      });
+      // Clicking the notification focuses the tab and opens the lead.
+      n.onclick = () => {
+        window.focus();
+        if (m.lead_id && typeof _bellOpenLead === 'function') _bellOpenLead(m.lead_id);
+        n.close();
+      };
+    } catch(_) { /* notification blocked — badge already covers it */ }
+  });
+  if (messages.length > 3) {
+    try {
+      new Notification('New texts — GreenKey CRM', {
+        body: `${messages.length} new messages received`,
+        tag: 'gk-sms-bulk-' + Date.now()
+      });
+    } catch(_) {}
   }
 }
 
@@ -17353,6 +17508,9 @@ document.addEventListener('click', (e) => {
 
 function _bellStartPolling() {
   if (_bellPollTimer) return;
+  // Ask for notification permission as soon as the user is signed in so the
+  // browser prompt appears at a natural moment rather than mid-conversation.
+  _bellRequestPermission();
   _bellPollOnce();
   _bellPollTimer = setInterval(() => {
     if (document.visibilityState === 'visible') _bellPollOnce();
