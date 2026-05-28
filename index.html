@@ -2016,11 +2016,20 @@ function parseMentions(text) {
   if (!hits.size) return [];
   const users = getUsers();
   const out = [];
-  for (const first of hits) {
-    const u = users.find(x => {
-      const f = (x.name || '').trim().split(/\s+/)[0] || '';
-      return f.toLowerCase() === first;
+  for (const token of hits) {
+    // Try exact first-name match, then fall back to prefix (min 3 chars).
+    // This lets @Jon resolve to Jonathan, @Sher to Sherri, etc. without
+    // requiring the full name to be typed every time.
+    let u = users.find(x => {
+      const f = (x.name || '').trim().split(/\s+/)[0].toLowerCase();
+      return f === token;
     });
+    if (!u && token.length >= 3) {
+      u = users.find(x => {
+        const f = (x.name || '').trim().split(/\s+/)[0].toLowerCase();
+        return f.startsWith(token);
+      });
+    }
     if (u && !out.some(o => o.id === u.id)) out.push(u);
   }
   return out;
@@ -10236,7 +10245,7 @@ function renderJobDetail(id) {
     <div class="jd-sh"><div class="jd-st">Job Notes</div></div>
     <div class="jd-sb">
       <div class="notes-input-wrap">
-        <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — tag a teammate with @Sherri, @Chase, or @Jon and they'll get a task + email…"></textarea>
+        <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — tag a teammate with @Jonathan, @Sherri, or @Chase (or short versions like @Jon, @Sher) and they'll get a task + email…"></textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div style="font-size:11px;color:var(--text-muted)">Tip: <code style="background:var(--bg-elevated);padding:1px 4px;border-radius:3px">@firstname</code> creates a task + emails them; they mark it done and you get pinged.</div>
           <button class="btn btn-p" style="padding:5px 14px;font-size:12.5px" onclick="addJobNote('${id}')">Add Note</button>
@@ -17153,22 +17162,36 @@ function _syncStatusHide() {
 //   3. Cooldown: don't pull more than once every 60 seconds.
 //   4. Skip if SharePoint isn't fully initialized (_spList is also required).
 let _lastVisibilitySync = 0;
-const VISIBILITY_SYNC_COOLDOWN_MS = 60_000;
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
+const VISIBILITY_SYNC_COOLDOWN_MS = 25_000;
+
+function _trySyncFromSP(reason) {
   if (!_gToken || !_spSite || !_spList || !S.user) return;
-  if (_syncTmr) { console.log('[GK] Visibility sync skipped: local push queued'); return; }
-  if (_syncing) { console.log('[GK] Visibility sync skipped: push in flight'); return; }
+  if (_syncTmr) { console.log('[GK] Sync skipped (' + reason + '): local push queued'); return; }
+  if (_syncing) { console.log('[GK] Sync skipped (' + reason + '): push in flight'); return; }
   const since = Date.now() - _lastVisibilitySync;
   if (since < VISIBILITY_SYNC_COOLDOWN_MS) {
-    console.log('[GK] Visibility sync skipped: cooldown', Math.round((VISIBILITY_SYNC_COOLDOWN_MS - since)/1000), 's remaining');
+    console.log('[GK] Sync skipped (' + reason + '): cooldown', Math.round((VISIBILITY_SYNC_COOLDOWN_MS - since)/1000), 's remaining');
     return;
   }
   _lastVisibilitySync = Date.now();
   _syncFromSP().then(() => {
     if (typeof navigate === 'function') navigate(S.page);
-  }).catch(e => console.warn('[GK] Visibility sync failed:', e));
+  }).catch(e => console.warn('[GK] Sync failed (' + reason + '):', e));
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  _trySyncFromSP('tab-focus');
 });
+
+// Background poll — pull from SharePoint every 2 minutes so changes made by
+// other users appear automatically even when this tab stays in focus.
+// Uses the same safety guards as the visibility sync (skips if a local push
+// is queued or in flight, and respects the 60-second cooldown).
+const AUTO_SYNC_INTERVAL_MS = 30 * 1000; // 30 seconds
+setInterval(() => {
+  _trySyncFromSP('auto-poll');
+}, AUTO_SYNC_INTERVAL_MS);
 
 // ════════════════════════════════════════════════════════════
 // SMS / TWILIO INTEGRATION  (via Cloudflare Worker + MSAL)
