@@ -6365,6 +6365,10 @@ function renderDetailedQuoteForm(q){
         <input type="checkbox" id="dq-veteran" ${q.isVeteran?'checked':''} onchange="onDQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
         <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
       </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-top:10px">
+        <input type="checkbox" id="dq-skip-mat-allowance" ${(typeof q.skipMatAllowance==='boolean'?q.skipMatAllowance:(q.jobType==='energy-management'||q.jobType==='custom'))?'checked':''} onchange="onDQSkipMatAllowanceChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Skip 10% materials buffer <span style="color:var(--text-muted);font-size:11.5px">(use when price already includes materials)</span></span>
+      </label>
       ${['Qmerit','Electrum','Treehouse'].includes(q.source) ? '' : `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
@@ -6595,6 +6599,13 @@ function removeRental(qid,idx){const q=getQuote(qid);if(!q)return;const rentals=
 function updateRental(qid,idx,field,val){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[])];rentals[idx]={...rentals[idx],[field]:field==='cost'?parseFloat(val)||0:val};upsertQuote({...q,rentals});onDQChange(qid);}
 
 // ── DETAILED QUOTE CALCS ──
+function onDQSkipMatAllowanceChange(qid){
+  const q=getQuote(qid); if(!q) return;
+  const skip=!!document.getElementById('dq-skip-mat-allowance')?.checked;
+  upsertQuote({...q, skipMatAllowance: skip});
+  onDQChange(qid);
+}
+
 function onDQChange(qid){
   const q=getQuote(qid);if(!q)return;
   const p=getQQPricing();
@@ -19509,30 +19520,4 @@ async function init() {
   archiveOldLeads();
   seedImportData();
   // Run materials migrations / catalog seed on every boot so existing users
-  // pick up new SKUs and refreshed Capital Electric prices without having to
-  // open the Materials Library or quote builder first.
-  try { initMaterials(); } catch (e) { console.warn('[GK] initMaterials failed:', e); }
-  // Seed B2B referrer customer records (AF1 etc.) on every boot — idempotent.
-  try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] seedReferrerCustomers failed:', e); }
-  // Restore Scheduler state (built plans per date) so plans survive page reloads.
-  try { _loadSched(); } catch (e) { console.warn('[GK] _loadSched failed:', e); }
-  // Login is now Microsoft 365 only — no password inputs to wire up.
-
-  // Try MSAL auto-login first (resumes existing Microsoft session)
-  try {
-    await initMSAL();
-  } catch(e) {
-    console.warn('[GK] MSAL init failed, falling back to local login:', e);
-    // Fall back to localStorage session
-    const ses=JSON.parse(localStorage.getItem(SK)||'null');
-    if (ses && Date.now()-ses.ts < 8*60*60*1000) {
-      const user=getUsers().find(u=>u.id===ses.userId);
-      if (user) { login(user); return; }
-    }
-  }
-}
-
-init();
-</script>
-</body>
-</html>
+ 
