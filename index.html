@@ -4912,7 +4912,7 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Permit</div>
       <div class="frow2">
         <div class="fg"><div class="fl">Permit Fee ($)</div>
-          <input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
+          <input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
         </div>
         <div class="fg"><div class="fl">Jurisdiction</div>
           <input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7">
@@ -5048,7 +5048,7 @@ function _renderQQ_HVAC(q) {
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
@@ -5301,7 +5301,7 @@ function _renderQQ_PanelReplacement(q) {
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="fg"><div class="fl">Permit Fee ($)</div>
-        <input class="fi" type="number" id="qq-permit" value="${q.permitFee || (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
+        <input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
       </div>
     </div>
     <div class="qq-section">
@@ -5374,20 +5374,35 @@ function onQQChange(qid){
   if (q.jobType === 'panel-replacement')    return _onQQChange_PanelReplacement(qid);
   // Fallthrough: EV Charger / NEMA 14-50 (existing math)
   const p=getQQPricing();
+  // _readNum honors an explicit 0 typed into the input. The old
+  // `parseFloat(...) || fallback` pattern snapped 0 back to the fallback,
+  // which is why "permit = 0" wouldn't stick on no-permit charger jobs.
+  const _readNum = (id, fallback) => {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const raw = el.value;
+    if (raw === '' || raw == null) return fallback;
+    const n = parseFloat(raw);
+    return isNaN(n) ? fallback : n;
+  };
   const panelLoc=document.getElementById('qq-panel')?.value||'garage';
   const isNema=q.jobType==='nema-1450';
   const mountType=document.getElementById('qq-mount')?.value||'wall';
   const nemaLocation=document.getElementById('qq-nema-loc')?.value||(q.qq?.nemaLocation||'inside');
   const tandemBreakers=parseInt(document.getElementById('qq-tandem')?.value)||0;
-  const difficultyFee=parseFloat(document.getElementById('qq-difficulty')?.value)||0;
+  const difficultyFee=_readNum('qq-difficulty', 0);
   const travelMinutes=parseInt(document.getElementById('qq-travel-min')?.value)||0;
   const travelAdder=Math.ceil(Math.max(0,travelMinutes-30)/30)*80;
-  const travelFee=parseFloat(document.getElementById('qq-travel')?.value)||0;
+  const travelFee=_readNum('qq-travel', 0);
   const travelFeeType=document.getElementById('qq-travtype')?.value||'baked';
   // Update travel calc display
   const tCalcEl=document.getElementById('qq-travel-calc');
   if(tCalcEl) tCalcEl.textContent='$'+travelAdder;
-  const permitFee=parseFloat(document.getElementById('qq-permit')?.value)||(q.specialJurisdiction?500:(q.source==='Qmerit'?250:200));
+  const _jtQQ = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  const _qqPermitFallback = (typeof q.permitFee === 'number')
+    ? q.permitFee
+    : ((_jtQQ && _jtQQ.noPermit) ? 0 : (q.specialJurisdiction?500:(q.source==='Qmerit'?250:200)));
+  const permitFee=_readNum('qq-permit', _qqPermitFallback);
   // Editable overrides (empty string = use computed value)
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
   const installOverride    = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
@@ -18607,13 +18622,23 @@ function applyAIDraft() {
     aiSource: 'ai-suggested'
   }));
 
+  // Honor explicit zeros — same _readNum philosophy. If the AI returns
+  // permitFee: 0 (for energy-management, custom, circuit-replacement, etc.)
+  // or laborHours: 0, those zeros must stick, not snap back to defaults.
+  const _aiNum = (raw, fallback) => {
+    if (raw === '' || raw == null) return fallback;
+    const n = parseFloat(raw);
+    return isNaN(n) ? fallback : n;
+  };
+  const _jtAI = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  const _aiPermitFallback = (_jtAI && _jtAI.noPermit) ? 0 : 200;
   upsertQuote({
     ...q,
     lines,
     rentals,
-    laborHours: parseFloat(draft.laborHours) || 0,
-    laborRate: parseFloat(draft.laborRate) || 160,
-    permitFee: parseFloat(draft.permitFee) || 200,
+    laborHours: _aiNum(draft.laborHours, 0),
+    laborRate:  _aiNum(draft.laborRate, 160),
+    permitFee:  _aiNum(draft.permitFee, _aiPermitFallback),
     scope: draft.scopeRewrite || q.scope,
     aiAssumptions: Array.isArray(draft.assumptions) ? draft.assumptions : [],
     aiSanityCheck: draft.sanityCheck || null,
