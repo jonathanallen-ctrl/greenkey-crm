@@ -19520,4 +19520,28 @@ async function init() {
   archiveOldLeads();
   seedImportData();
   // Run materials migrations / catalog seed on every boot so existing users
- 
+  // pick up new SKUs and refreshed Capital Electric prices without having to
+  // open the Materials Library or quote builder first.
+  try { initMaterials(); } catch (e) { console.warn('[GK] initMaterials failed:', e); }
+  // Seed B2B referrer customer records (AF1 etc.) on every boot — idempotent.
+  try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] seedReferrerCustomers failed:', e); }
+  // Login is now Microsoft 365 only — no password inputs to wire up.
+
+  // Try MSAL auto-login first (resumes existing Microsoft session)
+  try {
+    await initMSAL();
+  } catch(e) {
+    console.warn('[GK] MSAL init failed, falling back to local login:', e);
+    // Fall back to localStorage session
+    const ses=JSON.parse(localStorage.getItem(SK)||'null');
+    if (ses && Date.now()-ses.ts < 8*60*60*1000) {
+      const user=getUsers().find(u=>u.id===ses.userId);
+      if (user) { login(user); return; }
+    }
+  }
+}
+
+init();
+</script>
+</body>
+</html>
