@@ -547,8 +547,14 @@
   /* LIGHTBOX */
   #lb-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1500;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.2s}
   #lb-overlay.show{opacity:1;pointer-events:all}
-  #lb-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%;padding:20px 72px;position:relative;max-height:calc(100vh - 80px);min-height:0}
-  #lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;display:block}
+  #lb-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%;padding:20px 72px;position:relative;max-height:calc(100vh - 80px);min-height:0;overflow:hidden;touch-action:none}
+  #lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;display:block;cursor:zoom-in;transform-origin:center center;will-change:transform;user-select:none;-webkit-user-drag:none}
+  #lb-img.zoomed{cursor:grab}
+  #lb-img.panning{cursor:grabbing}
+  #lb-zoom-ctrls{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-right:6px}
+  #lb-zoom-ctrls button{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:white;cursor:pointer;font-family:var(--mono);font-size:14px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;padding:0;transition:background 0.15s}
+  #lb-zoom-ctrls button:hover{background:rgba(255,255,255,0.22)}
+  #lb-zoom-pct{font-family:var(--mono);font-size:11.5px;color:rgba(255,255,255,0.7);min-width:40px;text-align:center}
   #lb-footer{height:60px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;width:100%;background:rgba(0,0,0,0.4);gap:12px;flex-shrink:0}
   #lb-info{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow:hidden}
   #lb-ctr{font-family:var(--mono);font-size:12px;color:var(--text-muted);white-space:nowrap}
@@ -960,7 +966,20 @@
         <input id="em-subject" type="text" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none" />
       </div>
       <div style="margin-bottom:12px">
-        <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Message</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Message</div>
+          <div style="display:flex;gap:6px">
+            <button type="button" id="em-custom-btn" onclick="emailModalWriteCustom()"
+              style="font-size:11px;padding:3px 10px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;font-family:var(--font)"
+              title="Clear the template and write your own message from scratch">
+              ✏ Write Custom
+            </button>
+            <button type="button" id="em-restore-btn" onclick="emailModalRestoreTemplate()" style="display:none;font-size:11px;padding:3px 10px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;font-family:var(--font)"
+              title="Restore the auto-generated template">
+              ↩ Restore Template
+            </button>
+          </div>
+        </div>
         <textarea id="em-body" style="width:100%;min-height:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55;white-space:pre"></textarea>
       </div>
       <div style="margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
@@ -1456,6 +1475,12 @@
   <div id="lb-footer">
     <div id="lb-info"></div>
     <span id="lb-ctr"></span>
+    <div id="lb-zoom-ctrls">
+      <button type="button" onclick="lbZoomOut()" title="Zoom out (or scroll down on the image)">&minus;</button>
+      <span id="lb-zoom-pct">100%</span>
+      <button type="button" onclick="lbZoomIn()" title="Zoom in (or scroll up on the image)">&plus;</button>
+      <button type="button" onclick="lbZoomReset()" title="Reset zoom (or double-click the image)" style="font-size:11px;width:auto;padding:0 8px">Reset</button>
+    </div>
     <button id="lb-close" onclick="closeLightbox()">&#10005; Close</button>
   </div>
 </div>
@@ -6738,8 +6763,8 @@ function calcQuoteTotals(q){
 //
 //   Quote total          Upfront deposit     Final at completion
 //   < $1,000             $0                  full amount
-//   $1,000 – $1,999      $500                balance
-//   $2,000 – $3,999      $1,000              balance
+//   $1,000 – $1,999      $250                balance
+//   $2,000 – $3,999      $500                balance
 //   $4,000 +             $1,500              balance
 //
 // For utility-delayed jobs (new-service / service-upgrade auto-flag, manual
@@ -6749,8 +6774,8 @@ function calcQuoteTotals(q){
 //   - Final $1,000 at full completion (utility connection done)
 const DEPOSIT_TIERS = [
   { minTotal: 4000, deposit: 1500 },
-  { minTotal: 2000, deposit: 1000 },
-  { minTotal: 1000, deposit: 500  },
+  { minTotal: 2000, deposit: 500  },
+  { minTotal: 1000, deposit: 250  },
   { minTotal: 0,    deposit: 0    }
 ];
 function calcDepositAmount(quoteTotal) {
@@ -7252,7 +7277,64 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
 
+  _emailModalResetButtons();
   document.getElementById('email-modal').classList.add('show');
+}
+
+// ── Email modal: custom / restore helpers ──────────────────────────────
+// Stash for the full auto-generated template so Restore can bring it back.
+let _emailModalTemplate = { subject: '', body: '' };
+
+function emailModalWriteCustom() {
+  // Save the current template so the user can restore it.
+  _emailModalTemplate.subject = document.getElementById('em-subject').value;
+  _emailModalTemplate.body    = document.getElementById('em-body').value;
+
+  // Build a minimal greeting from the pending email's customer record.
+  let firstName = '';
+  try {
+    if (_pendingEmail) {
+      const cust = _pendingEmail.customerId ? getCustomer(_pendingEmail.customerId) : null;
+      const lead = _pendingEmail.leadId     ? getLead(_pendingEmail.leadId)         : null;
+      firstName = cust?.firstName
+        || lead?.customerName?.split(' ')[0]
+        || '';
+    }
+  } catch(_) {}
+
+  const greeting = firstName ? `Hi ${firstName},\n\n` : `Hi,\n\n`;
+  document.getElementById('em-body').value = greeting;
+
+  // Move cursor to end so the user can type immediately.
+  const ta = document.getElementById('em-body');
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  // Swap buttons.
+  const cBtn = document.getElementById('em-custom-btn');
+  const rBtn = document.getElementById('em-restore-btn');
+  if (cBtn) cBtn.style.display = 'none';
+  if (rBtn) rBtn.style.display = '';
+}
+
+function emailModalRestoreTemplate() {
+  if (_emailModalTemplate.body) {
+    document.getElementById('em-subject').value = _emailModalTemplate.subject;
+    document.getElementById('em-body').value    = _emailModalTemplate.body;
+  }
+  const cBtn = document.getElementById('em-custom-btn');
+  const rBtn = document.getElementById('em-restore-btn');
+  if (cBtn) cBtn.style.display = '';
+  if (rBtn) rBtn.style.display = 'none';
+}
+
+// Reset button state whenever the modal opens so it's always clean.
+function _emailModalResetButtons() {
+  _emailModalTemplate = { subject: '', body: '' };
+  const cBtn = document.getElementById('em-custom-btn');
+  const rBtn = document.getElementById('em-restore-btn');
+  if (cBtn) cBtn.style.display = '';
+  if (rBtn) rBtn.style.display = 'none';
 }
 
 // Live-updates the "N attachment(s)" indicator in the email modal.
@@ -7587,6 +7669,7 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = false; sendBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email'; }
 
+  _emailModalResetButtons();
   document.getElementById('email-modal').classList.add('show');
   // Drop the cursor into the body so the user can start typing immediately,
   // positioned between the greeting and the signature.
@@ -11212,6 +11295,8 @@ function openLightbox(jobId, cat, idx) {
   if (!files.length) return;
   LBFiles = files;
   LBIdx   = Math.max(0, Math.min(idx, files.length-1));
+  _setupLightboxZoom();        // idempotent — wires wheel/drag/pinch listeners once
+  _resetLBZoom();
   renderLB();
   document.getElementById('lb-overlay').classList.add('show');
   document.body.style.overflow = 'hidden';
@@ -11227,12 +11312,141 @@ function closeLightbox() {
     vidEl.removeAttribute('src');
     try { vidEl.load(); } catch(_){}
   }
+  _resetLBZoom();
   LBFiles = []; LBIdx = 0;
 }
 
 function lbNav(dir) {
   LBIdx = (LBIdx + dir + LBFiles.length) % LBFiles.length;
+  _resetLBZoom();              // each new image starts at 100%
   renderLB();
+}
+
+// ── LIGHTBOX ZOOM / PAN ─────────────────────────────────────────────────
+// State + helpers for interactive zoom on the photo lightbox image.
+//   - Mouse wheel: zoom in/out around the cursor (centered for simplicity)
+//   - Click + drag: pan when zoomed > 1x
+//   - Double-click: toggle between 1x and 2.5x
+//   - Pinch (touch): smooth zoom
+//   - One-finger drag (touch): pan when zoomed > 1x
+//   - +/-/Reset buttons + 0/-/= keyboard shortcuts
+let LBZoom = 1, LBPanX = 0, LBPanY = 0;
+let _LBPanning = false, _LBPanStartX = 0, _LBPanStartY = 0;
+let _LBPinchStartDist = 0, _LBPinchStartZoom = 1;
+let _LBZoomListenersWired = false;
+
+function _applyLBTransform() {
+  const img = document.getElementById('lb-img');
+  if (!img) return;
+  img.style.transform = `translate(${LBPanX}px, ${LBPanY}px) scale(${LBZoom})`;
+  img.classList.toggle('zoomed', LBZoom > 1);
+  const pctEl = document.getElementById('lb-zoom-pct');
+  if (pctEl) pctEl.textContent = Math.round(LBZoom * 100) + '%';
+}
+function _resetLBZoom() {
+  LBZoom = 1; LBPanX = 0; LBPanY = 0;
+  _applyLBTransform();
+  const img = document.getElementById('lb-img');
+  if (img) img.classList.remove('panning');
+}
+function lbZoomIn()    { LBZoom = Math.min(8, LBZoom * 1.4); _applyLBTransform(); }
+function lbZoomOut()   { LBZoom = Math.max(1, LBZoom / 1.4); if (LBZoom <= 1.001) { LBPanX = 0; LBPanY = 0; } _applyLBTransform(); }
+function lbZoomReset() { _resetLBZoom(); }
+
+function _setupLightboxZoom() {
+  if (_LBZoomListenersWired) return;
+  const wrap = document.getElementById('lb-img-wrap');
+  const img  = document.getElementById('lb-img');
+  if (!wrap || !img) return;
+
+  // Mouse wheel = zoom on the image area.
+  wrap.addEventListener('wheel', (e) => {
+    // Only intercept when over the image area (the wrap fills that area).
+    if ((e.target && e.target.id === 'lb-video')) return;
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 1/1.15 : 1.15;
+    LBZoom = Math.max(1, Math.min(8, LBZoom * factor));
+    if (LBZoom <= 1.001) { LBZoom = 1; LBPanX = 0; LBPanY = 0; }
+    _applyLBTransform();
+  }, { passive: false });
+
+  // Double-click on image to toggle zoom.
+  img.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    if (LBZoom > 1) _resetLBZoom();
+    else { LBZoom = 2.5; _applyLBTransform(); }
+  });
+
+  // Mouse drag to pan when zoomed.
+  img.addEventListener('mousedown', (e) => {
+    if (LBZoom <= 1) return;
+    e.preventDefault();
+    _LBPanning = true;
+    _LBPanStartX = e.clientX - LBPanX;
+    _LBPanStartY = e.clientY - LBPanY;
+    img.classList.add('panning');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!_LBPanning) return;
+    LBPanX = e.clientX - _LBPanStartX;
+    LBPanY = e.clientY - _LBPanStartY;
+    _applyLBTransform();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!_LBPanning) return;
+    _LBPanning = false;
+    const i = document.getElementById('lb-img');
+    if (i) i.classList.remove('panning');
+  });
+
+  // Touch — pinch to zoom, one-finger drag to pan when zoomed.
+  img.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      _LBPinchStartDist = Math.sqrt(dx*dx + dy*dy);
+      _LBPinchStartZoom = LBZoom;
+    } else if (e.touches.length === 1 && LBZoom > 1) {
+      _LBPanning = true;
+      _LBPanStartX = e.touches[0].clientX - LBPanX;
+      _LBPanStartY = e.touches[0].clientY - LBPanY;
+    }
+  }, { passive: true });
+  img.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && _LBPinchStartDist > 0) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      LBZoom = Math.max(1, Math.min(8, _LBPinchStartZoom * (dist / _LBPinchStartDist)));
+      if (LBZoom <= 1.001) { LBZoom = 1; LBPanX = 0; LBPanY = 0; }
+      _applyLBTransform();
+    } else if (e.touches.length === 1 && _LBPanning) {
+      e.preventDefault();
+      LBPanX = e.touches[0].clientX - _LBPanStartX;
+      LBPanY = e.touches[0].clientY - _LBPanStartY;
+      _applyLBTransform();
+    }
+  }, { passive: false });
+  img.addEventListener('touchend', () => {
+    _LBPanning = false;
+    _LBPinchStartDist = 0;
+  });
+
+  // Keyboard — ESC to close, arrows to navigate, +/-/0 for zoom.
+  // Only active while the lightbox is showing.
+  document.addEventListener('keydown', (e) => {
+    const overlay = document.getElementById('lb-overlay');
+    if (!overlay || !overlay.classList.contains('show')) return;
+    if (e.key === 'Escape')        { closeLightbox(); }
+    else if (e.key === 'ArrowLeft'){ lbNav(-1); }
+    else if (e.key === 'ArrowRight'){ lbNav(1); }
+    else if (e.key === '+' || e.key === '='){ e.preventDefault(); lbZoomIn(); }
+    else if (e.key === '-' || e.key === '_'){ e.preventDefault(); lbZoomOut(); }
+    else if (e.key === '0')        { lbZoomReset(); }
+  });
+
+  _LBZoomListenersWired = true;
 }
 
 function renderLB() {
