@@ -3215,6 +3215,8 @@ function renderKanban(leads) {
       const name = c ? custFullName(c) : (l.customerName||'No customer');
       const addr = l.siteCity ? `${l.siteCity}, ${l.siteState||'VA'}` : '—';
       const flagHtml = l.inspectionRequired ? `<span class="chip chip-flag">Inspection</span>` : '';
+      const _custAct = getLeadCustomerAction(l.id);
+      const actChip  = customerActionChip(_custAct, { compact: true });
       const isLast = STAGES.findIndex(s=>s.id===stage.id)===STAGES.length-1;
       return `<div class="kcard" draggable="true" data-lead-id="${l.id}"
         ondragstart="kcardDragStart(event,'${l.id}')"
@@ -3223,7 +3225,7 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}</div>
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${actChip}</div>
         <div class="kcard-foot" style="pointer-events:none">
           <span class="kcard-days">${daysAgo(l.stageAt||l.createdAt)}</span>
           ${!isLast?`<span class="knext" style="pointer-events:auto" onclick="event.stopPropagation();advanceStage('${l.id}')">Next →</span>`:''}
@@ -4480,6 +4482,51 @@ function quoteStatusChip(s){
   };
   const p=(m[s]||'chip-muted Unknown').split(' ');
   return `<span class="chip ${p[0]}">${p.slice(1).join(' ')}</span>`;
+}
+
+// ── CUSTOMER-ACTION SURFACING ─────────────────────────────────────────────
+// Resolve the latest customer action across all quotes on a lead. Used to
+// surface "Accepted" / "Declined" / "Contingent" indicators on the kanban
+// card and the job-detail header so the team knows at a glance whether
+// the customer has acted — no more "did we hear back?" guessing.
+//
+// Returns null if no quote on the lead has a customerActionAt timestamp,
+// otherwise:
+//   { action: 'accepted'|'declined'|'contingent_accepted',
+//     at:      ISO string,
+//     reason:  optional decline reason,
+//     quoteId: id of the quote that was acted on }
+function getLeadCustomerAction(leadId) {
+  if (!leadId) return null;
+  const quotes = getQuotes().filter(q => q.leadId === leadId && q.customerActionAt);
+  if (!quotes.length) return null;
+  // Latest by customerActionAt — most recent action wins. If they declined
+  // an old quote and accepted a newer one, the newer one is what counts.
+  quotes.sort((a, b) => new Date(b.customerActionAt) - new Date(a.customerActionAt));
+  const q = quotes[0];
+  return {
+    action:  q.customerActionAction || (q.status === 'declined' ? 'declined' : 'accepted'),
+    at:      q.customerActionAt,
+    reason:  q.customerDeclineReason || null,
+    quoteId: q.id
+  };
+}
+
+// Render a small chip for a customer action — used on kanban cards and
+// anywhere we want an at-a-glance status. Pass the action object from
+// getLeadCustomerAction(). Returns '' if action is null.
+function customerActionChip(act, opts) {
+  if (!act) return '';
+  opts = opts || {};
+  const tinyDate = act.at ? (new Date(act.at)).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+  if (act.action === 'declined') {
+    return `<span class="chip chip-lost" title="Customer declined on ${tinyDate}${act.reason ? ' — ' + act.reason : ''}">✗ Declined${opts.compact?'':' '+tinyDate}</span>`;
+  }
+  if (act.action === 'contingent_accepted' || act.action === 'contingent-accepted') {
+    return `<span class="chip chip-warn" title="Customer contingent-accepted on ${tinyDate}">⚠ Contingent${opts.compact?'':' '+tinyDate}</span>`;
+  }
+  // accepted
+  return `<span class="chip chip-ok" title="Customer accepted on ${tinyDate}">✓ Accepted${opts.compact?'':' '+tinyDate}</span>`;
 }
 
 // ── QUOTES LIST PAGE ──
@@ -7982,11 +8029,81 @@ function _buildHtmlEmail(plainBody) {
   // Escape HTML entities in the plain text
   const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
+  // Auto-linkify any bare URL inside an already-escaped string. Used as a
+  // safety net for URLs that aren't part of the Accept/Decline button block.
+  // URLs are detected on http(s) prefix and terminated at the first whitespace
+  // or common trailing punctuation.
+  const _linkify = (escapedText) => escapedText.replace(
+    /(https?:\/\/[^\s<>"]+[^\s<>".,;!?)\]}])/g,
+    '<a href="$1" style="color:#2e7d32;text-decoration:underline" target="_blank" rel="noopener">$1</a>'
+  );
+
+  // ── Pre-pass: extract the Accept/Decline block from the plain text and
+  // splice in proper styled HTML buttons. The customer-facing CTA needs to
+  // be unmistakably clickable — escaped raw URLs inside <p> tags don't cut
+  // it (Outlook in particular won't auto-linkify them).
+  //
+  // The block we look for is generated in sendQuoteEmail() and looks like:
+  //   ━━━━━…
+  //   ACCEPT OR DECLINE — ONE-CLICK
+  //   ━━━━━…
+  //
+  //     ✓ Accept Quote:    https://…
+  //
+  //     ✗ Decline Quote:  https://…
+  //
+  //     These links are unique to your quote and expire in 30 days.
+  //     You'll see a confirmation page where you can review the scope…
+  //
+  // We match the whole region, lift out the two URLs (and optional accept
+  // label override e.g. "Accept (contingent)"), build HTML buttons, and
+  // continue with the remainder.
+  let buttonsHtml = '';
+  const blockRe = /━{5,}\s*\n\s*ACCEPT OR DECLINE[^\n]*\n━{5,}\s*\n[\s\S]*?(✓\s*([^:]+?):\s*(https?:\/\/\S+))[\s\S]*?(✗\s*[^:]+?:\s*(https?:\/\/\S+))[\s\S]*?(?=(\n[\S]|$))/;
+  const m = plainBody.match(blockRe);
+  if (m) {
+    const acceptLabel = (m[2] || 'Accept Quote').trim();
+    const acceptUrl   = m[3];
+    const declineUrl  = m[5];
+    buttonsHtml = `
+      <table cellpadding="0" cellspacing="0" border="0" style="margin:18px auto 6px;border-collapse:separate">
+        <tr>
+          <td align="center">
+            <a href="${acceptUrl}" target="_blank" rel="noopener"
+               style="display:inline-block;padding:14px 32px;background:#2e7d32;color:#ffffff;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:700;font-size:15px;text-decoration:none;border-radius:8px;border:1px solid #2e7d32;letter-spacing:0.02em">
+              ✓ ${esc(acceptLabel)}
+            </a>
+          </td>
+          <td style="width:14px">&nbsp;</td>
+          <td align="center">
+            <a href="${declineUrl}" target="_blank" rel="noopener"
+               style="display:inline-block;padding:14px 32px;background:#ffffff;color:#5a6270;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:15px;text-decoration:none;border-radius:8px;border:1px solid #c8ccd2">
+              ✗ Decline
+            </a>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:6px 0 2px;text-align:center;font-size:12px;color:#666">
+        These links are unique to your quote and expire in 30 days.
+      </p>
+      <p style="margin:0 0 14px;text-align:center;font-size:12px;color:#666">
+        You'll see a confirmation page before anything is final.
+      </p>`;
+    // Strip the entire block from the plain text so the rest of the renderer
+    // doesn't re-emit raw URLs. We leave a single marker line so we can
+    // splice the buttonsHtml back in at the right spot below.
+    plainBody = plainBody.slice(0, m.index) + '\n[[__GK_QUOTE_BUTTONS__]]\n' + plainBody.slice(m.index + m[0].length);
+  }
+
   // Split into paragraphs/sections. ━━━ lines become visual dividers.
   const lines = plainBody.split('\n');
   let html = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (line.trim() === '[[__GK_QUOTE_BUTTONS__]]') {
+      html += buttonsHtml;
+      continue;
+    }
     if (/^━{5,}/.test(line)) {
       // Section divider — render as a styled <hr>
       html += '<hr style="border:none;border-top:1px solid #e0e0e0;margin:14px 0;">';
@@ -7996,10 +8113,10 @@ function _buildHtmlEmail(plainBody) {
     } else if (line.trim() === '') {
       html += '<br>';
     } else if (/^\s{2,}/.test(line)) {
-      // Indented lines — preserve indent as padded paragraph
-      html += `<p style="margin:2px 0;padding-left:16px;font-size:13.5px;color:#222">${esc(line.trim())}</p>`;
+      // Indented lines — preserve indent as padded paragraph (linkify any URLs)
+      html += `<p style="margin:2px 0;padding-left:16px;font-size:13.5px;color:#222">${_linkify(esc(line.trim()))}</p>`;
     } else {
-      html += `<p style="margin:3px 0;font-size:13.5px;color:#222;line-height:1.55">${esc(line)}</p>`;
+      html += `<p style="margin:3px 0;font-size:13.5px;color:#222;line-height:1.55">${_linkify(esc(line))}</p>`;
     }
   }
 
@@ -10116,6 +10233,41 @@ function renderJobDetail(id) {
     </div>
   </div>`;
 
+  // ── Customer-action banner ──
+  // Sits right under the header, above all other content. Surfaces the
+  // latest accept / decline / contingent action across the lead's quotes
+  // so the team doesn't accidentally chase a customer who already said no
+  // (or forget to act on someone who already said yes).
+  let custActionBanner = '';
+  const _leadAct = getLeadCustomerAction(id);
+  if (_leadAct) {
+    const _dateStr = _leadAct.at
+      ? new Date(_leadAct.at).toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'})
+      : '—';
+    let _bg, _border, _color, _icon, _label, _msg;
+    if (_leadAct.action === 'declined') {
+      _bg = 'rgba(239,68,68,.08)'; _border = 'var(--red,#ef4444)'; _color = 'var(--red,#ef4444)';
+      _icon = '✗'; _label = 'Quote declined';
+      _msg = `Customer declined on <strong>${_dateStr}</strong>${_leadAct.reason ? ` — <em>"${escHtml(_leadAct.reason)}"</em>` : ''}. Hold off on follow-ups unless they reach back out.`;
+    } else if (_leadAct.action === 'contingent_accepted' || _leadAct.action === 'contingent-accepted') {
+      _bg = 'var(--amber-dim)'; _border = 'var(--amber)'; _color = 'var(--amber)';
+      _icon = '⚠'; _label = 'Contingent acceptance';
+      _msg = `Customer contingent-accepted on <strong>${_dateStr}</strong>. Resolve the contingency before scheduling.`;
+    } else {
+      _bg = 'var(--green-dim)'; _border = 'var(--green)'; _color = 'var(--green)';
+      _icon = '✓'; _label = 'Quote accepted';
+      _msg = `Customer accepted on <strong>${_dateStr}</strong>. Move it forward — collect deposit, schedule, etc.`;
+    }
+    custActionBanner = `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid ${_border};background:${_bg};border-radius:var(--r);display:flex;align-items:flex-start;gap:10px;font-size:13px">
+      <div style="font-size:18px;line-height:1;color:${_color};flex-shrink:0">${_icon}</div>
+      <div style="flex:1">
+        <div style="font-weight:600;color:${_color};margin-bottom:2px">${_label}</div>
+        <div style="color:var(--text-secondary);line-height:1.45">${_msg}</div>
+      </div>
+      <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="openQuoteBuilder('${_leadAct.quoteId}')" title="Open the quote that was acted on">View quote</button>
+    </div>`;
+  }
+
   // ── Customer & Site ──
   const _custIsCom = cust && cust.propertyType === 'commercial';
   const _custBiz = _custIsCom && cust.businessName ? cust.businessName : '';
@@ -10662,7 +10814,9 @@ function renderJobDetail(id) {
   const tasksSec = renderTasksJobSection(id);
 
   // ── Assemble ──
-  dv.innerHTML = hdr + `<div class="jd-wrap">
+  // custActionBanner sits between the header and the two-column wrap so it
+  // spans the full content width and is the first thing the user sees.
+  dv.innerHTML = hdr + custActionBanner + `<div class="jd-wrap">
     <div>${custSec}${smsSec}${jobSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${milestoneSec}</div>
   </div>`;
