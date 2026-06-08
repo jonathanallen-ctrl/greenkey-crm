@@ -14279,10 +14279,27 @@ function _renderTechModeLanding(pg) {
     const days = Math.round((dt - today) / 86400000);
     return days > 0 && days <= 7;
   });
+  // Tech Mode backstop: when there aren't formally-scheduled jobs for today
+  // or this week, surface every job that's past quote approval and on its
+  // way through the install workflow. This is also what makes Tech Mode
+  // usable for testing — pull up any post-approval job without first having
+  // to put it on the calendar. Stage IDs must match STAGES exactly; the
+  // previous list had drift ('active'/'install'/'in-progress' didn't exist).
+  const INSTALL_PHASE_STAGES = [
+    'quote-approved',
+    'utility-approval',
+    'permit-applied',
+    'charger-confirmed',
+    'scheduled',
+    'pre-install',
+    'installation',
+    'post-install-docs',
+    'final-inspection'
+  ];
   const otherActive  = leads.filter(l =>
     _isAssignedToMe(l) &&
     !todayJobs.includes(l) && !upcomingJobs.includes(l) &&
-    (l.stage === 'active' || l.stage === 'pre-install' || l.stage === 'install' || l.stage === 'in-progress')
+    INSTALL_PHASE_STAGES.includes(l.stage)
   );
 
   function _renderJobCard(l, accent) {
@@ -14331,9 +14348,8 @@ function _renderTechModeLanding(pg) {
     ` : ''}
 
     ${otherActive.length ? `
-      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px">Other active jobs (${otherActive.length})</div>
-      ${otherActive.slice(0,8).map(l => _renderJobCard(l)).join('')}
-      ${otherActive.length > 8 ? `<div style="text-align:center;font-size:12px;color:var(--text-muted);padding:8px"><a onclick="navigate('jobs')" style="cursor:pointer;color:var(--blue)">View all in Pipeline →</a></div>` : ''}
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px">Install-phase jobs (${otherActive.length})</div>
+      ${otherActive.map(l => _renderJobCard(l)).join('')}
     ` : ''}
 
     ${(!todayJobs.length && !upcomingJobs.length && !otherActive.length) ? `
