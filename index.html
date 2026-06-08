@@ -17041,6 +17041,23 @@ async function _syncFromSP() {
     criticalBanner(`SharePoint list "${SP_LIST_NAME}" is missing. Data sync is DISABLED until it is created. See SharePoint Site contents.`);
     return;
   }
+  // CRITICAL: never pull while we have unflushed local writes. If we did,
+  // SP's stale snapshot would overwrite the local change before queueSPSync's
+  // 3-second debounce ever fired. This was the root cause of the
+  // 2026-06-08 data-loss incident — auto-poll + visibility-change pulls were
+  // racing against multiple rapid-fire upserts in the hydrate pipeline.
+  // Flush the pending push first, THEN pull.
+  if (_hasPendingPush || _syncing) {
+    console.log('[GK] Pull deferred: pending push in flight (flushing first)');
+    try { await flushSPSync(); } catch (e) { console.warn('[GK] flush before pull failed:', e); }
+    // If a write happened during the flush, defer entirely — another tick
+    // will pick it up. We do NOT want a tight loop of flush-then-pull-then-
+    // flush, so just give up this pull attempt cleanly.
+    if (_hasPendingPush) {
+      console.log('[GK] Pull abandoned: still have pending writes after flush');
+      return;
+    }
+  }
   // Buffer SP data first so we can safety-check before overwriting localStorage.
   // Without this, a corrupted SP list would silently destroy good local data —
   // which is exactly what happened during the 2026-05-08 incident.
@@ -17101,10 +17118,22 @@ async function _syncFromSP() {
 }
 
 // ── SYNC localStorage → SHAREPOINT (debounced 3s) ──
+// _hasPendingPush is exposed so the pull side can detect "we have unflushed
+// writes" and refuse to pull (which would otherwise overwrite them with
+// stale SP state).
+let _hasPendingPush = false;
 function queueSPSync() {
   if (!_gToken) return;
+  _hasPendingPush = true;
   clearTimeout(_syncTmr);
   _syncTmr = setTimeout(_syncToSP, 3000);
+}
+// Force an immediate flush of any pending push. Returns a promise that
+// resolves when the push completes (or immediately if there's nothing to do).
+async function flushSPSync() {
+  if (!_hasPendingPush) return;
+  clearTimeout(_syncTmr);
+  await _syncToSP();
 }
 
 async function _syncToSP() {
@@ -17176,9 +17205,11 @@ async function _syncToSP() {
       }
     }
     console.log('[GK] Synced to SharePoint:', keys.length, 'keys');
+    _hasPendingPush = false;
   } catch(e) {
     console.warn('[GK] Sync to SharePoint failed:', e);
     criticalBanner('Push to SharePoint failed: ' + (e.message || e) + '. Your edits are saved locally but NOT synced. Try reloading; if error persists, contact support.');
+    // Leave _hasPendingPush true so a later flush can retry.
   } finally {
     _syncing = false;
   }
@@ -18656,6 +18687,15 @@ async function hydrateQuoteStatusFromServer(qid) {
     const _prevCustomerActionAt    = q.customerActionAt || null;
     const _prevNotifiedActionAt    = q.notifiedActionAt || null;
 
+    // Pre-decide if we'll fire the team notify, so we can pack notifiedActionAt
+    // into the SAME upsertQuote (one write, not two). This is critical — the
+    // 2026-06-08 incident was caused by multiple rapid upserts resetting the
+    // queueSPSync debounce. Keep this to ONE write.
+    const _willNotify =
+      ['approved','contingent-approved','declined'].includes(newStatus) &&
+      (_prevStatus === 'delivered' || _prevStatus === 'draft' || _prevStatus === 'invoiced') &&
+      (_prevNotifiedActionAt !== data.actedAt);
+
     upsertQuote({
       ...q,
       status: newStatus,
@@ -18663,31 +18703,33 @@ async function hydrateQuoteStatusFromServer(qid) {
       customerActionAction: data.action,
       customerActionIp: data.ip || null,
       customerActionUA: data.userAgent || null,
-      customerDeclineReason: data.reason || null
+      customerDeclineReason: data.reason || null,
+      // Stamp the team-notify watermark upfront so we never re-fire even if
+      // the team email itself errors. The cost is potentially losing ONE
+      // notification on send failure — worth it vs. corrupting local data.
+      notifiedActionAt: _willNotify ? data.actedAt : q.notifiedActionAt
     });
 
     // ── TEAM EMAIL NOTIFICATION ──
     // Fire a courtesy email to the GreenKey team whenever a customer-action
-    // transition lands. Only fires on TRUE transitions:
-    //   (a) Previous status was 'delivered' or 'draft' — the customer hadn't
-    //       acted yet locally, so this is news.
-    //   (b) OR a different action than the last one we notified about — covers
-    //       the rare "they declined, then later accepted" path.
-    // notifiedActionAt is stamped on the quote so a re-poll never re-fires.
+    // transition lands. Only fires on TRUE transitions. notifiedActionAt is
+    // stamped on the quote so a re-poll never re-fires.
+    //
+    // 2026-06-08: this used to do up to 3 separate upsertQuote calls
+    // (pre-stamp, then rollback on send failure). That kept resetting the
+    // 3-second queueSPSync debounce and caused the data-loss race. Now we
+    // do ZERO extra upserts here — the notifiedActionAt was already merged
+    // into the main upsertQuote above. On send failure we just log; the
+    // next poll will see notifiedActionAt is set and skip, which is fine —
+    // worst case the team misses one notification. Better than losing data.
     try {
       const _isActionStatus = ['approved','contingent-approved','declined'].includes(newStatus);
       const _isFreshTransition =
         (_prevStatus === 'delivered' || _prevStatus === 'draft' || _prevStatus === 'invoiced') &&
         (_prevNotifiedActionAt !== data.actedAt);
       if (_isActionStatus && _isFreshTransition) {
-        // Pre-stamp the quote so concurrent polls don't both fire.
-        const _stamped = getQuote(qid);
-        if (_stamped) upsertQuote({ ..._stamped, notifiedActionAt: data.actedAt });
         _notifyTeamOfQuoteAction(qid, data).catch(e => {
-          console.warn('[GK] notifyTeamOfQuoteAction failed:', e);
-          // Roll back the stamp on failure so a future poll can retry.
-          const _qr = getQuote(qid);
-          if (_qr) upsertQuote({ ..._qr, notifiedActionAt: _prevNotifiedActionAt });
+          console.warn('[GK] notifyTeamOfQuoteAction failed (will not retry):', e);
         });
       }
     } catch (e) {
