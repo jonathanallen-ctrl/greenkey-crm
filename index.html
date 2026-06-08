@@ -4696,6 +4696,117 @@ function startQuoteBuilder(){
   openQuoteBuilder(nq.id);
 }
 
+// ── RECOVER QUOTE (with a known ID) ── REMOVED 2026-06-08 ──
+// This was a one-time recovery path for the 2026-06-08 sync race. The
+// underlying issue is now fixed (block-pulls-while-pending + coalesced
+// writes), so this path should never be needed again. Recovery for the
+// 2026-06-08 incident is documented as a one-shot console snippet in
+// SESSION_HANDOFF.md. The dialog code below is kept commented-out as
+// reference in case a similar situation ever arises.
+/*
+function openRecoverQuoteDialog_DEPRECATED() {
+  const leads = getLeads().filter(l => l.stage !== 'archived');
+  const custs = getCustomers();
+  if (!leads.length) { toast('No active jobs found — create a lead first', 'warning'); return; }
+  const body = `
+    <div class="fsec"><div class="fsec-title">Quote ID to Recover</div>
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:8px">
+        Paste the quote ID from your Sent Items folder, e.g. <code style="background:var(--bg-elevated);padding:1px 5px;border-radius:3px">qt-1780926272799</code> from the subject line
+        <em style="color:var(--text-muted)">"Your GreenKey Quote — qt-1780926272799"</em>.
+      </div>
+      <input class="fi" type="text" id="recover-quote-id" placeholder="qt-1780926272799" autocomplete="off" style="font-family:var(--mono)">
+    </div>
+    <div class="fsec"><div class="fsec-title">Select Job (this quote will be attached to)</div>
+      ${_leadSearchUI(leads,custs)}
+    </div>
+    <div class="fsec"><div class="fsec-title">Quote Type</div>
+      <div style="display:flex;gap:12px;flex-direction:column">
+        <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=quick]').checked=true">
+          <input type="radio" name="rq-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
+          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">Standard EV residential</div></div>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=detailed]').checked=true">
+          <input type="radio" name="rq-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
+          <div><div style="font-size:13.5px;font-weight:500">📋 Detailed Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">Custom materials + labor</div></div>
+        </label>
+      </div>
+    </div>
+    <div style="padding:10px 12px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:var(--r);font-size:12px;color:var(--text-secondary);line-height:1.5">
+      <strong style="color:var(--amber)">Heads up:</strong> this creates a fresh empty quote shell with the ID you specify. You'll need to re-enter the totals/scope you sent. Don't re-send the email — the customer already has theirs, and the original accept/decline buttons will route to this recreated quote.
+    </div>`;
+  openDrawer('Recover Quote with ID', body,
+    `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button>` +
+    `<button class="btn btn-p" onclick="startRecoverQuote()">Create →</button>`
+  );
+}
+
+function startRecoverQuote() {
+  const rawId = (document.getElementById('recover-quote-id')?.value || '').trim();
+  if (!rawId) { toast('Enter the quote ID from the email', 'error'); return; }
+  // Be forgiving about format — accept with or without the 'qt-' prefix.
+  const qid = rawId.startsWith('qt-') ? rawId : ('qt-' + rawId.replace(/^qt[-_]?/i, ''));
+  // Sanity check the shape — qt- followed by something
+  if (!/^qt-[\w-]{6,}$/.test(qid)) {
+    toast('That doesn\'t look like a quote ID. Expected format: qt-1234567890', 'error');
+    return;
+  }
+  // Already exists? Just open it instead of clobbering.
+  const existing = getQuote(qid);
+  if (existing) {
+    if (!confirm(`A quote with ID ${qid} already exists in the CRM (status: ${existing.status}). Open it instead?`)) return;
+    closeDrawer();
+    openQuoteBuilder(qid);
+    return;
+  }
+  const sel = document.getElementById('qt-lead-sel');
+  const leadId = sel?.value || (sel?.options[0]?.value) || '';
+  if (!leadId) { toast('Please select a job from the list', 'error'); return; }
+  const qtype = document.querySelector('input[name="rq-type"]:checked')?.value || 'quick';
+
+  // Build the same default shape as startQuoteBuilder, but with the user-
+  // supplied quote ID and status='draft'. Once they fill in totals + scope,
+  // they can mark it Delivered manually.
+  closeDrawer();
+  const lead = getLead(leadId);
+  const _prefs = getPrefs();
+  const _isPlatformNew = ['Qmerit','Electrum','Treehouse'].includes(lead.source);
+  const _defaultBuffer = _isPlatformNew ? 0 : ((typeof _prefs.paymentBuffer === 'number') ? _prefs.paymentBuffer : 3);
+  const _isUtilityNew = (lead.jobType === 'new-service' || lead.jobType === 'service-upgrade');
+  let _autoBillTo = null;
+  if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(lead.source)) {
+    const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
+    if (ref) _autoBillTo = ref.id;
+  }
+  const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
+  const _defaultPermit = (_jt && _jt.noPermit)
+    ? 0
+    : (lead.permitFee || (lead.source === 'Qmerit' ? 250 : 200));
+  const nq = {
+    id: qid,                  // ← USER-SUPPLIED ID, the whole point of this function
+    leadId, customerId: lead.customerId, source: lead.source, jobType: lead.jobType,
+    type: qtype,
+    status: 'delivered',      // ← start as 'delivered' since an email already went out;
+                              //   this also makes the pipeline poll pick up customer actions
+    permitFee: _defaultPermit,
+    specialJurisdiction: lead.specialJurisdiction || false, jurisdiction: lead.jurisdiction || '',
+    qq: { panelLocation:'garage', addlDist:0, routingType:'surface', machineFt:50, mountType:'wall', tandemBreakers:0, difficultyFee:0, travelFee:0, travelFeeType:'baked', extras:[] },
+    lines: [], laborHours: 0, laborRate: 160, rentals: [],
+    scope: '', inclusions: '', exclusions: '', notes: '', quoteTotal: 0,
+    paymentBuffer: _defaultBuffer,
+    contingentOnUtility: _isUtilityNew,
+    utilityDelayed:      _isUtilityNew,
+    billToCustomerId:    _autoBillTo,
+    requiresMissUtility: false,
+    specialMaterials:    '',
+    isRecovered:         true,        // tag so we know this came in via the recovery path
+    recoveredAt:         new Date().toISOString()
+  };
+  upsertQuote(nq);
+  toast(`Quote ${qid} created. Fill in the totals + scope to match what you sent.`, 'success');
+  openQuoteBuilder(qid);
+}
+*/
+
 // ── QUOTE BUILDER ──
 function openQuoteBuilder(qid){
   // If we're not on the quotes page, navigate there first then open
