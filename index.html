@@ -18633,6 +18633,13 @@ async function hydrateQuoteStatusFromServer(qid) {
         q.customerActionAt === data.actedAt &&
         q.customerDeclineReason === (data.reason || null)) return null;
 
+    // Capture prev state so we can decide whether to fire the team email
+    // notification below. We only notify on real transitions, not on the
+    // first hydration of an already-acted quote.
+    const _prevStatus              = q.status;
+    const _prevCustomerActionAt    = q.customerActionAt || null;
+    const _prevNotifiedActionAt    = q.notifiedActionAt || null;
+
     upsertQuote({
       ...q,
       status: newStatus,
@@ -18642,6 +18649,34 @@ async function hydrateQuoteStatusFromServer(qid) {
       customerActionUA: data.userAgent || null,
       customerDeclineReason: data.reason || null
     });
+
+    // ── TEAM EMAIL NOTIFICATION ──
+    // Fire a courtesy email to the GreenKey team whenever a customer-action
+    // transition lands. Only fires on TRUE transitions:
+    //   (a) Previous status was 'delivered' or 'draft' — the customer hadn't
+    //       acted yet locally, so this is news.
+    //   (b) OR a different action than the last one we notified about — covers
+    //       the rare "they declined, then later accepted" path.
+    // notifiedActionAt is stamped on the quote so a re-poll never re-fires.
+    try {
+      const _isActionStatus = ['approved','contingent-approved','declined'].includes(newStatus);
+      const _isFreshTransition =
+        (_prevStatus === 'delivered' || _prevStatus === 'draft' || _prevStatus === 'invoiced') &&
+        (_prevNotifiedActionAt !== data.actedAt);
+      if (_isActionStatus && _isFreshTransition) {
+        // Pre-stamp the quote so concurrent polls don't both fire.
+        const _stamped = getQuote(qid);
+        if (_stamped) upsertQuote({ ..._stamped, notifiedActionAt: data.actedAt });
+        _notifyTeamOfQuoteAction(qid, data).catch(e => {
+          console.warn('[GK] notifyTeamOfQuoteAction failed:', e);
+          // Roll back the stamp on failure so a future poll can retry.
+          const _qr = getQuote(qid);
+          if (_qr) upsertQuote({ ..._qr, notifiedActionAt: _prevNotifiedActionAt });
+        });
+      }
+    } catch (e) {
+      console.warn('[GK] team notify check failed:', e);
+    }
 
     // When the customer accepts (or contingent-accepts), advance the lead's
     // pipeline stage to "Quote Approved" so the team sees it move forward
@@ -18676,6 +18711,121 @@ async function hydrateQuoteStatusFromServer(qid) {
     console.warn('[GK] hydrateQuoteStatusFromServer failed:', e);
     return null;
   }
+}
+
+// ── TEAM NOTIFICATION ON CUSTOMER QUOTE ACTION ─────────────────────────────
+// When a customer accepts or declines a quote, fire a courtesy email to the
+// GreenKey team (currently Jonathan + Sherri) so they can hit the 24-hour
+// response window even if no one was sitting on the CRM at the moment of
+// the click. Uses the existing Microsoft Graph sendMail flow — no third-
+// party email service required. Sends silently in the background with
+// saveToSentItems:false so the team's Sent folder doesn't fill up.
+//
+// Recipients come from getUsers() filtered to role admin AND with a non-empty
+// email/upn. Falls back to a hard-coded pair if no admin users are loaded
+// yet (e.g. during a fresh sign-in). Edit by changing the user roles in
+// Settings → Users.
+const QUOTE_ACTION_NOTIFY_FALLBACK = [
+  'jonathan.allen@greenkey-usa.com',
+  'sherri.allen@greenkey-usa.com'
+];
+function _quoteActionNotifyRecipients() {
+  try {
+    const users = (typeof getUsers === 'function') ? getUsers() : [];
+    const admins = users
+      .filter(u => u && u.role === 'admin')
+      .map(u => (u.email || u.upn || '').trim().toLowerCase())
+      .filter(Boolean);
+    // De-dupe + sanity check the shape
+    const uniq = [...new Set(admins)].filter(a => a.includes('@'));
+    if (uniq.length > 0) return uniq;
+  } catch (_) {}
+  return QUOTE_ACTION_NOTIFY_FALLBACK.slice();
+}
+
+async function _notifyTeamOfQuoteAction(quoteId, data) {
+  const q = getQuote(quoteId); if (!q) return;
+  const lead = q.leadId ? getLead(q.leadId) : null;
+  const cust = (q.customerId && typeof getCustomer === 'function') ? getCustomer(q.customerId)
+             : (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId)
+             : null;
+  const custName = cust ? custFullName(cust) : (lead?.customerName || 'Customer');
+  const recipients = _quoteActionNotifyRecipients();
+  if (!recipients.length) { console.warn('[GK] team notify: no recipients'); return; }
+
+  // Subject + body shape
+  const actionLabel = data.action === 'declined' ? 'DECLINED'
+                   : data.action === 'contingent_accepted' ? 'CONTINGENT-ACCEPTED'
+                   : 'ACCEPTED';
+  const subject = `Quote ${actionLabel.toLowerCase()} — ${custName} (${quoteId})`;
+
+  const totalNum = q.quoteTotal || q.preProcessingTotal || 0;
+  const totalStr = totalNum.toLocaleString('en-US', { style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2 });
+  const addrStr = lead
+    ? [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ')
+    : '';
+  const phoneStr = cust?.phone || lead?.customerPhone || '';
+  const emailStr = cust?.email || lead?.customerEmail || '';
+  const actedAtStr = data.actedAt
+    ? new Date(data.actedAt).toLocaleString('en-US', { dateStyle:'full', timeStyle:'short' })
+    : '—';
+  const crmUrl = location.origin + location.pathname + (lead ? `#lead=${encodeURIComponent(lead.id)}` : '');
+
+  let body = `${actionLabel}: Customer action on a quote\n\n`;
+  body += `Customer:   ${custName}\n`;
+  if (phoneStr)  body += `Phone:      ${phoneStr}\n`;
+  if (emailStr)  body += `Email:      ${emailStr}\n`;
+  body += `Lead:       ${lead?.id || '—'}\n`;
+  body += `Quote:      ${quoteId}\n`;
+  body += `Total:      ${totalStr}\n`;
+  if (addrStr)   body += `Site:       ${addrStr}\n`;
+  body += `Acted at:   ${actedAtStr}\n`;
+  if (data.reason) body += `Reason:     ${data.reason}\n`;
+  body += `\n`;
+  if (data.action === 'declined') {
+    body += `Hold off on follow-ups unless they reach back out.\n`;
+  } else if (data.action === 'contingent_accepted') {
+    body += `Resolve the contingency, then schedule.\n`;
+  } else {
+    body += `Move it forward — collect the deposit and get them on the calendar.\n`;
+  }
+  body += `\nOpen the lead in the CRM:\n${crmUrl}\n`;
+
+  const htmlContent = (typeof _buildHtmlEmail === 'function') ? _buildHtmlEmail(body) : body;
+
+  // Acquire Graph token. Reuse the existing _gToken if fresh; otherwise refresh.
+  let token = (typeof _gToken === 'string' && _gToken) ? _gToken : null;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        try {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
+          token = tr.accessToken;
+          if (typeof _gToken !== 'undefined') _gToken = token;
+        } catch (silentErr) {
+          // No interactive prompt in the background — bail and let next poll retry.
+          console.warn('[GK] team notify: silent token failed, skipping:', silentErr);
+          throw silentErr;
+        }
+      }
+    }
+  } catch (e) { throw e; }
+  if (!token) throw new Error('No Graph token for team notify');
+
+  await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    method:  'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content: htmlContent },
+        toRecipients: recipients.map(addr => ({ emailAddress: { address: addr } }))
+      },
+      saveToSentItems: false   // keep automated notifications out of the Sent folder
+    })
+  });
+  console.log('[GK] team notify sent to', recipients.join(', '), 'for', quoteId, data.action);
 }
 
 // ── BACKGROUND HYDRATION OF CUSTOMER ACTIONS ──────────────────────────────
