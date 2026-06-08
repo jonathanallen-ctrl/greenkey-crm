@@ -9137,6 +9137,19 @@ function openJobDetail(id) {
   renderJobDetail(id);
   // Begin auto-refresh of SMS thread + consent state for this lead.
   try { if (typeof startSMSPolling === 'function') startSMSPolling(id); } catch (_) {}
+  // Fire-and-forget poll for any customer accept/decline action that may have
+  // happened since we last looked. Re-render if anything changed so the
+  // accept/decline banner appears without the user having to drill into the
+  // specific quote.
+  setTimeout(() => {
+    try {
+      _hydrateLeadQuoteStatuses(id).then(changed => {
+        if (changed > 0 && S.jobDetailId === id) {
+          try { renderJobDetail(id); } catch(_){}
+        }
+      }).catch(()=>{});
+    } catch(_){}
+  }, 150);
 }
 
 function closeJobDetail() {
@@ -18665,6 +18678,82 @@ async function hydrateQuoteStatusFromServer(qid) {
   }
 }
 
+// ── BACKGROUND HYDRATION OF CUSTOMER ACTIONS ──────────────────────────────
+// Accept/decline lives on the Cloudflare Worker (D1 quote_actions table).
+// Without polling, the kanban + lead detail keep showing the stale
+// "Delivered" chip even after the customer has clicked Accept. Two paths:
+//
+//   _hydrateLeadQuoteStatuses(leadId)  — runs when opening a lead detail
+//                                        view; polls every quote on that
+//                                        lead that could still receive an
+//                                        action, then re-renders the detail
+//                                        if anything changed.
+//
+//   _hydrateAllPendingQuotes()         — runs on a 60s timer while the user
+//                                        is sitting on the Pipeline (kanban)
+//                                        page; polls every quote in
+//                                        'delivered' status across the
+//                                        whole pipeline. Re-renders kanban
+//                                        if anything changed.
+
+async function _hydrateLeadQuoteStatuses(leadId) {
+  if (!leadId) return 0;
+  if (typeof _smsConfigured !== 'function' || !_smsConfigured()) return 0;
+  const pollable = getQuotes().filter(q =>
+    q.leadId === leadId &&
+    ['delivered','approved','contingent-approved'].includes(q.status)
+  );
+  if (!pollable.length) return 0;
+  let changed = 0;
+  for (const q of pollable) {
+    try {
+      const r = await hydrateQuoteStatusFromServer(q.id);
+      if (r) changed++;
+    } catch (_) {}
+  }
+  return changed;
+}
+
+async function _hydrateAllPendingQuotes() {
+  if (typeof _smsConfigured !== 'function' || !_smsConfigured()) return 0;
+  const pollable = getQuotes().filter(q => q.status === 'delivered');
+  if (!pollable.length) return 0;
+  let changed = 0;
+  for (const q of pollable) {
+    try {
+      const r = await hydrateQuoteStatusFromServer(q.id);
+      if (r) changed++;
+    } catch (_) {}
+  }
+  return changed;
+}
+
+// Pipeline-page lifecycle: kick off a once-immediately + every-60s timer to
+// pick up customer accept/decline actions without the user having to drill
+// into individual quotes. Skips when the tab is hidden, when we're not on
+// the jobs page, and when the user is in a lead-detail view (the lead-level
+// hydrate handles that). Idempotent — safe to call multiple times.
+let _pipelineQuotePollTimer = null;
+function startPipelineQuotePolling() {
+  if (_pipelineQuotePollTimer) return;
+  // Initial fire — don't wait for the first interval tick.
+  _hydrateAllPendingQuotes().then(n => {
+    if (n > 0 && S.page === 'jobs' && !S.jobDetailId) {
+      try { renderPipeline(); } catch(_) {}
+    }
+  }).catch(()=>{});
+  _pipelineQuotePollTimer = setInterval(() => {
+    if (document.hidden)    return;        // background tab — skip
+    if (S.page !== 'jobs')  return;        // user navigated away
+    if (S.jobDetailId)      return;        // on lead detail, that view handles it
+    _hydrateAllPendingQuotes().then(n => {
+      if (n > 0) {
+        try { renderPipeline(); } catch(_) {}
+      }
+    }).catch(()=>{});
+  }, 60_000);
+}
+
 // ═════════════════════════════════════════════════════════════
 // AI ESTIMATOR — open modal, send scope to Worker, apply draft
 // ═════════════════════════════════════════════════════════════
@@ -19887,6 +19976,10 @@ function archiveOldLeads() {
 async function init() {
   archiveOldLeads();
   seedImportData();
+  // Start the background quote-action poller. It self-throttles based on
+  // tab visibility + current page so it's cheap when the user isn't on
+  // the pipeline. Idempotent so safe to call from init.
+  try { if (typeof startPipelineQuotePolling === 'function') startPipelineQuotePolling(); } catch (_) {}
   // Run materials migrations / catalog seed on every boot so existing users
   // pick up new SKUs and refreshed Capital Electric prices without having to
   // open the Materials Library or quote builder first.
