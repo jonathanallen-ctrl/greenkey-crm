@@ -1151,6 +1151,11 @@
           <input type="text" placeholder="Search jobs, customers..." id="gsearch" oninput="doGlobalSearch(this.value)" autocomplete="off">
           <div id="sdrop"></div>
         </div>
+        <button class="btn btn-g" id="sync-dot" onclick="manualFlushSync()"
+                title="Synced" aria-label="Sync status"
+                style="padding:8px 10px;position:relative">
+          <span id="sync-dot-inner" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--green);transition:background 0.3s"></span>
+        </button>
         <button class="btn btn-g" id="theme-tog" onclick="toggleTheme()" title="Toggle light / dark theme" aria-label="Toggle theme" style="padding:8px 10px">
           <svg id="theme-icon-dark" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           <svg id="theme-icon-light" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
@@ -9261,6 +9266,21 @@ function openJobDetail(id) {
       }).catch(()=>{});
     } catch(_){}
   }, 150);
+  // Fire-and-forget hydrate of photos for this job from SharePoint. This
+  // catches photos uploaded from other devices (e.g. phone) AND refreshes
+  // expired Graph signed-download-URLs on existing records — fixing the
+  // "Cannot display" cross-device gap.
+  setTimeout(() => {
+    try {
+      if (typeof _hydratePhotosFromSP === 'function') {
+        _hydratePhotosFromSP(id).then(r => {
+          if (r && (r.added > 0 || r.refreshed > 0) && S.jobDetailId === id) {
+            try { renderJobDetail(id); } catch(_){}
+          }
+        }).catch(e => console.warn('[GK] Photo hydrate on open failed:', e));
+      }
+    } catch(_){}
+  }, 200);
 }
 
 function closeJobDetail() {
@@ -17031,6 +17051,9 @@ async function _onMSALSuccess(account) {
     // idempotent — if AF1 already came down from SP, this is a no-op. If it
     // didn't, this adds it locally and queues a push back to SP.
     try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] post-sync seedReferrerCustomers failed:', e); }
+    // Repaint the sync-status dot now that we have a Graph token + initial
+    // pull is done. From here, every write/push/pull will keep it in sync.
+    try { _renderSyncStatusDot(); } catch (_) {}
     // Start the periodic JSON backup to the Documents drive once SP is ready.
     // Safe to call multiple times — internal guard prevents duplicate timers.
     _startBackupTimer();
@@ -17228,14 +17251,76 @@ async function _syncFromSP() {
   console.log('[GK] Synced from SharePoint:', count, 'keys');
 }
 
+// ── SYNC STATUS INDICATOR ──
+// Visible green/amber/red dot in the header so the user always knows
+// whether their work is saved to SharePoint. Click to force flush.
+//   green:   synced (no pending writes, no recent error)
+//   amber:   pending push (write made, debounce timer running)
+//   red:     push failed (last attempt errored — see console / banner)
+//   muted:   not signed in to Microsoft (no Graph token, sync inactive)
+let _lastSyncErr = null;
+function _renderSyncStatusDot() {
+  const inner = document.getElementById('sync-dot-inner');
+  const btn   = document.getElementById('sync-dot');
+  if (!inner || !btn) return;
+  let color, title;
+  if (typeof _gToken === 'undefined' || !_gToken) {
+    color = 'var(--text-muted)'; title = 'Not signed in — sync inactive';
+  } else if (_lastSyncErr) {
+    color = 'var(--red,#dc2626)'; title = 'Last sync failed: ' + _lastSyncErr + '. Click to retry.';
+  } else if (_hasPendingPush) {
+    color = 'var(--amber,#f59e0b)'; title = 'Unsaved changes — pushing to SharePoint. Click to push now.';
+  } else {
+    color = 'var(--green,#22c55e)'; title = 'All changes saved to SharePoint';
+  }
+  inner.style.background = color;
+  btn.title = title;
+}
+async function manualFlushSync() {
+  if (typeof _gToken === 'undefined' || !_gToken) {
+    toast('Sign in to Microsoft first to enable sync', 'warning'); return;
+  }
+  if (!_hasPendingPush && !_lastSyncErr) {
+    toast('Everything is synced — no pending changes', 'info'); return;
+  }
+  try {
+    clearTimeout(_syncTmr);
+    await _syncToSP();
+    if (_lastSyncErr) toast('Sync failed: ' + _lastSyncErr, 'error');
+    else toast('Synced to SharePoint', 'success');
+  } catch (e) {
+    console.warn('[GK] manual flush failed:', e);
+    toast('Sync failed: ' + (e.message || e), 'error');
+  }
+}
+
 // ── SYNC localStorage → SHAREPOINT (debounced 3s) ──
-// _hasPendingPush is exposed so the pull side can detect "we have unflushed
-// writes" and refuse to pull (which would otherwise overwrite them with
-// stale SP state).
+// _hasPendingPush is the in-memory flag the pull side checks to refuse a
+// pull while there are unflushed writes. We ALSO write 'gk_pending_push' to
+// localStorage so the flag survives a page reload — without that, a reload
+// during the 3-second push debounce would lose the in-memory flag, and the
+// init-time pull would overwrite the unpushed local change with SP's older
+// snapshot. (This was the second leg of the 2026-06-08 race.)
+const PENDING_PUSH_KEY = 'gk_pending_push';
 let _hasPendingPush = false;
+// Restore the flag from localStorage at load time so a reload mid-debounce
+// is still recognized as "we have stuff to push" even before any new edits.
+try {
+  if (localStorage.getItem(PENDING_PUSH_KEY)) _hasPendingPush = true;
+} catch (_) {}
+function _setPendingPush() {
+  _hasPendingPush = true;
+  try { localStorage.setItem(PENDING_PUSH_KEY, Date.now().toString()); } catch (_) {}
+  _renderSyncStatusDot();
+}
+function _clearPendingPush() {
+  _hasPendingPush = false;
+  try { localStorage.removeItem(PENDING_PUSH_KEY); } catch (_) {}
+  _renderSyncStatusDot();
+}
 function queueSPSync() {
   if (!_gToken) return;
-  _hasPendingPush = true;
+  _setPendingPush();
   clearTimeout(_syncTmr);
   _syncTmr = setTimeout(_syncToSP, 3000);
 }
@@ -17316,11 +17401,16 @@ async function _syncToSP() {
       }
     }
     console.log('[GK] Synced to SharePoint:', keys.length, 'keys');
-    _hasPendingPush = false;
+    _clearPendingPush();
+    _lastSyncErr = null;
+    _renderSyncStatusDot();
   } catch(e) {
     console.warn('[GK] Sync to SharePoint failed:', e);
     criticalBanner('Push to SharePoint failed: ' + (e.message || e) + '. Your edits are saved locally but NOT synced. Try reloading; if error persists, contact support.');
-    // Leave _hasPendingPush true so a later flush can retry.
+    // Leave _hasPendingPush true (in memory + localStorage) so a later flush
+    // can retry — even across reloads.
+    _lastSyncErr = e.message || String(e);
+    _renderSyncStatusDot();
   } finally {
     _syncing = false;
   }
@@ -17393,22 +17483,46 @@ async function _hydratePhotosFromSP(jobId) {
     await _walk(folder.id, jobId ? [jobId] : []);
 
     // Build a fast lookup of existing local records by spDriveItemId AND by name+jobId
-    const existingByDriveId = new Set();
-    const existingByNameJob = new Set();
+    const existingByDriveId = new Map();
+    const existingByNameJob = new Map();
     for (const f of _filesCache) {
-      if (f.spDriveItemId) existingByDriveId.add(f.spDriveItemId);
-      if (f.name && f.jobId) existingByNameJob.add(f.jobId + '|' + f.name);
+      if (f.spDriveItemId) existingByDriveId.set(f.spDriveItemId, f);
+      if (f.name && f.jobId) existingByNameJob.set(f.jobId + '|' + f.name, f);
     }
 
-    let added = 0, skipped = 0;
+    // Signed download URLs from Graph expire ~1 hour after they're issued.
+    // If a record we already have has a stale (or missing) downloadUrl, we
+    // need to UPDATE it from this fresh listing — otherwise the photo
+    // renders as "Cannot display" on devices that boot-hydrated >1h ago.
+    const URL_FRESH_MS = 50 * 60 * 1000;  // 50 min — keep a 10-min safety margin
+
+    let added = 0, refreshed = 0, skipped = 0;
     for (const { item, path } of filesFound) {
       // path = [jobId, category]; if we narrowed to jobId at root, path = [category]
       const itemJobId  = jobId || path[0] || '';
       const category   = jobId ? (path[0] || 'site') : (path[1] || 'site');
       if (!itemJobId) { skipped++; continue; }
-      // Already represented locally?
-      if (existingByDriveId.has(item.id)) { skipped++; continue; }
-      if (existingByNameJob.has(itemJobId + '|' + item.name)) { skipped++; continue; }
+
+      const freshDownloadUrl = item['@microsoft.graph.downloadUrl'] || '';
+
+      // Already represented locally? Refresh the downloadUrl if it's stale,
+      // otherwise skip.
+      const existing = existingByDriveId.get(item.id) || existingByNameJob.get(itemJobId + '|' + item.name);
+      if (existing) {
+        const lastFetched = existing.downloadUrlFetchedAt || 0;
+        const isStale = !existing.downloadUrl || (Date.now() - lastFetched) > URL_FRESH_MS;
+        if (isStale && freshDownloadUrl) {
+          existing.downloadUrl = freshDownloadUrl;
+          existing.downloadUrlFetchedAt = Date.now();
+          if (!existing.spDriveItemId) existing.spDriveItemId = item.id;
+          if (!existing.spUrl) existing.spUrl = item.webUrl || '';
+          try { await _idbPut(existing); } catch(_) {}
+          refreshed++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
 
       const rec = {
         id: 'sp-' + item.id,
@@ -17421,7 +17535,7 @@ async function _hydratePhotosFromSP(jobId) {
         uploadedAt: new Date().toISOString(),
         spDriveItemId: item.id,
         spUrl: item.webUrl || '',
-        downloadUrl: item['@microsoft.graph.downloadUrl'] || '',  // signed direct link
+        downloadUrl: freshDownloadUrl,                              // signed direct link
         downloadUrlFetchedAt: Date.now(),
         dataUrl: null
       };
@@ -17429,8 +17543,8 @@ async function _hydratePhotosFromSP(jobId) {
       try { await _idbPut(rec); } catch(_) {}
       added++;
     }
-    if (added > 0) console.log('[GK] Hydrated ' + added + ' photo(s) from SharePoint (skipped ' + skipped + ' already local).');
-    return { added, skipped };
+    if (added > 0 || refreshed > 0) console.log(`[GK] Photo hydrate: added=${added} refreshed=${refreshed} skipped=${skipped}`);
+    return { added, refreshed, skipped };
   } catch (e) {
     console.warn('[GK] _hydratePhotosFromSP failed:', e);
     return { added: 0, skipped: 0, error: e.message };
@@ -17740,7 +17854,22 @@ function _trySyncFromSP(reason) {
   }
   _lastVisibilitySync = Date.now();
   _syncFromSP().then(() => {
-    if (typeof navigate === 'function') navigate(S.page);
+    // Smart re-render: keep the user on whatever sub-view they were looking
+    // at. Calling navigate(S.page) was wiping S.jobDetailId / S.quoteId,
+    // kicking the user back to the pipeline / quotes list after every pull.
+    try {
+      if (S.page === 'jobs' && S.jobDetailId) {
+        if (typeof renderJobDetail === 'function') renderJobDetail(S.jobDetailId);
+      } else if (S.page === 'quotes' && S.quoteId) {
+        if (typeof renderQuoteBuilder === 'function') renderQuoteBuilder(S.quoteId);
+      } else if (S.page === 'customers' && S.custView) {
+        if (typeof renderCustomerDetail === 'function') renderCustomerDetail(S.custView);
+      } else if (S.page === 'tech' && S.techLeadId) {
+        if (typeof renderTechPage === 'function') renderTechPage(S.techLeadId);
+      } else if (typeof navigate === 'function') {
+        navigate(S.page);
+      }
+    } catch (e) { console.warn('[GK] post-sync re-render failed:', e); }
   }).catch(e => console.warn('[GK] Sync failed (' + reason + '):', e));
 }
 
@@ -20299,6 +20428,9 @@ async function init() {
   // tab visibility + current page so it's cheap when the user isn't on
   // the pipeline. Idempotent so safe to call from init.
   try { if (typeof startPipelineQuotePolling === 'function') startPipelineQuotePolling(); } catch (_) {}
+  // Paint the sync-status dot in its initial state (muted — we'll repaint
+  // green once MSAL hands us a Graph token and the first push completes).
+  try { _renderSyncStatusDot(); } catch (_) {}
   // Run materials migrations / catalog seed on every boot so existing users
   // pick up new SKUs and refreshed Capital Electric prices without having to
   // open the Materials Library or quote builder first.
