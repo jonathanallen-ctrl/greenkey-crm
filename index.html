@@ -1192,6 +1192,12 @@
       <!-- DASHBOARD -->
       <div class="page active" id="page-dashboard">
 
+        <!-- Mobile-route diagnostic banner. Hidden by default; populated by
+             updateDashboardWidget() so it's visible on every render. Helps
+             the user diagnose mobile-default-routing issues without console
+             access. To force Tech Mode regardless: append ?tech to the URL. -->
+        <div id="dash-route-banner" style="display:none;background:var(--bg-elevated);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.5"></div>
+
         <!-- Quick Actions (Admin only) -->
         <div class="dash-quick" id="dash-quickact">
           <span class="dash-quick-lbl">Quick add:</span>
@@ -2209,13 +2215,49 @@ function buildApp(user) {
   // Mobile default: phones and iPads land on Tech Mode, not Dashboard. This
   // gives techs in the field a single-column, search-first view by default.
   // The "Switch to full CRM" link in the Tech Mode header is the escape hatch.
-  // Deep links (#tech=LEAD_ID, #job-LEAD_ID) still take precedence.
-  if (!location.hash && _isMobileDevice()) {
+  // Only meaningful deep links (#tech=LEAD_ID, #job-LEAD_ID) skip the
+  // redirect — stale hashes like #dashboard or empty #tech do NOT.
+  //
+  // Diagnostic + manual override:
+  //   ?tech    in the URL → forces Tech Mode regardless of detection
+  //   ?desktop in the URL → forces Dashboard regardless of detection
+  // Useful for debugging mobile-detection issues on devices we can't inspect.
+  const _hash = (location.hash || '').replace(/^#/, '');
+  const _isMeaningfulDeepLink = /^(tech=.+|job-.+)$/.test(_hash);
+  const _qs = location.search || '';
+  const _forceMobile  = /[?&]tech(=|&|$)/.test(_qs);
+  const _forceDesktop = /[?&]desktop(=|&|$)/.test(_qs);
+  const _detected     = _isMobileDevice();
+  const _shouldRouteTech = _forceMobile || (!_forceDesktop && _detected);
+  // Always log the routing decision so we can diagnose mobile-detection
+  // problems from a user's screenshot of the dashboard's debug banner.
+  console.log('[GK Mobile route]',
+    'innerWidth=' + window.innerWidth,
+    'maxTouchPoints=' + (navigator.maxTouchPoints || 0),
+    'ua=' + (navigator.userAgent || '').slice(0, 100),
+    'detected=' + _detected,
+    'forceMobile=' + _forceMobile,
+    'forceDesktop=' + _forceDesktop,
+    'meaningfulDeepLink=' + _isMeaningfulDeepLink,
+    'willRouteTech=' + (_shouldRouteTech && !_isMeaningfulDeepLink)
+  );
+  // Stash the decision so a tiny visible indicator on the Dashboard can show
+  // the user what we detected (without them having to open a console).
+  window._gkRouteInfo = {
+    innerWidth: window.innerWidth,
+    maxTouchPoints: navigator.maxTouchPoints || 0,
+    ua: (navigator.userAgent || '').slice(0, 120),
+    detected: _detected, forceMobile: _forceMobile, forceDesktop: _forceDesktop,
+    routedToTech: _shouldRouteTech && !_isMeaningfulDeepLink
+  };
+  if (!_isMeaningfulDeepLink && _shouldRouteTech) {
     // Move the active sidebar highlight to Tech Mode too, so if the user opens
     // the menu they see where they are.
     document.querySelectorAll('.ni').forEach(i => i.classList.remove('active'));
     const techNav = document.querySelector('.ni[data-page="tech"]');
     if (techNav) techNav.classList.add('active');
+    // Clear stale hash so refreshes don't fall back into the old route.
+    try { history.replaceState(null, '', location.pathname + location.search); } catch(_) {}
     navigate('tech');
   }
 }
@@ -12955,6 +12997,38 @@ function inPeriod(dateStr, period) {
 
 // ── DASHBOARD WIDGET (full) ──
 function updateDashboardWidget() {
+  // Mobile-route diagnostic banner. Only shows when something seems off
+  // (mobile detected but landed here anyway, OR ?desktop override active).
+  // Lets the user see exactly what we detected without opening a console.
+  try {
+    const info = window._gkRouteInfo;
+    const banner = document.getElementById('dash-route-banner');
+    if (info && banner) {
+      // Only show the banner if mobile WAS detected but we're somehow on
+      // dashboard (the unexpected case the user is reporting). Hidden
+      // otherwise so it doesn't clutter normal desktop use.
+      if (info.detected && !info.routedToTech) {
+        banner.style.display = 'block';
+        banner.innerHTML =
+          `<strong style="color:var(--blue)">Mobile-route diagnostic</strong><br>` +
+          `Mobile detected = <strong>YES</strong>, but you landed on Dashboard. Why?<br>` +
+          `<span style="color:var(--text-muted);font-family:var(--mono);font-size:11px">` +
+          `viewport=${info.innerWidth}px, touchPoints=${info.maxTouchPoints}, ` +
+          `forceMobile=${info.forceMobile}, forceDesktop=${info.forceDesktop}<br>` +
+          `ua=${info.ua}</span><br>` +
+          `<a onclick="navigate('tech')" style="color:var(--blue);cursor:pointer;text-decoration:underline">Go to Tech Mode →</a> ` +
+          `&nbsp;·&nbsp; <a href="?tech" style="color:var(--blue);text-decoration:underline">Force Tech Mode (?tech)</a>`;
+      } else if (info.forceDesktop) {
+        banner.style.display = 'block';
+        banner.innerHTML =
+          `<strong style="color:var(--amber)">Desktop forced via ?desktop URL param.</strong> ` +
+          `<a href="${location.pathname}" style="color:var(--blue);text-decoration:underline">Clear override</a>`;
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+  } catch (_) {}
+
   const tasks  = getTasks();
   const leads  = getLeads();
   const custs  = getCustomers();
