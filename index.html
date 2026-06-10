@@ -146,15 +146,35 @@
   }
   /* Tech Mode: every element gets pan-y so vertical scroll always wins
      regardless of where the user touches. Tap-highlight removed so the gray
-     flash doesn't add perceived latency. */
+     flash doesn't add perceived latency.
+
+     Text-selection guards (-webkit-user-select:none + -webkit-touch-callout:
+     none): when iOS Safari finds selectable text under a touch, it routes
+     the touch through its text-selection machinery — long-press for the
+     magnifying glass / "Copy" menu, double-tap to select a word, etc. This
+     adds significant latency to "start scrolling" because iOS waits to see
+     if you're doing a select gesture instead. The visible symptom is exactly
+     what the user reported: scrolling works fine over non-text areas (right
+     side of the card where the chevron arrow lives) but feels broken/laggy
+     over text (middle and left side of the card). Disabling selection on
+     the card body fixes it. Inputs still allow selection because they have
+     their own `touch-action: manipulation` override below. */
   .tech-scroll, .tech-scroll *{
     touch-action:pan-y !important;
     -webkit-tap-highlight-color:transparent;
+    -webkit-user-select:none;
+    user-select:none;
+    -webkit-touch-callout:none;
   }
-  /* Inputs inside the search bar need 'manipulation' so single taps focus
-     them without a 300ms delay (pan-y alone disables tap on iOS). */
-  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll button, .tech-scroll a{
+  /* Inputs / textareas / contenteditable: re-enable selection so the user
+     CAN select what they typed and use the iOS keyboard normally. Also
+     'manipulation' touch-action so single taps focus them without a 300ms
+     delay (pan-y alone disables tap on iOS). */
+  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll button, .tech-scroll a, .tech-scroll [contenteditable]{
     touch-action:manipulation !important;
+    -webkit-user-select:auto;
+    user-select:auto;
+    -webkit-touch-callout:default;
   }
   /* CRITICAL iOS PWA fix: make Tech Mode its OWN scroll container. Nested
      scroll containers (.tech-scroll inside #content's overflow-y) confuse
