@@ -144,6 +144,20 @@
   @media (max-width: 768px){
     #content{padding:12px}
   }
+  /* iOS Safari fix: clickable cards in Tech Mode sometimes "stick" the touch
+     instead of letting it become a scroll gesture, so scrolling near the
+     middle of cards feels broken. Force pan-y on every element so vertical
+     scroll ALWAYS wins regardless of where the user grabs. Disable the tap
+     highlight too — visual confirmation isn't worth the perceived lag. */
+  .tech-scroll, .tech-scroll *{
+    touch-action:pan-y !important;
+    -webkit-tap-highlight-color:transparent;
+  }
+  /* Inputs inside the search bar need 'manipulation' so single taps focus
+     them without a 300ms delay (pan-y alone disables tap on iOS). */
+  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll button, .tech-scroll a{
+    touch-action:manipulation !important;
+  }
 
   /* PAGES */
   .page{display:none}
