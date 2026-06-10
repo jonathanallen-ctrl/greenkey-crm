@@ -17451,19 +17451,77 @@ async function _syncToSP() {
   }
 }
 
+// ── PHOTO PRE-PROCESSING (resize + JPEG conversion) ──────────────────────
+// iPhone photos default to HEIC format, which Safari renders fine but
+// Chrome/Edge/Firefox CAN'T display at all — leading to "Cannot display"
+// tiles on the laptop after a phone upload. Also, original photos are
+// typically 4–10 MB which makes uploads slow on cell signal and previously
+// hit Graph's 4MB single-PUT limit.
+//
+// Solution: decode the photo into a canvas at the device, resize to a
+// reasonable max dimension (2048px), and re-encode as JPEG. Result:
+//   • Every browser can render it (universal JPEG support)
+//   • File size drops from 4–10 MB → 400–800 KB
+//   • Uploads complete fast even on flaky cell
+//   • Original photo stays in the user's Photos app untouched
+//
+// Falls through to the original blob if decoding fails (e.g. genuine
+// videos or non-image files). Skips non-image MIME types entirely.
+async function _resizeAndConvertImage(file, dataUrl, opts) {
+  opts = opts || {};
+  const maxDim    = opts.maxDimension || 2048;
+  const quality   = (typeof opts.quality === 'number') ? opts.quality : 0.88;
+  const mime      = (file && file.type) || '';
+
+  // Non-image (video, PDF, etc.) — return original blob untouched.
+  if (!mime.startsWith('image/')) {
+    return { blob: _dataUrlToBlob(dataUrl), mimeType: mime, name: file.name };
+  }
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        let { width: w, height: h } = img;
+        // Sanity check — some decoders give 0x0 for HEIC on non-Safari
+        if (!w || !h) {
+          return reject(new Error('Image decoded to 0×0 (HEIC on non-Safari?)'));
+        }
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round((h / w) * maxDim); w = maxDim; }
+          else       { w = Math.round((w / h) * maxDim); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Canvas 2D context unavailable'));
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => {
+          if (!blob) return reject(new Error('Canvas toBlob returned null'));
+          // Rewrite name to .jpg if original was HEIC/HEIF/PNG/etc.
+          let newName = file.name || 'photo.jpg';
+          newName = newName.replace(/\.[^.]+$/, '') + '.jpg';
+          resolve({ blob, mimeType: 'image/jpeg', name: newName });
+        }, 'image/jpeg', quality);
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('Image decode failed (unsupported format like HEIC on Chrome/Edge?)'));
+    img.src = dataUrl;
+  });
+}
+
 // ── PHOTO UPLOAD TO SHAREPOINT ──
 // Two upload paths:
 //   ≤4 MB: direct PUT to /content (single request, fast)
 //   >4 MB: createUploadSession + chunked PUTs (handles up to ~250 MB)
 //
-// iPhone photos are typically 4–10 MB so the >4 MB path is the common one in
-// practice. Before today's fix, the direct PUT path was used for everything
-// and Graph silently 413'd large files. The user only saw "Cannot display"
-// on other devices because the binary never reached SP.
+// Combined with the pre-processing above (resize + JPEG conversion), almost
+// every upload now lands in the ≤4 MB direct path even when the source is
+// a 10 MB HEIC photo from iPhone.
 //
 // Token freshness: silent-acquires a fresh Graph token before upload so a
-// stale _gToken doesn't 401 us. Falls back to existing _gToken if refresh
-// fails for any reason (e.g. user has to interact).
+// stale _gToken doesn't 401 us.
 async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
   if (!_spDrive) return null;
 
@@ -17481,9 +17539,27 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
   }
   if (!_gToken) return null;
 
-  const fname = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+  // Pre-process the photo: resize to 2048px max + convert to JPEG. Falls
+  // through to the original blob on any error (e.g. decoder unsupported,
+  // genuine video file).
+  let uploadName, uploadType, blob;
+  try {
+    const conv = await _resizeAndConvertImage(file, dataUrl, { maxDimension: 2048, quality: 0.88 });
+    uploadName = conv.name;
+    uploadType = conv.mimeType;
+    blob       = conv.blob;
+    const origMB = (_dataUrlToBlob(dataUrl).size / 1024 / 1024).toFixed(1);
+    const newKB  = (blob.size / 1024).toFixed(0);
+    console.log(`[GK] Photo resized: ${file.name} ${origMB} MB → ${newKB} KB JPEG`);
+  } catch (e) {
+    console.warn('[GK] Pre-processing failed, falling back to original blob:', e);
+    uploadName = file.name;
+    uploadType = file.type || 'image/jpeg';
+    blob       = _dataUrlToBlob(dataUrl);
+  }
+
+  const fname = `${Date.now()}_${uploadName.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
   const spPath = `${SP_PHOTO_LIB_NAME}/${jobId}/${category}/${fname}`;
-  const blob = _dataUrlToBlob(dataUrl);
   const fileSize = blob.size;
   const SMALL_FILE_MAX = 4 * 1024 * 1024;  // 4 MB — Graph's direct-PUT cap
 
@@ -17492,7 +17568,7 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
       // ── Direct PUT path (small files) ──
       const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}:/content`, {
         method: 'PUT',
-        headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': file.type || 'image/jpeg' },
+        headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': uploadType || 'image/jpeg' },
         body: blob
       });
       if (!resp.ok) {
