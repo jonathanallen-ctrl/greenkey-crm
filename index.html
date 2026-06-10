@@ -11273,7 +11273,11 @@ function renderFMPhotos(jobId, cat) {
            <svg width="36" height="36" viewBox="0 0 24 24" fill="rgba(0,0,0,0.55)" stroke="white" stroke-width="1.5"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.55)"/><polygon points="10,8 16,12 10,16" fill="white" stroke="none"/></svg>
          </div>`
       : `<img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-         <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>`;
+         <div class="pthumb-err" style="display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:8px">
+           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg>
+           <span style="font-size:11px">Cannot display</span>
+           <span style="font-size:10px;color:var(--text-muted);line-height:1.3">Click <strong>↻ Sync</strong> above to refresh the link</span>
+         </div>`;
     return `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer;position:relative">
       ${_media}
       <div class="plabel">${escHtml(f.name)}</div>
@@ -17561,10 +17565,23 @@ async function refreshPhotosFromSP(jobId) {
   toast('Pulling photos from SharePoint…','info');
   const result = await _hydratePhotosFromSP(jobId);
   if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
-  if (result.added === 0) {
-    toast('Already up to date','success');
+  const added     = result.added     || 0;
+  const refreshed = result.refreshed || 0;
+  const skipped   = result.skipped   || 0;
+  // Detailed feedback so the user can tell whether SP actually had anything
+  // new and whether existing URLs got refreshed (the fix for the "Cannot
+  // display" stale-signed-URL case).
+  if (added === 0 && refreshed === 0) {
+    if (skipped === 0) {
+      toast('No photos found in SharePoint for this job. Cross-device uploads may have failed — check the phone.', 'warning');
+    } else {
+      toast(`All ${skipped} photo(s) already current. If one still says "Cannot display", the binary may not be in SharePoint.`, 'info');
+    }
   } else {
-    toast(`Pulled ${result.added} new photo${result.added===1?'':'s'} from SharePoint`,'success');
+    const parts = [];
+    if (added > 0)     parts.push(`${added} new`);
+    if (refreshed > 0) parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
+    toast(`SharePoint sync: ${parts.join(', ')}.`, 'success');
   }
   // Re-render whichever photo view is active
   if (S.page === 'tech' && S.techLeadId === jobId) renderTechPage(jobId);
@@ -17854,9 +17871,27 @@ function _trySyncFromSP(reason) {
   }
   _lastVisibilitySync = Date.now();
   _syncFromSP().then(() => {
-    // Smart re-render: keep the user on whatever sub-view they were looking
-    // at. Calling navigate(S.page) was wiping S.jobDetailId / S.quoteId,
-    // kicking the user back to the pipeline / quotes list after every pull.
+    // Skip the post-sync re-render entirely if the user is actively typing
+    // in a form field — re-rendering would blow away focus + scroll + any
+    // half-typed input. They'll see the fresh data the next time they
+    // navigate. This was the source of the "every 30s I get kicked to the
+    // top of the page" complaint.
+    const _ae = document.activeElement;
+    const _isEditing = _ae && (
+      _ae.tagName === 'INPUT'    ||
+      _ae.tagName === 'TEXTAREA' ||
+      _ae.tagName === 'SELECT'   ||
+      _ae.isContentEditable
+    );
+    if (_isEditing) {
+      console.log('[GK] post-sync re-render skipped: user is editing a field');
+      return;
+    }
+    // Preserve scroll position around the re-render so the user doesn't get
+    // kicked to the top mid-scroll. We restore it AFTER the re-render so the
+    // scroll-to-top in renderJobDetail / friends gets overridden.
+    const _contentEl = document.getElementById('content');
+    const _savedScroll = _contentEl ? _contentEl.scrollTop : 0;
     try {
       if (S.page === 'jobs' && S.jobDetailId) {
         if (typeof renderJobDetail === 'function') renderJobDetail(S.jobDetailId);
@@ -17870,6 +17905,7 @@ function _trySyncFromSP(reason) {
         navigate(S.page);
       }
     } catch (e) { console.warn('[GK] post-sync re-render failed:', e); }
+    if (_contentEl) _contentEl.scrollTop = _savedScroll;
   }).catch(e => console.warn('[GK] Sync failed (' + reason + '):', e));
 }
 
