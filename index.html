@@ -4089,13 +4089,19 @@ function handleTopBtn() {
 // ── MISC ──
 function handleNewJob() { openNewLead(); }
 
-function toast(msg, type='success') {
+function toast(msg, type='success', durationMs) {
   const t=document.getElementById('toast');
   const ico={success:'✓',error:'✕',warning:'⚠'};
-  t.innerHTML=`<span>${ico[type]||'•'}</span> ${msg}`;
+  // Click anywhere on the toast to dismiss early. Useful for long messages
+  // when the user is done reading them.
+  t.innerHTML=`<span>${ico[type]||'•'}</span> ${msg}<span style="margin-left:10px;opacity:0.5;font-size:11px">click to dismiss</span>`;
   t.className='show '+type;
+  t.onclick = () => t.classList.remove('show');
   clearTimeout(window._tt);
-  window._tt=setTimeout(()=>t.classList.remove('show'),3200);
+  // Default 3.2s for short messages; allow caller to override (e.g. 12s for
+  // long sync-result toasts so the user has time to read them).
+  const _dur = (typeof durationMs === 'number') ? durationMs : 3200;
+  window._tt=setTimeout(()=>t.classList.remove('show'), _dur);
 }
 
 // Persistent top banner for critical sync/data-integrity issues.
@@ -11110,10 +11116,32 @@ function addFileRecord(jobId, category, subFolder, file, dataUrl) {
     dataUrl
   };
   _filesCache.push(rec);        // update cache immediately (synchronous)
-  // Upload to SharePoint in background for cross-device access
+  // Upload to SharePoint in background for cross-device access. Failures
+  // are now surfaced to the user — previously they were silent, which led
+  // to "Cannot display" on other devices with no explanation.
   if (_gToken && _spDrive) {
     _uploadPhotoToSP(jobId, category, file, dataUrl).then(url => {
-      if (url) { rec.spUrl = url; _idbPut(rec); }
+      if (url) {
+        rec.spUrl = url;
+        rec.spUploadFailedAt = null;     // clear any prior failure
+        _idbPut(rec);
+      } else {
+        rec.spUploadFailedAt = new Date().toISOString();
+        _idbPut(rec);
+      }
+    }).catch(e => {
+      // Mark the record as failed so a Sync click can retry it later.
+      rec.spUploadFailedAt = new Date().toISOString();
+      rec.spUploadError = (e && e.message) ? e.message.slice(0, 200) : String(e).slice(0, 200);
+      _idbPut(rec);
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+      toast(
+        `"${file.name}" (${sizeMB} MB) saved locally but DIDN'T reach SharePoint — other devices won't see it. ` +
+        `Tap ↻ Sync to retry, or check your connection.`,
+        'warning',
+        12000   // long enough to read
+      );
+      console.warn('[GK] addFileRecord upload to SP failed:', e);
     });
   }
   _idbPut(rec).catch(e => {    // persist to IndexedDB (async)
@@ -17424,25 +17452,118 @@ async function _syncToSP() {
 }
 
 // ── PHOTO UPLOAD TO SHAREPOINT ──
+// Two upload paths:
+//   ≤4 MB: direct PUT to /content (single request, fast)
+//   >4 MB: createUploadSession + chunked PUTs (handles up to ~250 MB)
+//
+// iPhone photos are typically 4–10 MB so the >4 MB path is the common one in
+// practice. Before today's fix, the direct PUT path was used for everything
+// and Graph silently 413'd large files. The user only saw "Cannot display"
+// on other devices because the binary never reached SP.
+//
+// Token freshness: silent-acquires a fresh Graph token before upload so a
+// stale _gToken doesn't 401 us. Falls back to existing _gToken if refresh
+// fails for any reason (e.g. user has to interact).
 async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
-  if (!_gToken || !_spDrive) return null;
+  if (!_spDrive) return null;
+
+  // Refresh the Graph token in case ours expired (~1 hr TTL).
   try {
-    const fname = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-    const spPath = `${SP_PHOTO_LIB_NAME}/${jobId}/${category}/${fname}`;
-    const blob = _dataUrlToBlob(dataUrl);
-    // encodeURI handles the space in "CRM software" while preserving / and :
-    const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}:/content`, {
-      method: 'PUT',
-      headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': file.type || 'image/jpeg' },
-      body: blob
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
+        if (tr && tr.accessToken) _gToken = tr.accessToken;
+      }
+    }
+  } catch (e) {
+    console.warn('[GK] Pre-upload token refresh failed (using existing token):', e);
+  }
+  if (!_gToken) return null;
+
+  const fname = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+  const spPath = `${SP_PHOTO_LIB_NAME}/${jobId}/${category}/${fname}`;
+  const blob = _dataUrlToBlob(dataUrl);
+  const fileSize = blob.size;
+  const SMALL_FILE_MAX = 4 * 1024 * 1024;  // 4 MB — Graph's direct-PUT cap
+
+  try {
+    if (fileSize <= SMALL_FILE_MAX) {
+      // ── Direct PUT path (small files) ──
+      const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}:/content`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': file.type || 'image/jpeg' },
+        body: blob
+      });
+      if (!resp.ok) {
+        const errTxt = await resp.text().catch(()=>'');
+        throw new Error(`Direct upload ${resp.status}: ${errTxt.slice(0,200)}`);
+      }
+      const result = await resp.json();
+      console.log(`[GK] Photo uploaded (direct, ${(fileSize/1024).toFixed(0)} KB):`, result.webUrl);
+      return result.webUrl || null;
+    }
+
+    // ── Upload session path (files >4 MB) ──
+    // Step 1: create the session. SharePoint replies with an uploadUrl.
+    const createResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}:/createUploadSession`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item: {
+          '@microsoft.graph.conflictBehavior': 'rename',
+          name: fname
+        }
+      })
     });
-    if (!resp.ok) throw new Error('Upload failed: ' + resp.status);
-    const result = await resp.json();
-    console.log('[GK] Photo uploaded to SharePoint:', result.webUrl);
-    return result.webUrl || null;
+    if (!createResp.ok) {
+      const errTxt = await createResp.text().catch(()=>'');
+      throw new Error(`Create upload session ${createResp.status}: ${errTxt.slice(0,200)}`);
+    }
+    const session = await createResp.json();
+    if (!session.uploadUrl) throw new Error('No uploadUrl returned by Graph');
+
+    // Step 2: PUT the file in chunks. Graph requires chunk sizes that are
+    // multiples of 320 KiB (per docs). 5 MB chunks are a safe default for
+    // browser-side uploads — small enough to retry on flaky cell signal,
+    // large enough to keep round-trip overhead reasonable.
+    const CHUNK_SIZE = 5 * 320 * 1024;   // 1.6 MB — multiple of 320 KiB, safe for cell uplinks
+    let uploaded = 0;
+    let lastResult = null;
+    while (uploaded < fileSize) {
+      const chunkEnd = Math.min(uploaded + CHUNK_SIZE, fileSize);
+      const chunk = blob.slice(uploaded, chunkEnd);
+      const chunkResp = await fetch(session.uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Length': (chunkEnd - uploaded).toString(),
+          'Content-Range': `bytes ${uploaded}-${chunkEnd - 1}/${fileSize}`
+        },
+        body: chunk
+      });
+      if (!chunkResp.ok && chunkResp.status !== 202) {
+        const errTxt = await chunkResp.text().catch(()=>'');
+        throw new Error(`Chunk upload ${chunkResp.status} at byte ${uploaded}: ${errTxt.slice(0,200)}`);
+      }
+      uploaded = chunkEnd;
+      if (chunkResp.status === 200 || chunkResp.status === 201) {
+        lastResult = await chunkResp.json();
+        break;
+      }
+    }
+    if (!lastResult) {
+      // Shouldn't reach here, but just in case the last chunk didn't return
+      // a 200/201, fetch the file metadata to confirm.
+      const metaResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(spPath)}`, {
+        headers: { 'Authorization': `Bearer ${_gToken}` }
+      });
+      if (metaResp.ok) lastResult = await metaResp.json();
+    }
+    console.log(`[GK] Photo uploaded (session, ${(fileSize/1024/1024).toFixed(1)} MB):`, lastResult?.webUrl);
+    return lastResult?.webUrl || null;
   } catch(e) {
     console.warn('[GK] SP photo upload failed:', e);
-    return null;
+    throw e;   // re-throw so callers can show user feedback
   }
 }
 
@@ -17565,26 +17686,57 @@ async function refreshPhotosFromSP(jobId) {
     toast('Sign in to Microsoft to sync from SharePoint','warning');
     return;
   }
-  toast('Pulling photos from SharePoint…','info');
+  toast('Syncing photos with SharePoint…','info');
+
+  // STEP 1: retry any photos for this job that failed to reach SP on first
+  // attempt (e.g. phone uploads dropped due to cell signal, oversized files
+  // pre-fix). The new upload session path handles files up to ~250 MB.
+  const failed = (_filesCache || []).filter(f =>
+    f.jobId === jobId &&
+    f.dataUrl &&                              // we have the local binary to push
+    !f.spUrl &&                                // never made it to SP
+    (f.category === 'site' || f.category === 'install')
+  );
+  let retried = 0;
+  for (const f of failed) {
+    try {
+      const url = await _uploadPhotoToSP(jobId, f.category, { name: f.name, type: f.mimeType, size: f.size }, f.dataUrl);
+      if (url) {
+        f.spUrl = url;
+        f.spUploadFailedAt = null;
+        f.spUploadError = null;
+        try { await _idbPut(f); } catch(_) {}
+        retried++;
+      }
+    } catch (e) {
+      console.warn('[GK] Retry upload failed for', f.name, e);
+      // Keep f.spUploadFailedAt set so user knows; toast at the end.
+    }
+  }
+
   const result = await _hydratePhotosFromSP(jobId);
   if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
   const added     = result.added     || 0;
   const refreshed = result.refreshed || 0;
   const skipped   = result.skipped   || 0;
   // Detailed feedback so the user can tell whether SP actually had anything
-  // new and whether existing URLs got refreshed (the fix for the "Cannot
-  // display" stale-signed-URL case).
-  if (added === 0 && refreshed === 0) {
-    if (skipped === 0) {
-      toast('No photos found in SharePoint for this job. Cross-device uploads may have failed — check the phone.', 'warning');
-    } else {
-      toast(`All ${skipped} photo(s) already current. If one still says "Cannot display", the binary may not be in SharePoint.`, 'info');
-    }
+  // new, whether existing URLs got refreshed (the fix for the "Cannot
+  // display" stale-signed-URL case), and whether any local files that had
+  // failed to upload got pushed up on this retry. Longer toast duration
+  // (12s) since these messages are diagnostic.
+  const LONG = 12000;
+  const parts = [];
+  if (retried > 0)   parts.push(`${retried} photo${retried===1?'':'s'} uploaded`);
+  if (added > 0)     parts.push(`${added} new from SP`);
+  if (refreshed > 0) parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
+  if (parts.length) {
+    toast(`Sync complete: ${parts.join(', ')}.`, 'success', LONG);
+  } else if (failed.length > 0) {
+    toast(`Retried ${failed.length} failed upload${failed.length===1?'':'s'} — still couldn't reach SharePoint. Check your connection and try again.`, 'warning', LONG);
+  } else if (skipped === 0) {
+    toast('No photos found in SharePoint for this job AND no local uploads pending. Try re-uploading the photo.', 'warning', LONG);
   } else {
-    const parts = [];
-    if (added > 0)     parts.push(`${added} new`);
-    if (refreshed > 0) parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
-    toast(`SharePoint sync: ${parts.join(', ')}.`, 'success');
+    toast(`All ${skipped} photo(s) already current. If one still says "Cannot display", the binary may not be in SharePoint — try deleting and re-uploading.`, 'info', LONG);
   }
   // Re-render whichever photo view is active
   if (S.page === 'tech' && S.techLeadId === jobId) renderTechPage(jobId);
