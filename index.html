@@ -17669,13 +17669,12 @@ async function _hydratePhotosFromSP(jobId) {
     // Walk: jobId folders → category folders → files.
     const filesFound = [];
     async function _walk(itemId, pathSoFar) {
-      // IMPORTANT: do NOT use $select here. @microsoft.graph.downloadUrl is
-      // an OData instance annotation, not a regular property — using $select
-      // STRIPS it from the response, so every record ends up with no working
-      // image URL and renders as "Cannot display". (This was the root cause
-      // of the 2026-06-08 hydration bug, masked by the category bug above.)
-      // Fetching all fields adds a small amount of bandwidth but is the
-      // only way to reliably get downloadUrl back.
+      // SharePoint's children endpoint does NOT include the
+      // @microsoft.graph.downloadUrl instance annotation in its response,
+      // even without $select. (Confirmed empirically against
+      // greenkeyusa.sharepoint.com 2026-06-08 — the annotation comes back
+      // from a per-item GET but not from /children listings.) We fetch the
+      // URL via a per-item GET below in _getDownloadUrlForItem().
       let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
       while (next) {
         const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
@@ -17713,6 +17712,29 @@ async function _hydratePhotosFromSP(jobId) {
     // version of this function.
     const VALID_CATS = (typeof FM_CATS !== 'undefined') ? FM_CATS.map(c => c.id) : ['site','install','documents'];
 
+    // Per-item GET to fetch the @microsoft.graph.downloadUrl annotation.
+    // SharePoint's children listing endpoint omits this annotation by design
+    // (one round-trip per item is unavoidable when we want the signed URL).
+    // Cached result on the item itself so we don't double-fetch within a sync.
+    async function _getDownloadUrlForItem(item) {
+      if (item['@microsoft.graph.downloadUrl']) return item['@microsoft.graph.downloadUrl'];
+      if (item._gkFetchedDownloadUrl) return item._gkFetchedDownloadUrl;
+      if (!item.id) return '';
+      try {
+        const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${item.id}`, {
+          headers: { 'Authorization': 'Bearer ' + _gToken }
+        });
+        if (!r.ok) return '';
+        const full = await r.json();
+        const url = full['@microsoft.graph.downloadUrl'] || '';
+        item._gkFetchedDownloadUrl = url;  // cache on the item
+        return url;
+      } catch (e) {
+        console.warn('[GK] Per-item downloadUrl fetch failed for', item.name, e);
+        return '';
+      }
+    }
+
     let added = 0, refreshed = 0, skipped = 0, recategorized = 0;
     for (const { item, path } of filesFound) {
       // The walker starts inside the jobId folder when called with a jobId,
@@ -17730,7 +17752,9 @@ async function _hydratePhotosFromSP(jobId) {
       if (!VALID_CATS.includes(category)) category = 'site';
       if (!itemJobId) { skipped++; continue; }
 
-      const freshDownloadUrl = item['@microsoft.graph.downloadUrl'] || '';
+      // Fetch the signed download URL. SharePoint children endpoint omits
+      // this annotation, so we fall back to a per-item GET when missing.
+      const freshDownloadUrl = await _getDownloadUrlForItem(item);
 
       // Already represented locally? Refresh the downloadUrl if it's stale,
       // and repair the category if it's wrong.
