@@ -17669,7 +17669,14 @@ async function _hydratePhotosFromSP(jobId) {
     // Walk: jobId folders → category folders → files.
     const filesFound = [];
     async function _walk(itemId, pathSoFar) {
-      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200&$select=id,name,webUrl,size,file,folder,@microsoft.graph.downloadUrl`;
+      // IMPORTANT: do NOT use $select here. @microsoft.graph.downloadUrl is
+      // an OData instance annotation, not a regular property — using $select
+      // STRIPS it from the response, so every record ends up with no working
+      // image URL and renders as "Cannot display". (This was the root cause
+      // of the 2026-06-08 hydration bug, masked by the category bug above.)
+      // Fetching all fields adds a small amount of bandwidth but is the
+      // only way to reliably get downloadUrl back.
+      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
       while (next) {
         const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
         if (!r.ok) break;
