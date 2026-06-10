@@ -17844,10 +17844,16 @@ async function refreshPhotosFromSP(jobId) {
   } else {
     toast(`All ${skipped} photo(s) already current. If one still says "Cannot display", the binary may not be in SharePoint — try deleting and re-uploading.`, 'info', LONG);
   }
-  // Re-render whichever photo view is active
+  // Re-render whichever photo view is active. Preserve scroll position
+  // around the re-render so clicking ↻ Sync doesn't jump the user back to
+  // the top of the lead — renderJobDetail / renderTechPage both reset
+  // scrollTop to 0 at the end.
+  const _contentEl = document.getElementById('content');
+  const _savedScroll = _contentEl ? _contentEl.scrollTop : 0;
   if (S.page === 'tech' && S.techLeadId === jobId) renderTechPage(jobId);
   if (S.page === 'jobs' && S.jobDetailId === jobId) renderJobDetail(jobId);
   if (S.page === 'files') renderFilesPage();
+  if (_contentEl) _contentEl.scrollTop = _savedScroll;
 }
 
 // ── AUTO-BACKUP TO SHAREPOINT DRIVE ──
