@@ -144,34 +144,33 @@
   @media (max-width: 768px){
     #content{padding:12px}
   }
-  /* Tech Mode: every element gets pan-y so vertical scroll always wins
-     regardless of where the user touches. Tap-highlight removed so the gray
-     flash doesn't add perceived latency.
+  /* Tech Mode touch behavior — every element gets `touch-action: manipulation`,
+     which allows pan + tap in BOTH directions and removes the 300ms tap delay.
+     Tap-highlight removed so the gray flash doesn't add perceived latency.
+
+     Why `manipulation` and not `pan-y`: pan-y only allows STRICTLY vertical
+     scroll. The thumb of the hand holding the phone arcs slightly as it pivots
+     — that small horizontal drift gets rejected by pan-y as ambiguous, which
+     stalls scroll initiation. The flat of a finger goes straight up/down so
+     pan-y was fine there, but the thumb arc was getting blocked. manipulation
+     accepts both pan-x and pan-y so the arcing thumb-scroll works.
 
      Text-selection guards (-webkit-user-select:none + -webkit-touch-callout:
      none): when iOS Safari finds selectable text under a touch, it routes
      the touch through its text-selection machinery — long-press for the
-     magnifying glass / "Copy" menu, double-tap to select a word, etc. This
-     adds significant latency to "start scrolling" because iOS waits to see
-     if you're doing a select gesture instead. The visible symptom is exactly
-     what the user reported: scrolling works fine over non-text areas (right
-     side of the card where the chevron arrow lives) but feels broken/laggy
-     over text (middle and left side of the card). Disabling selection on
-     the card body fixes it. Inputs still allow selection because they have
-     their own `touch-action: manipulation` override below. */
+     magnifying glass, double-tap to select a word, etc. That adds latency
+     to scroll initiation. Disabling selection on the card body lets scroll
+     win immediately. Inputs still allow selection via the override below. */
   .tech-scroll, .tech-scroll *{
-    touch-action:pan-y !important;
+    touch-action:manipulation !important;
     -webkit-tap-highlight-color:transparent;
     -webkit-user-select:none;
     user-select:none;
     -webkit-touch-callout:none;
   }
   /* Inputs / textareas / contenteditable: re-enable selection so the user
-     CAN select what they typed and use the iOS keyboard normally. Also
-     'manipulation' touch-action so single taps focus them without a 300ms
-     delay (pan-y alone disables tap on iOS). */
-  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll button, .tech-scroll a, .tech-scroll [contenteditable]{
-    touch-action:manipulation !important;
+     CAN select what they typed and use the iOS keyboard normally. */
+  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll [contenteditable]{
     -webkit-user-select:auto;
     user-select:auto;
     -webkit-touch-callout:default;
@@ -14729,12 +14728,12 @@ function _renderTechModeLanding(pg) {
     const addr = [l.siteStreet, l.siteCity].filter(Boolean).join(', ');
     const sched = _scheduledDate(l).slice(0,10);
     const t = (typeof getJobType === 'function') ? getJobType(l.jobType) : null;
-    // Inline touch-action: pan-y has the highest CSS specificity on iOS Safari
-    // — overrides any user-agent default and ensures vertical scroll always
-    // wins. Simple onclick is enough; the touchstart/touchend custom detector
-    // we tried earlier was adding latency without solving the underlying issue.
+    // Inline `touch-action: manipulation` has the highest CSS specificity on
+    // iOS Safari — overrides any user-agent default and accepts both pan-y
+    // (for vertical scroll) and small horizontal motion (for arcing thumb
+    // scrolls), while still allowing single taps to open the lead.
     return `<div class="tech-card" data-leadid="${escHtml(l.id)}" onclick="openTechMode('${escHtml(l.id)}')"
-      style="background:var(--bg-elevated);border:1px solid var(--border);${accent?`border-left:4px solid ${accent};`:''}border-radius:var(--r);padding:14px;margin-bottom:8px;cursor:pointer;touch-action:pan-y;-webkit-tap-highlight-color:transparent">
+      style="background:var(--bg-elevated);border:1px solid var(--border);${accent?`border-left:4px solid ${accent};`:''}border-radius:var(--r);padding:14px;margin-bottom:8px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;pointer-events:none">
         <div style="flex:1;min-width:0">
           <div style="font-size:15px;font-weight:600;color:var(--text-primary);line-height:1.3">${escHtml(name)}</div>
