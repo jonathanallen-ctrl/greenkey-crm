@@ -11806,7 +11806,10 @@ function renderFMJobSummary(jobId) {
   return `<div class="jd-sec">
     <div class="jd-sh">
       <div class="jd-st">Files &amp; Photos <span style="font-size:10px;font-weight:400;color:var(--text-muted)">${allFiles.length} file${allFiles.length!==1?'s':''}</span></div>
-      <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="fmSetJob('${jobId}');navigate('files')">Full View →</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="refreshPhotosFromSP('${jobId}')" title="Pull latest photos from SharePoint AND refresh expired image links. Click here if a photo says 'Cannot display'.">↻ Sync</button>
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="fmSetJob('${jobId}');navigate('files')">Full View →</button>
+      </div>
     </div>
     <div class="jd-sb">
       <div class="ptabs" id="jd-fm-tabs" style="margin-bottom:10px">${catBtns}</div>
