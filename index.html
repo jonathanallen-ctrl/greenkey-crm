@@ -17700,19 +17700,42 @@ async function _hydratePhotosFromSP(jobId) {
     // renders as "Cannot display" on devices that boot-hydrated >1h ago.
     const URL_FRESH_MS = 50 * 60 * 1000;  // 50 min — keep a 10-min safety margin
 
-    let added = 0, refreshed = 0, skipped = 0;
+    // Valid category IDs from FM_CATS — used both to derive the right
+    // category from the SP path AND to detect/repair existing records that
+    // were saved with a bad category (e.g. the lead ID) by the previous
+    // version of this function.
+    const VALID_CATS = (typeof FM_CATS !== 'undefined') ? FM_CATS.map(c => c.id) : ['site','install','documents'];
+
+    let added = 0, refreshed = 0, skipped = 0, recategorized = 0;
     for (const { item, path } of filesFound) {
-      // path = [jobId, category]; if we narrowed to jobId at root, path = [category]
+      // The walker starts inside the jobId folder when called with a jobId,
+      // initial pathSoFar = [jobId]. Without a jobId, the walker starts at
+      // the photo library root, initial pathSoFar = []. EITHER WAY, when a
+      // file is found, its category is the LAST folder name in the path —
+      // because the walker's recursion is jobId → category → file.
+      // Previous bug: code used path[0] when jobId was passed, which was
+      // the jobId itself, not the category. Hence "site" photos landing
+      // with category='GK-2026-0054' and not appearing in any tab.
       const itemJobId  = jobId || path[0] || '';
-      const category   = jobId ? (path[0] || 'site') : (path[1] || 'site');
+      let category     = (path.length > 1 ? path[path.length - 1] : 'site') || 'site';
+      // Sanity-check: if the category we derived isn't a known category,
+      // fall back to 'site'. This protects against unusual SP folder shapes.
+      if (!VALID_CATS.includes(category)) category = 'site';
       if (!itemJobId) { skipped++; continue; }
 
       const freshDownloadUrl = item['@microsoft.graph.downloadUrl'] || '';
 
       // Already represented locally? Refresh the downloadUrl if it's stale,
-      // otherwise skip.
+      // and repair the category if it's wrong.
       const existing = existingByDriveId.get(item.id) || existingByNameJob.get(itemJobId + '|' + item.name);
       if (existing) {
+        let wroteAnything = false;
+        // Repair miscategorized records (the 2026-06-08 photo-category bug).
+        if (existing.category !== category && !VALID_CATS.includes(existing.category)) {
+          existing.category = category;
+          recategorized++;
+          wroteAnything = true;
+        }
         const lastFetched = existing.downloadUrlFetchedAt || 0;
         const isStale = !existing.downloadUrl || (Date.now() - lastFetched) > URL_FRESH_MS;
         if (isStale && freshDownloadUrl) {
@@ -17720,8 +17743,11 @@ async function _hydratePhotosFromSP(jobId) {
           existing.downloadUrlFetchedAt = Date.now();
           if (!existing.spDriveItemId) existing.spDriveItemId = item.id;
           if (!existing.spUrl) existing.spUrl = item.webUrl || '';
-          try { await _idbPut(existing); } catch(_) {}
+          wroteAnything = true;
           refreshed++;
+        }
+        if (wroteAnything) {
+          try { await _idbPut(existing); } catch(_) {}
         } else {
           skipped++;
         }
@@ -17747,8 +17773,10 @@ async function _hydratePhotosFromSP(jobId) {
       try { await _idbPut(rec); } catch(_) {}
       added++;
     }
-    if (added > 0 || refreshed > 0) console.log(`[GK] Photo hydrate: added=${added} refreshed=${refreshed} skipped=${skipped}`);
-    return { added, refreshed, skipped };
+    if (added > 0 || refreshed > 0 || recategorized > 0) {
+      console.log(`[GK] Photo hydrate: added=${added} refreshed=${refreshed} recategorized=${recategorized} skipped=${skipped}`);
+    }
+    return { added, refreshed, recategorized, skipped };
   } catch (e) {
     console.warn('[GK] _hydratePhotosFromSP failed:', e);
     return { added: 0, skipped: 0, error: e.message };
@@ -17792,9 +17820,10 @@ async function refreshPhotosFromSP(jobId) {
 
   const result = await _hydratePhotosFromSP(jobId);
   if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
-  const added     = result.added     || 0;
-  const refreshed = result.refreshed || 0;
-  const skipped   = result.skipped   || 0;
+  const added         = result.added         || 0;
+  const refreshed     = result.refreshed     || 0;
+  const recategorized = result.recategorized || 0;
+  const skipped       = result.skipped       || 0;
   // Detailed feedback so the user can tell whether SP actually had anything
   // new, whether existing URLs got refreshed (the fix for the "Cannot
   // display" stale-signed-URL case), and whether any local files that had
@@ -17802,9 +17831,10 @@ async function refreshPhotosFromSP(jobId) {
   // (12s) since these messages are diagnostic.
   const LONG = 12000;
   const parts = [];
-  if (retried > 0)   parts.push(`${retried} photo${retried===1?'':'s'} uploaded`);
-  if (added > 0)     parts.push(`${added} new from SP`);
-  if (refreshed > 0) parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
+  if (retried > 0)       parts.push(`${retried} photo${retried===1?'':'s'} uploaded`);
+  if (added > 0)         parts.push(`${added} new from SP`);
+  if (refreshed > 0)     parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
+  if (recategorized > 0) parts.push(`${recategorized} record${recategorized===1?'':'s'} re-categorized`);
   if (parts.length) {
     toast(`Sync complete: ${parts.join(', ')}.`, 'success', LONG);
   } else if (failed.length > 0) {
