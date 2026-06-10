@@ -11542,13 +11542,65 @@ function fmProcessFiles(files, jobId, cat, subFolder) {
   });
 }
 
-function fmDeleteFile(fileId, jobId, cat, subFolder) {
-  if (!confirm('Delete this file? This cannot be undone.')) return;
+async function fmDeleteFile(fileId, jobId, cat, subFolder) {
+  // Look up the record before confirming so we can tell the user exactly
+  // what's about to disappear and from where.
+  const rec = (_filesCache || []).find(f => f.id === fileId);
+  if (!rec) { toast('File not found', 'error'); return; }
+  const inSP = !!rec.spDriveItemId;
+  const msg = inSP
+    ? `Delete "${rec.name}" permanently?\n\n` +
+      `This will REMOVE the file from SharePoint, so it will disappear from ALL devices (your laptop, your phone, Sherri's CRM).\n\n` +
+      `This cannot be undone.`
+    : `Delete "${rec.name}"?\n\n` +
+      `This file is stored locally only (it never reached SharePoint), so only this device is affected.\n\n` +
+      `This cannot be undone.`;
+  if (!confirm(msg)) return;
+
+  // Preserve scroll position around the re-render so deleting a photo
+  // doesn't kick the user back to the top of the lead.
+  const contentEl = document.getElementById('content');
+  const savedScroll = contentEl ? contentEl.scrollTop : 0;
+
+  // Delete from SharePoint FIRST. If that succeeds, the local delete is
+  // safe; if it fails, we keep the local record so the user can try again.
+  // This avoids the "I deleted it but it came back" problem caused by the
+  // SP file still being there → next hydration re-creates the stub.
+  if (inSP) {
+    try {
+      // Refresh token in case ours expired (1hr TTL).
+      try {
+        const accts = _msal && _msal.getAllAccounts ? _msal.getAllAccounts() : [];
+        if (accts && accts.length > 0) {
+          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
+          if (tr && tr.accessToken) _gToken = tr.accessToken;
+        }
+      } catch (_) {}
+      const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${rec.spDriveItemId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + _gToken }
+      });
+      // 204 No Content = success. 404 = already gone (also fine).
+      if (!resp.ok && resp.status !== 404) {
+        const errTxt = await resp.text().catch(() => '');
+        throw new Error(`SP delete returned ${resp.status}: ${errTxt.slice(0,200)}`);
+      }
+    } catch (e) {
+      console.warn('[GK] SP delete failed:', e);
+      toast(`Couldn't delete from SharePoint: ${e.message || e}. The file stays on the lead — try again or contact support.`, 'error', 10000);
+      return;
+    }
+  }
+
+  // Local delete + re-render
   deleteFileRecord(fileId);
-  toast('File deleted', 'success');
+  toast(inSP ? 'File deleted from SharePoint and all devices' : 'File deleted locally', 'success');
   if (S.page === 'files') renderFilesPage();
   const jdBody = document.getElementById('jd-fm-body');
   if (jdBody && S.jobDetailId === jobId) jdFMSetCat(jobId, cat);
+
+  // Restore scroll so the user stays where they were
+  if (contentEl) contentEl.scrollTop = savedScroll;
 }
 
 // ── CAMERA FOR FILE MANAGER ──
