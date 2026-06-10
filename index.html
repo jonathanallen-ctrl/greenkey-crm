@@ -144,46 +144,16 @@
   @media (max-width: 768px){
     #content{padding:12px}
   }
-  /* Tech Mode touch behavior — every element gets `touch-action: manipulation`,
-     which allows pan + tap in BOTH directions and removes the 300ms tap delay.
-     Tap-highlight removed so the gray flash doesn't add perceived latency.
-
-     Why `manipulation` and not `pan-y`: pan-y only allows STRICTLY vertical
-     scroll. The thumb of the hand holding the phone arcs slightly as it pivots
-     — that small horizontal drift gets rejected by pan-y as ambiguous, which
-     stalls scroll initiation. The flat of a finger goes straight up/down so
-     pan-y was fine there, but the thumb arc was getting blocked. manipulation
-     accepts both pan-x and pan-y so the arcing thumb-scroll works.
-
-     Text-selection guards (-webkit-user-select:none + -webkit-touch-callout:
-     none): when iOS Safari finds selectable text under a touch, it routes
-     the touch through its text-selection machinery — long-press for the
-     magnifying glass, double-tap to select a word, etc. That adds latency
-     to scroll initiation. Disabling selection on the card body lets scroll
-     win immediately. Inputs still allow selection via the override below. */
-  .tech-scroll, .tech-scroll *{
-    touch-action:manipulation !important;
-    -webkit-tap-highlight-color:transparent;
-    -webkit-user-select:none;
-    user-select:none;
-    -webkit-touch-callout:none;
-  }
-  /* Inputs / textareas / contenteditable: re-enable selection so the user
-     CAN select what they typed and use the iOS keyboard normally. */
-  .tech-scroll input, .tech-scroll select, .tech-scroll textarea, .tech-scroll [contenteditable]{
-    -webkit-user-select:auto;
-    user-select:auto;
-    -webkit-touch-callout:default;
-  }
-  /* Single scroll surface for Tech Mode: let #content do the scrolling, not
-     a nested .tech-scroll. This avoided the nested-container competing-
-     gesture issue earlier, but iOS PWA can also be tricky about deep flex
-     trees. Keeping it simple: tech-scroll is just a centered max-width
-     wrapper, no overflow of its own. */
+  /* Tech Mode: minimal CSS. Let iOS Safari handle anchor-tag taps natively.
+     Every `touch-action` / `user-select` rule we added previously was
+     trying to "help" but actually forcing iOS through slower code paths
+     than its built-in anchor handling. Now we only set tap-highlight
+     transparent to avoid the gray flash; everything else is browser default. */
   .tech-scroll{
     overflow:visible;
-    -webkit-overflow-scrolling:touch;
-    overscroll-behavior:contain;
+  }
+  .tech-scroll a{
+    -webkit-tap-highlight-color:transparent;
   }
 
   /* PAGES */
@@ -14712,15 +14682,12 @@ function _renderTechModeLanding(pg) {
     const addr = [l.siteStreet, l.siteCity].filter(Boolean).join(', ');
     const sched = _scheduledDate(l).slice(0,10);
     const t = (typeof getJobType === 'function') ? getJobType(l.jobType) : null;
-    // Use a NATIVE <a> anchor with #tech=LEAD_ID — iOS Safari has decades
-    // of optimization for anchor link touch handling at the OS level,
-    // including tap-vs-scroll arbitration. The hashchange listener already
-    // routes #tech=LEAD_ID to openTechMode via _handleDeepLinkHash, so all
-    // we need is the href; no onclick, no JavaScript touch handling. This
-    // is the same approach Apple uses in their Mail and Notes apps for
-    // web-rendered list items, and it scrolls like a native UITableView.
-    return `<a href="#tech=${encodeURIComponent(l.id)}" class="tech-card"
-      style="display:flex;align-items:center;background:var(--bg-elevated);border:1px solid var(--border);${accent?`border-left:4px solid ${accent};`:''}border-radius:var(--r);padding:14px;margin-bottom:8px;text-decoration:none;color:inherit;-webkit-tap-highlight-color:transparent">
+    // Native <a> anchor with NO custom CSS interference. Minimum styling.
+    // iOS Safari handles anchor tap-vs-scroll natively at the OS level —
+    // any extra CSS we add (touch-action, user-select, etc.) only slows
+    // it down. Let the browser do its thing.
+    return `<a href="#tech=${encodeURIComponent(l.id)}"
+      style="display:flex;align-items:center;background:var(--bg-elevated);border:1px solid var(--border);${accent?`border-left:4px solid ${accent};`:''}border-radius:var(--r);padding:14px;margin-bottom:8px;text-decoration:none;color:inherit">
       <div style="flex:1;min-width:0">
         <div style="font-size:15px;font-weight:600;color:var(--text-primary);line-height:1.3">${escHtml(name)}</div>
         ${addr?`<div style="font-size:12.5px;color:var(--text-secondary);margin-top:3px">${escHtml(addr)}</div>`:''}
