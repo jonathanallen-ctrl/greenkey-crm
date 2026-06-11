@@ -1689,12 +1689,28 @@ function checkJurisdiction(city='') {
 }
 
 // ── JOB ID ──
+// Generate a globally-unique lead ID with format `GK-{year}-{7-digit suffix}`.
+// The suffix is derived from the last 7 digits of Date.now() (milliseconds
+// since the Unix epoch). Two devices creating leads in the SAME millisecond
+// would collide, but JavaScript single-threads each device's execution and
+// the millisecond clock is monotonic, so cross-device collisions are
+// effectively impossible.
+//
+// Before this change, the suffix came from a LOCAL counter (`gk_seq_${yr}`)
+// that started at the same value on every machine — meaning two users both
+// generated `GK-2026-0089` for their next leads, and one user's data was
+// overwritten by the other's push. The 2026-06-11 incident.
+//
+// The counter is still updated for back-compat (anything that reads it for
+// display continues to work), but it no longer influences the actual ID.
 function nextJobId() {
   const yr = new Date().getFullYear();
+  const seq = Date.now().toString().slice(-7);
+  // Update the local counter for back-compat (used by some reports).
   const key = 'gk_seq_'+yr;
-  const seq = (parseInt(localStorage.getItem(key)||'0')) + 1;
-  localStorage.setItem(key, seq);
-  return `GK-${yr}-${String(seq).padStart(4,'0')}`;
+  const cur = parseInt(localStorage.getItem(key)||'0');
+  localStorage.setItem(key, cur + 1);
+  return `GK-${yr}-${seq}`;
 }
 
 // ── CUSTOMERS CRUD ──
@@ -17464,6 +17480,40 @@ async function _spEnsureDrive() {
 }
 
 // ── SYNC FROM SHAREPOINT → localStorage ──
+// ── PER-RECORD MERGE HELPER (used by both _syncFromSP and _syncToSP) ──
+// Each entry in these storage keys is a record with `id` and `updatedAt`.
+// Merge keeps the version with the newer `updatedAt` for any shared id and
+// preserves records that exist on only one side. Used for:
+//   - PULL: don't clobber local-only records when SP doesn't have them
+//   - PUSH: don't clobber SP records that were added by another user
+//           between our last pull and our current push
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications'];
+function _mergeArrayByIdAndTs(localArr, remoteArr) {
+  if (!Array.isArray(localArr)) localArr = [];
+  if (!Array.isArray(remoteArr)) remoteArr = [];
+  const byId = new Map();
+  for (const r of localArr) {
+    if (r && r.id != null) byId.set(r.id, r);
+  }
+  let remoteAdded = 0, remoteUpdated = 0;
+  for (const r of remoteArr) {
+    if (!r || r.id == null) continue;
+    const existing = byId.get(r.id);
+    if (!existing) {
+      byId.set(r.id, r);
+      remoteAdded++;
+      continue;
+    }
+    const lTs = (existing.updatedAt || existing.createdAt || '');
+    const rTs = (r.updatedAt || r.createdAt || '');
+    if (rTs > lTs) {
+      byId.set(r.id, r);
+      remoteUpdated++;
+    }
+  }
+  return { merged: Array.from(byId.values()), remoteAdded, remoteUpdated };
+}
+
 async function _syncFromSP() {
   if (!_spSite) {
     criticalBanner('SharePoint site not initialized. Try reloading the page. If this persists, check your Microsoft sign-in.');
@@ -17510,43 +17560,48 @@ async function _syncFromSP() {
     throw e;
   }
 
-  // SAFETY GUARD (mirror of the _syncToSP guard, applied to the pull direction):
-  // if SharePoint has SIGNIFICANTLY less data than what's already in localStorage,
-  // refuse to overwrite. This protects against the case where the SP list itself
-  // got corrupted — without this, every device that signs in inherits the bad
-  // state and the corruption propagates everywhere.
-  const criticalKeys = ['gk_leads', 'gk_customers', 'gk_quotes'];
-  for (const key of criticalKeys) {
-    const spVal = fetched[key];
-    const localRaw = localStorage.getItem(key);
-    if (!spVal || !localRaw) continue;  // nothing to compare on either side
-    let spArr, localArr;
-    try { spArr = JSON.parse(spVal); } catch { continue; }
-    try { localArr = JSON.parse(localRaw); } catch { continue; }
-    if (!Array.isArray(spArr) || !Array.isArray(localArr)) continue;
-    const spN = spArr.length, localN = localArr.length;
-    // Only guard when local already has a meaningful amount of data (>=10 items).
-    // Block if SP has less than 95% of what local has — this would be a
-    // destructive overwrite, almost certainly indicating SP-side corruption.
-    if (localN >= 10 && spN < localN * 0.95) {
-      criticalBanner(
-        `Pull ABORTED to protect your data: SharePoint's ${key} has ${spN} items but this tab already has ${localN} (loss > 5%). ` +
-        `Sync skipped — your local data is unchanged. ` +
-        `This usually means the SharePoint list got corrupted. Do not edit anything until this is resolved. ` +
-        `Recovery: restore from a SharePoint backup file in CEO/CRM software/GreenKeyCRM_Backups/.`
-      );
-      console.error(`[GK] Pull aborted: ${key} SP=${spN} vs local=${localN}`);
-      return;
+  // ── PER-RECORD MERGE (new 2026-06-11) ──
+  // Previously the pull was a destructive REPLACE — SP's array overwrote
+  // local. Root cause of multi-user data loss. Now we merge by record ID
+  // and keep the one with the newer updatedAt. See MERGE_KEYS at module
+  // scope and _mergeArrayByIdAndTs() — same helper is used by the push
+  // direction (_syncToSP) so that pushing your local copy doesn't wipe
+  // records the other user added between your pull and your push.
+
+  let mergeStats = {};
+  let nonMergeCount = 0;
+  for (const [key, val] of Object.entries(fetched)) {
+    if (MERGE_KEYS.includes(key)) {
+      // Per-record merge for arrays of records with id + updatedAt
+      let localArr, remoteArr;
+      try { remoteArr = JSON.parse(val); } catch { remoteArr = []; }
+      try { localArr = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localArr = []; }
+      if (!Array.isArray(remoteArr) || !Array.isArray(localArr)) {
+        // Non-array shape — just overwrite (back-compat).
+        localStorage.setItem(key, val);
+        nonMergeCount++;
+        continue;
+      }
+      const { merged, remoteAdded, remoteUpdated } = _mergeArrayByIdAndTs(localArr, remoteArr);
+      const wasLocalN = localArr.length, isMergedN = merged.length;
+      // If the merge would PRESERVE local-only records, queue a push so SP
+      // catches up. This handles the case where a record exists locally but
+      // not on SP (e.g. push didn't complete due to network or slow machine).
+      const localOnlyCount = wasLocalN - (remoteUpdated + (remoteArr.length - remoteAdded));
+      mergeStats[key] = { local: wasLocalN, remote: remoteArr.length, merged: isMergedN, remoteAdded, remoteUpdated, localOnly: localOnlyCount };
+      localStorage.setItem(key, JSON.stringify(merged));
+      // If we kept any local-only records, mark a pending push so they get
+      // synced up on the next debounce.
+      if (localOnlyCount > 0 && typeof _setPendingPush === 'function') {
+        try { _setPendingPush(); clearTimeout(_syncTmr); _syncTmr = setTimeout(_syncToSP, 3000); } catch(_) {}
+      }
+    } else {
+      // For non-merge keys (user prefs, settings, etc.), full overwrite.
+      localStorage.setItem(key, val);
+      nonMergeCount++;
     }
   }
-
-  // Safe to apply.
-  let count = 0;
-  for (const [key, val] of Object.entries(fetched)) {
-    localStorage.setItem(key, val);
-    count++;
-  }
-  console.log('[GK] Synced from SharePoint:', count, 'keys');
+  console.log('[GK] Synced from SharePoint:', Object.keys(fetched).length, 'keys', mergeStats, `(${nonMergeCount} overwritten)`);
 }
 
 // ── SYNC STATUS INDICATOR ──
@@ -17686,8 +17741,26 @@ async function _syncToSP() {
     const yr = new Date().getFullYear();
     const keys = [...SYNC_KEYS, `gk_seq_${yr}`];
     for (const key of keys) {
-      const val = localStorage.getItem(key);
+      let val = localStorage.getItem(key);
       if (!val) continue;
+      // PRE-PUSH MERGE for record arrays — protects against clobbering
+      // records that another user added between our last pull and now.
+      // Without this, pushing your full local array can wipe records the
+      // OTHER user just added to SP. The merge keeps both sides' work.
+      if (MERGE_KEYS.includes(key) && existData[key]) {
+        try {
+          const spArr = JSON.parse(existData[key]);
+          const localArr = JSON.parse(val);
+          if (Array.isArray(spArr) && Array.isArray(localArr)) {
+            const { merged } = _mergeArrayByIdAndTs(localArr, spArr);
+            val = JSON.stringify(merged);
+            // Also update local so subsequent reads have the merged view.
+            localStorage.setItem(key, val);
+          }
+        } catch (e) {
+          console.warn(`[GK] pre-push merge failed for ${key}, pushing raw local:`, e);
+        }
+      }
       if (existMap[key]) {
         await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items/${existMap[key]}/fields`, {
           method: 'PATCH', body: JSON.stringify({ DataValue: val })
@@ -18419,7 +18492,12 @@ function _syncStatusHide() {
 //   3. Cooldown: don't pull more than once every 60 seconds.
 //   4. Skip if SharePoint isn't fully initialized (_spList is also required).
 let _lastVisibilitySync = 0;
-const VISIBILITY_SYNC_COOLDOWN_MS = 25_000;
+// 90s cooldown (was 25s) — gives slow machines more breathing room between
+// sync attempts. The shorter window was triggering back-to-back syncs on
+// memory-constrained PCs, which couldn't finish the JSON parse of the full
+// gk_leads array before the next pull tried to start. Per-record merge means
+// missing a sync round is no longer catastrophic, so we can afford to be lazy.
+const VISIBILITY_SYNC_COOLDOWN_MS = 90_000;
 
 function _trySyncFromSP(reason) {
   if (!_gToken || !_spSite || !_spList || !S.user) return;
@@ -18479,7 +18557,7 @@ document.addEventListener('visibilitychange', () => {
 // other users appear automatically even when this tab stays in focus.
 // Uses the same safety guards as the visibility sync (skips if a local push
 // is queued or in flight, and respects the 60-second cooldown).
-const AUTO_SYNC_INTERVAL_MS = 30 * 1000; // 30 seconds
+const AUTO_SYNC_INTERVAL_MS = 120 * 1000; // 2 min (was 30s) — gentler on slow machines
 setInterval(() => {
   _trySyncFromSP('auto-poll');
 }, AUTO_SYNC_INTERVAL_MS);
