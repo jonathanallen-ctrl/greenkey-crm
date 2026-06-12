@@ -1087,8 +1087,8 @@
       </div>
       <div class="frow2" style="margin-bottom:14px">
         <div class="fg"><div class="fl">Round-trip drive time (min, optional)</div>
-          <input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 60 — first 30 min is free" min="0" step="5">
-          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4">Adds travel labor at $160/hr beyond the first 30 min. Leave blank for local jobs (under 30 min round trip).</div>
+          <input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 90 — first 60 min is free" min="0" step="5">
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4">Adds travel labor at $160/hr beyond the first 60 min. Leave blank for local jobs (under 1 hr round trip).</div>
         </div>
         <div class="fg"><div class="fl">Routing difficulty (optional)</div>
           <select class="fsel" id="ai-difficulty-tier">
@@ -1586,7 +1586,10 @@ const JOB_TYPES = [
   {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:true,  permitDefault:0,   permitQmerit:0,   noPermit:true, category:'Branch Circuit'},
 
   // Panel & service work
-  {id:'panel-replacement',   label:'Panel Replacement',             description:'Swap panel, same service size',          qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Panel & Service'},
+  // Panel replacement permit is $500 (2026-06-12): covers the required
+  // return trip for final inspection, which frequently burns half a day
+  // waiting on the inspector.
+  {id:'panel-replacement',   label:'Panel Replacement',             description:'Swap panel, same service size',          qqEnabled:true,  permitDefault:500, permitQmerit:500, category:'Panel & Service'},
   {id:'service-upgrade',     label:'Service Upgrade',               description:'Upgrade existing service amperage',      qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'service-upgrade', category:'Panel & Service'},
   {id:'new-service',         label:'New Service Install',           description:'New utility service entrance + meter',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'new-service',     category:'Panel & Service'},
 
@@ -1602,6 +1605,26 @@ const JOB_TYPES = [
 
 // Lookup helper
 function getJobType(id){ return JOB_TYPES.find(t => t.id === id) || null; }
+
+// Default permit fee for a quote — single source of truth (2026-06-12).
+// Driven by the job-type registry, so per-type permits (e.g. panel
+// replacement $500) apply everywhere. Special jurisdiction never LOWERS a
+// type's permit. noPermit types → $0.
+function defaultPermitFee(q){
+  const t = getJobType(q?.jobType);
+  if (t && t.noPermit) return 0;
+  const base = (q?.source==='Qmerit') ? (t?.permitQmerit ?? 250) : (t?.permitDefault ?? 200);
+  return q?.specialJurisdiction ? Math.max(500, base) : base;
+}
+
+// Stamp the quote when the USER edits the permit field. A deliberate value —
+// including $0 (multi-scope jobs where the permit is carried on a companion
+// quote) — is honored forever. Only untouched zeros get healed back to the
+// type default. Mirrors the _muSetByUser pattern.
+function _permitTouched(qid){
+  const q = getQuote(qid);
+  if (q && !q._permitSetByUser) upsertQuote({ ...q, _permitSetByUser: true });
+}
 
 // ── SPECIAL JURISDICTIONS ──
 const SPEC_JURIS = [
@@ -1904,13 +1927,30 @@ function upsertLead(data) {
   const arr = getLeads();
   const idx = arr.findIndex(l=>l.id===data.id);
   const now = new Date().toISOString();
-  if (idx>=0) { arr[idx] = {...arr[idx],...data, updatedAt:now}; }
+  const isNew = idx < 0;
+  let returnedId;
+  if (idx>=0) { arr[idx] = {...arr[idx],...data, updatedAt:now}; returnedId = data.id; }
   else {
     const id = data.id || nextJobId();
     arr.push({...data, id, stage: data.stage||'lead-received', stageAt: now, createdAt:now, updatedAt:now});
+    returnedId = id;
   }
   saveLeads(arr);
-  return data.id || arr[arr.length-1].id;
+  // Fire-and-forget SharePoint folder creation for new leads. Creates the
+  // {Prefix} - {LastName} Project folder under Sales and Marketing/Active
+  // Leads and pre-populates the estimate templates with customer info, so
+  // Sherri sees the folder structure she expects without using the CRM.
+  // Non-blocking — never throws to the caller.
+  if (isNew) {
+    setTimeout(() => {
+      try {
+        if (typeof _ensureSPLeadFolderForLead === 'function') {
+          _ensureSPLeadFolderForLead(returnedId);
+        }
+      } catch (e) { console.warn('[GK] Auto SP folder failed:', e); }
+    }, 250);
+  }
+  return returnedId || arr[arr.length-1].id;
 }
 
 function advanceStage(leadId) {
@@ -1923,6 +1963,7 @@ function advanceStage(leadId) {
     arr[idx].stageAt = new Date().toISOString();
     arr[idx].updatedAt = new Date().toISOString();
     saveLeads(arr);
+    if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
     toast(`Moved to: ${STAGES[cur+1].label}`,'success');
     if (S.page==='jobs') renderPipeline();
     else if (S.page==='leads') renderLeadsPage();
@@ -2011,6 +2052,7 @@ function moveLeadToStage(leadId, stageId) {
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+  if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
   // Hint toward the Scheduler when moving into the Scheduled stage — that's
   // the trigger for adding to the schedulable pool, but the Scheduler is on a
   // separate page so a nudge is helpful.
@@ -2462,6 +2504,8 @@ const SECS = {
     <div class="srow"><div><div class="srl">Payment processing buffer (%)</div><div class="srd">Added to every new quote as a separate line so card payments break even. <strong>Direct jobs only</strong> — not applied to Qmerit, Electrum, or Treehouse (those platforms pay us directly). Existing quotes keep their current value.</div></div><input class="sinput" id="set-payment-buffer" type="number" step="0.1" min="0" max="10" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().paymentBuffer==='number') ? getPrefs().paymentBuffer : 3}"></div>
     <div class="srow"><div><div class="srl">ACH buffer (%)</div><div class="srd">Effective buffer baked into the ACH price tier (between the CC price and the cash/Zelle price). Typical: 1.</div></div><input class="sinput" id="set-ach-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.achBuffer==='number')return p.achBuffer;return 1;})()}"></div>
     <div class="srow"><div><div class="srl">Cash / Zelle / Check buffer (%)</div><div class="srd">Effective buffer for cash, Zelle, or check payments. Usually 0 — the customer gets the un-marked-up base price.</div></div><input class="sinput" id="set-cash-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.cashBuffer==='number')return p.cashBuffer;return 0;})()}"></div>
+    <div style="margin:18px 0 6px 0;padding-top:14px;border-top:1px solid var(--border);font-size:12px;font-weight:600;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">Email Notifications</div>
+    <div class="srow"><div><div class="srl">CC email for customer-facing messages</div><div class="srd">CC'd on every customer-facing email the CRM sends (quote sends, scheduling confirmations, consent requests). Office gets visibility without needing to use the CRM. Leave blank to disable CC.</div></div><input class="sinput" id="set-cc-email" type="email" placeholder="sherri.allen@greenkey-usa.com" style="width:260px" value="${escHtml((()=>{const p=(typeof getPrefs==='function')?getPrefs():{};return (p.ccOutboundEmail===undefined)?(typeof DEFAULT_CC_OUTBOUND_EMAIL==='string'?DEFAULT_CC_OUTBOUND_EMAIL:'sherri.allen@greenkey-usa.com'):(p.ccOutboundEmail||'');})())}"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Jurisdictions':`<div class="stitle">Special Jurisdictions</div><div class="sdesc">Jobs here auto-get adjusted permit fee and in-person inspection flag.</div>
@@ -3166,6 +3210,11 @@ function saveSets() {
     const v = parseFloat(cb.value);
     if (!isNaN(v) && v >= 0 && v <= 5) p.cashBuffer = v;
   }
+  // Email CC: empty string = explicit disable. Trim whitespace.
+  const ccEl = document.getElementById('set-cc-email');
+  if (ccEl) {
+    p.ccOutboundEmail = (ccEl.value || '').trim();
+  }
   // Drop the legacy single-discount knob now that we've migrated to per-tier
   // buffers — keeps prefs tidy and avoids confusion if both are present.
   if ('nonCardDiscount' in p) delete p.nonCardDiscount;
@@ -3321,6 +3370,7 @@ function renderPipeline() {
 
 function renderKanban(leads) {
   const custs = getCustomers();
+  const _kbQuotes = getQuotes(); // fetched once — chip helpers run per card
   const wrap = document.getElementById('pipe-kanban');
   if (!wrap) return;
   wrap.className = 'kanban';
@@ -3331,6 +3381,8 @@ function renderKanban(leads) {
       const name = c ? custFullName(c) : (l.customerName||'No customer');
       const addr = l.siteCity ? `${l.siteCity}, ${l.siteState||'VA'}` : '—';
       const flagHtml = l.inspectionRequired ? `<span class="chip chip-flag">Inspection</span>` : '';
+      const muChip = leadRequiresMissUtility(l, _kbQuotes) ? `<span class="chip chip-flag" title="Trenching / ground rods on this job — call Miss Utility (811) at least 3 business days before digging">811</span>` : '';
+      const panelChip = leadPanelInfoMissing(l) ? `<span class="chip chip-flag" title="Panel make / breaker size not recorded — fill in the Electrical Snapshot on the job detail page">⚠ Panel info</span>` : '';
       const _custAct = getLeadCustomerAction(l.id);
       const actChip  = customerActionChip(_custAct, { compact: true });
       const isLast = STAGES.findIndex(s=>s.id===stage.id)===STAGES.length-1;
@@ -3341,7 +3393,7 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${actChip}</div>
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${muChip}${panelChip}${actChip}</div>
         <div class="kcard-foot" style="pointer-events:none">
           <span class="kcard-days">${daysAgo(l.stageAt||l.createdAt)}</span>
           ${!isLast?`<span class="knext" style="pointer-events:auto" onclick="event.stopPropagation();advanceStage('${l.id}')">Next →</span>`:''}
@@ -3909,7 +3961,9 @@ function saveLead() {
   const j = checkJurisdiction(city);
   const specialJurisdiction = !!j;
   const jurisdiction = j ? j.name : '';
-  const permitFee = j ? 500 : (source==='Qmerit' ? 250 : 200);
+  // Permit fee respects the job type's own permit (panel replacement $500,
+  // noPermit types $0) — special jurisdiction never lowers it (2026-06-12).
+  const permitFee = defaultPermitFee({ jobType, source, specialJurisdiction });
   const inspectionRequired = !!j;
 
   // Qmerit fields
@@ -4276,8 +4330,13 @@ function getQQPricing(){
     standardPermit:200, qmeritPermit:250, specialPermit:500,
     materialsBuffer:0.10,
     qmeritFlat:199, qmeritPct:0.12,
-    nema1450Inside:50, nema1450Outside:100,
-    travelPerBlock:80, travelFreeMin:30,
+    // NEMA 14-50 adder over a hardwired charger install (2026-06-12): extra
+    // neutral wire + outlet/box (~$65) + GFCI breaker (~$100 over standard)
+    // ≈ $175 cost → ~$200 with ~30% markup. Same indoor or outdoor.
+    nema1450Inside:200, nema1450Outside:200,
+    // Travel: base price includes a 30-min round trip; fees START at 1 hour
+    // round trip (2026-06-12 — was 30, which overcharged 30-60 min jobs).
+    travelPerBlock:80, travelFreeMin:60,
     veteranDiscountPct:0.10
   };
 }
@@ -4301,8 +4360,62 @@ function upsertQuote(data){
   if (becameApproved) {
     try { _autoCreatePreInstallTasks(idx >= 0 ? a[idx] : a[a.length-1]); }
     catch (e) { console.warn('[GK] Auto pre-install tasks failed:', e); }
+    // Refresh Sherri's Job Info form — billing/deposit state just changed.
+    try { if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm((idx >= 0 ? a[idx] : a[a.length-1]).leadId); } catch (_) {}
   }
   return data.id||a[a.length-1].id;
+}
+
+// Email Sherri when a Miss Utility task is auto-created (2026-06-12). She
+// runs permits/811/scheduling from email + the Active Leads folder, not the
+// CRM — same delivery pattern as @mention notifications. Fire-and-forget;
+// failure just means she finds the task on her next CRM visit (or Jonathan
+// @mentions her manually). Falls back to her known address if no user record.
+async function _emailSherriMissUtilityTask(lead, custLabel, sherriUser, dueDate) {
+  const recipientEmail = sherriUser?.notifyEmail || sherriUser?.username || 'sherri.allen@greenkey-usa.com';
+  // Force-refresh the Graph token (stale pre-Mail.Send tokens 403 silently).
+  let canEmail = false;
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length > 0) {
+        const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+        _gToken = tr.accessToken;
+        canEmail = !!_gToken;
+      }
+    }
+  } catch (e) { console.warn('[GK] 811 email: token refresh failed:', e); }
+  if (!canEmail) { console.warn('[GK] 811 email skipped — no Graph token'); return; }
+  const site = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA', lead.siteZip].filter(Boolean).join(', ');
+  const jobUrl = location.origin + location.pathname + '#job-' + encodeURIComponent(lead.id);
+  const html = `
+    <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+      <p style="font-size:14px;margin:0 0 12px">Hi Sherri,</p>
+      <p style="font-size:14px;margin:0 0 12px">The quote for <strong>${escHtml(custLabel)}</strong> (${escHtml(lead.id)}) was just approved and this job involves <strong>trenching / ground rods</strong> — it needs a <strong>Miss Utility (811) locate request</strong> before any digging.</p>
+      <table style="font-size:13.5px;margin:0 0 14px">
+        <tr><td style="padding:2px 12px 2px 0;font-weight:600">Site</td><td>${escHtml(site || '—')}</td></tr>
+        <tr><td style="padding:2px 12px 2px 0;font-weight:600">Call by</td><td>${dueDate ? escHtml(dueDate) : 'ASAP'} — VA 811 needs 3 business days' notice before the dig date</td></tr>
+      </table>
+      <p style="font-size:13px;margin:0 0 12px">The job info sheet in the customer's Active Leads folder has the full details. After calling, send Jonathan the ticket #.</p>
+      <p style="font-size:13px;margin:0 0 18px"><a href="${jobUrl}" style="color:#2ecc71;text-decoration:none;font-weight:500">Open the job in the CRM →</a></p>
+      <p style="font-size:11px;color:#888;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey CRM · automated Miss Utility notification</p>
+    </div>`;
+  try {
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject: `[GreenKey CRM] Call Miss Utility (811) — ${lead.id} ${custLabel}`,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: recipientEmail } }]
+        },
+        saveToSentItems: true
+      })
+    });
+    console.log('[GK] 811 email sent to', recipientEmail);
+  } catch (e) {
+    console.warn('[GK] 811 email send failed:', e);
+  }
 }
 
 // Regex that detects scope language requiring a Miss Utility / locate call.
@@ -4319,6 +4432,108 @@ function _scopeRequiresMissUtility(scope, jobType) {
   if (jobType && _MU_REQUIRED_JOB_TYPES.includes(jobType)) return true;
   if (!scope) return false;
   return _MU_SCOPE_REGEX.test(scope);
+}
+
+// Full auto-detection for a QUOTE (2026-06-12): scope text + job type PLUS
+// Quick Quote trench run segments (hand-trench / machine-trench = digging).
+function _autoDetectMissUtility(q) {
+  if (!q) return false;
+  if (_scopeRequiresMissUtility(q.scope || '', q.jobType)) return true;
+  return (q.qq?.runSegs || []).some(s => s.type === 'hand-trench' || s.type === 'machine-trench');
+}
+
+// Effective Miss Utility requirement for a quote. The user's explicit
+// checkbox choice wins ONLY once they've actually touched it (_muSetByUser);
+// otherwise auto-detect. (Quotes used to be created with an explicit
+// requiresMissUtility:false, which silently disabled auto-detection — this
+// helper heals all of those.)
+function quoteRequiresMissUtility(q) {
+  if (!q) return false;
+  if (q._muSetByUser) return !!q.requiresMissUtility;
+  return _autoDetectMissUtility(q);
+}
+
+// Lead-level rollup — needs a locate call if ANY of:
+//   1. Manual lead flag (lead.missUtilityFlag) — for jobs quoted OUTSIDE the
+//      CRM (Sherri's Excel quotes) where there's no CRM quote to detect from.
+//   2. The lead's own scope text / job type (covers no-quote leads).
+//   3. Any non-declined CRM quote on the lead requires it.
+// Accepts a lead object or a lead id. Pass a pre-fetched quotes array when
+// calling in a loop (kanban render).
+function leadRequiresMissUtility(leadOrId, quotesArr) {
+  const lead = (typeof leadOrId === 'string') ? getLead(leadOrId) : leadOrId;
+  if (!lead) return false;
+  if (lead.missUtilityFlag === true) return true;
+  if (_scopeRequiresMissUtility(lead.scopeOfWork || lead.description || '', lead.jobType)) return true;
+  return (quotesArr || getQuotes()).some(q => q.leadId === lead.id && q.status !== 'declined' && quoteRequiresMissUtility(q));
+}
+
+// Create the 811 task for a lead (dedup by task id) + email Sherri. Shared
+// by the quote-approval path and the manual lead flag. Returns true if a
+// new task was created.
+function _createMissUtilityTask(lead, dueDate, sourceNote) {
+  const taskId = `task-mu-${lead.id}`;
+  if (getTasks().find(t => t.id === taskId)) return false;
+  const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+  const linkLabel = cust ? custFullName(cust) : (lead.customerName || lead.id);
+  const _sherri = (typeof getUsers === 'function' ? getUsers() : [])
+    .find(u => /sherri/i.test(u.name || '') || /sherri/i.test(u.username || ''));
+  upsertTask({
+    id:          taskId,
+    title:       `Call Miss Utility (811) — ${lead.id}`,
+    description: `${sourceNote || 'This job'} requires a locate request before digging — VA 811 needs 3 business days' notice.\nCustomer: ${linkLabel}\nSite: ${[lead.siteStreet, lead.siteCity, lead.siteState||'VA'].filter(Boolean).join(', ')}\n\nAfter calling, save the ticket # to the job notes.`,
+    linkedId:    lead.id,
+    linkedLabel: linkLabel,
+    assignedTo:  _sherri?.id || '',
+    priority:    'high',
+    status:      'open',
+    dueDate:     dueDate || '',
+    source:      'auto-pre-install',
+    createdBy:   S.user?.id || ''
+  });
+  try { _emailSherriMissUtilityTask(lead, linkLabel, _sherri, dueDate || ''); } catch (e) { console.warn('[GK] 811 email failed:', e); }
+  return true;
+}
+
+// Manual flag toggle from the lead detail — for Sherri-quoted (non-CRM) jobs.
+function flagMissUtility(leadId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  if (arr[idx].missUtilityFlag === true) {
+    if (!confirm('This job is manually flagged for Miss Utility. Remove the flag?\n\n(The 811 task, if created, stays — delete it from Tasks if it\'s not needed.)')) return;
+    arr[idx].missUtilityFlag = false;
+    arr[idx].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+    toast('Miss Utility flag removed', 'success');
+  } else {
+    if (!confirm('Flag this job as requiring Miss Utility (811)?\n\nThis creates the 811 task assigned to Sherri and emails her now — use it for jobs quoted outside the CRM.')) return;
+    arr[idx].missUtilityFlag = true;
+    arr[idx].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+    const created = _createMissUtilityTask(arr[idx], '', 'Manually flagged (quote handled outside the CRM)');
+    toast(created ? '811 task created + Sherri emailed' : 'Flagged — 811 task already exists', 'success');
+  }
+  if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId);
+  if (typeof openJobDetail === 'function' && S.jobDetailId === leadId) openJobDetail(leadId);
+}
+
+// ── PANEL / BREAKER INFO VISIBILITY (2026-06-12) ──
+// Panel make, breaker size, and space strategy are critical job facts for any
+// 240V-load job. Soft nag (chip) when missing — loose gate, never a block.
+const _PANEL_INFO_JOB_TYPES = ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','panel-replacement','service-upgrade','new-service','battery-system','v2h-system','generator','energy-management'];
+function leadPanelInfoMissing(lead) {
+  if (!lead || !_PANEL_INFO_JOB_TYPES.includes(lead.jobType)) return false;
+  const s = lead.electricalSnapshot || {};
+  return !s.panelBrand || !s.breakerSize;
+}
+// Human-readable panel summary for chips / info form. Returns '' if nothing recorded.
+function leadPanelSummary(lead) {
+  const s = lead?.electricalSnapshot || {};
+  const brand = s.panelBrand === 'Other' ? (s.panelBrandOther || 'Other') : (s.panelBrand || '');
+  const bkr   = s.breakerSize === 'Other' ? (s.breakerSizeOther || 'Other') : (s.breakerSize || '');
+  const strategy = s.major240VLoads || '';
+  return [brand, bkr, s.serviceSize ? s.serviceSize + ' service' : '', strategy].filter(Boolean).join(' · ');
 }
 
 // On quote approval, generate pre-install tasks for the things that bite us:
@@ -4346,25 +4561,13 @@ function _autoCreatePreInstallTasks(quote) {
     return d.toISOString().slice(0, 10);
   };
 
-  // Miss Utility task — only if quote.requiresMissUtility is true (auto-detected
-  // or manually flagged).
-  if (quote.requiresMissUtility) {
-    const taskId = `task-mu-${quote.leadId}`;
-    const existing = getTasks().find(t => t.id === taskId);
-    if (!existing) {
-      upsertTask({
-        id:          taskId,
-        title:       `Call Miss Utility — ${lead.id}`,
-        description: `Quote ${quote.id} requires a locate request before digging.\nCustomer: ${linkLabel}\nSite: ${[lead.siteStreet, lead.siteCity, lead.siteState||'VA'].filter(Boolean).join(', ')}\n\nAfter calling, save the ticket # to the job notes.`,
-        linkedId:    lead.id,
-        linkedLabel: linkLabel,
-        priority:    'high',
-        status:      'open',
-        dueDate:     computeDue(3),
-        source:      'auto-pre-install',
-        createdBy:   S.user?.id || ''
-      });
-    }
+  // Miss Utility task — effective value: user's explicit checkbox if touched,
+  // otherwise auto-detected from scope / job type / QQ trench segments.
+  // Task is assigned to Sherri + emailed to her automatically (she runs 811
+  // from email/files, not the CRM). Shared helper also serves the manual
+  // lead-level flag for jobs quoted outside the CRM.
+  if (quoteRequiresMissUtility(quote)) {
+    _createMissUtilityTask(lead, computeDue(3), `Quote ${quote.id}`);
   }
 
   // Special materials task — only if quote.specialMaterials has content.
@@ -4801,13 +5004,13 @@ function startQuoteBuilder(){
     const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
     if (ref) _autoBillTo = ref.id;
   }
-  // Permit default: respect the job type's noPermit flag. New job types like
-  // energy-management and custom default to $0; everything else falls through
-  // to the lead's permit fee or the source-based default ($250 Qmerit / $200).
+  // Permit default: respect the job type's noPermit flag and per-type permit
+  // (panel replacement $500). The lead's permit fee can RAISE but never
+  // LOWER the type default — a $0/stale lead permit on a permit-required
+  // job was the "no permit panel swap" bug (fixed 2026-06-12).
   const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
-  const _defaultPermit = (_jt && _jt.noPermit)
-    ? 0
-    : (lead.permitFee || (lead.source==='Qmerit' ? 250 : 200));
+  const _typePermit = defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction });
+  const _defaultPermit = (_jt && _jt.noPermit) ? 0 : Math.max(lead.permitFee || 0, _typePermit);
   const nq={
     id:'qt-'+Date.now(), leadId, customerId:lead.customerId, source:lead.source, jobType:lead.jobType,
     type:qtype, status:'draft', permitFee: _defaultPermit,
@@ -4910,9 +5113,8 @@ function startRecoverQuote() {
     if (ref) _autoBillTo = ref.id;
   }
   const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
-  const _defaultPermit = (_jt && _jt.noPermit)
-    ? 0
-    : (lead.permitFee || (lead.source === 'Qmerit' ? 250 : 200));
+  const _typePermit = defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction });
+  const _defaultPermit = (_jt && _jt.noPermit) ? 0 : Math.max(lead.permitFee || 0, _typePermit);
   const nq = {
     id: qid,                  // ← USER-SUPPLIED ID, the whole point of this function
     leadId, customerId: lead.customerId, source: lead.source, jobType: lead.jobType,
@@ -5012,6 +5214,7 @@ function renderQuoteBuilder(qid){
       ${quoteStatusChip(q.status)}
     </div>
     ${revBanner}
+    ${_renderPanelSuggestionBanner(q, lead)}
     <div style="display:grid;grid-template-columns:1fr 320px;gap:20px;align-items:start">
       <div>
         <div class="qb-tabs">
@@ -5106,6 +5309,58 @@ function renderQuoteBuilder(qid){
   renderQBForm(q);
 }
 
+// ── PANEL-DRIVEN QUOTE SUGGESTIONS (2026-06-12) ──
+// Reads the lead's Electrical Snapshot and surfaces one-tap suggestions in
+// the quote builder. Nothing is ever added silently — every suggestion is a
+// button the user taps. Also nags (softly) when panel info is missing on a
+// 240V-load job.
+const _EV_LOAD_JOB_TYPES = ['ev-residential','nema-1450','v2h-system'];
+function _renderPanelSuggestionBanner(q, lead){
+  if(!q || !lead) return '';
+  const snap = lead.electricalSnapshot || {};
+  const items = [];
+  // Missing panel info nag (240V jobs only).
+  if (leadPanelInfoMissing(lead)) {
+    items.push(`<span style="color:var(--amber)">⚠ Panel make / breaker size not recorded for this job.</span>
+      <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="openLeadDetail('${lead.id}')">Open Electrical Snapshot →</button>`);
+  }
+  // Eaton BR + EV load → BRH260 safety swap (no-exceptions rule: BR260s have
+  // melted under sustained EV charging loads).
+  const isBR = snap.panelBrand === 'Eaton BR';
+  const isEVLoad = _EV_LOAD_JOB_TYPES.includes(q.jobType);
+  const hasBRH = (q.lines||[]).some(ln=>/brh/i.test(ln.desc||'')) || (q.scope||'').match(/BRH/i);
+  if (isBR && isEVLoad && !hasBRH && !q._dismissBRH) {
+    items.push(`<span><strong>Eaton BR panel + EV load</strong> — BRH260 safety breaker swap required (BR260s have melted under EV loads).</span>
+      ${q.type==='detailed'
+        ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11.5px;color:var(--green)" onclick="_addSuggestedLine('${q.id}','BRH safety breaker (BR panel) — required for EV loads',1,90,30)">+ Add BRH260 line</button>`
+        : `<span style="color:var(--text-muted)">Quick Quote: add +$50 to the Difficulty / One-off fee for the swap-vs-standard difference.</span>`}`);
+  }
+  // Space strategy from the snapshot's Issues dropdown.
+  const issue = snap.major240VLoads || '';
+  if (issue === 'Panel - not enough space, tandems are available' && q.type==='detailed' && !(q.lines||[]).some(ln=>/tandem/i.test(ln.desc||''))) {
+    items.push(`<span><strong>Snapshot says: tandems available</strong> — circuit space will come from tandem breakers.</span>
+      <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px;color:var(--green)" onclick="_addSuggestedLine('${q.id}','Tandem breaker (panel space)',1,22,40)">+ Add tandem line</button>`);
+  }
+  if (issue === 'Panel - not enough space, tandems unavailable') {
+    items.push(`<span style="color:var(--amber)"><strong>Snapshot says: no space, tandems unavailable</strong> — this quote likely needs a sub-panel in scope.</span>`);
+  }
+  if (issue === 'Panel - not enough capacity') {
+    items.push(`<span style="color:var(--amber)"><strong>Snapshot says: not enough capacity</strong> — consider an energy-management device (EV Tap / DCC) or service upgrade.</span>`);
+  }
+  if (!items.length) return '';
+  return `<div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-left:3px solid var(--amber);border-radius:var(--r);display:flex;flex-direction:column;gap:8px">
+    ${items.map(it=>`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">${it}</div>`).join('')}
+  </div>`;
+}
+function _addSuggestedLine(qid, desc, qty, unitCost, markup){
+  const q=getQuote(qid); if(!q) return;
+  const lines=[...(q.lines||[]), {id:'ln-'+Date.now(), desc, qty, unit:'each', unitCost, markup}];
+  upsertQuote({...q, lines});
+  onDQChange(qid);
+  renderQuoteBuilder(qid);
+  toast('Line added — adjust qty/price as needed','success');
+}
+
 function renderQBForm(q){
   const wrap=document.getElementById('qb-form');
   if(!wrap) return;
@@ -5164,8 +5419,8 @@ function renderQuickQuoteForm(q){
         ${q.jobType==='nema-1450'
           ? `<div class="fg"><div class="fl">Outlet Location</div>
               <select class="fsel" id="qq-nema-loc" onchange="onQQChange('${q.id}')">
-                <option value="inside"${(qq.nemaLocation||'inside')==='inside'?' selected':''}>Inside (+$50)</option>
-                <option value="outside"${qq.nemaLocation==='outside'?' selected':''}>Outside (+$100)</option>
+                <option value="inside"${(qq.nemaLocation||'inside')==='inside'?' selected':''}>Inside (+$200)</option>
+                <option value="outside"${qq.nemaLocation==='outside'?' selected':''}>Outside (+$200)</option>
               </select>
             </div>`
           : `<div class="fg"><div class="fl">Charger Mount</div>
@@ -5191,7 +5446,7 @@ function renderQuickQuoteForm(q){
       <div class="qq-row">
         <div>
           <div class="qq-lbl">Travel Time (minutes from office)</div>
-          <div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div>
+          <div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
         <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
@@ -5227,7 +5482,7 @@ function renderQuickQuoteForm(q){
       <div class="qq-title">Permit</div>
       <div class="frow2">
         <div class="fg"><div class="fl">Permit Fee ($)</div>
-          <input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
+          <input class="fi" type="number" id="qq-permit" value="${(typeof q.permitFee==='number' && (q.permitFee>0 || q._permitSetByUser)) ? q.permitFee : defaultPermitFee(q)}" oninput="_permitTouched('${q.id}');onQQChange('${q.id}')">
         </div>
         <div class="fg"><div class="fl">Jurisdiction</div>
           <input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7">
@@ -5355,7 +5610,7 @@ function _renderQQ_HVAC(q) {
       <div class="qq-row">
         <div>
           <div class="qq-lbl">Travel Time (minutes from office)</div>
-          <div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div>
+          <div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
         <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
@@ -5363,7 +5618,7 @@ function _renderQQ_HVAC(q) {
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="qq-permit" value="${(typeof q.permitFee==='number' && (q.permitFee>0 || q._permitSetByUser)) ? q.permitFee : defaultPermitFee(q)}" oninput="_permitTouched('${q.id}');onQQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
@@ -5467,7 +5722,7 @@ function _renderQQ_CircuitReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div></div>
+        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
         <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
     </div>
@@ -5609,14 +5864,14 @@ function _renderQQ_PanelReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 30 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-30)/30)*80}</span></div></div>
+        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
         <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
     </div>
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="fg"><div class="fl">Permit Fee ($)</div>
-        <input class="fi" type="number" id="qq-permit" value="${q.permitFee ?? (q.source==='Qmerit' ? 250 : 200)}" oninput="onQQChange('${q.id}')">
+        <input class="fi" type="number" id="qq-permit" value="${(typeof q.permitFee==='number' && (q.permitFee>0 || q._permitSetByUser)) ? q.permitFee : defaultPermitFee(q)}" oninput="_permitTouched('${q.id}');onQQChange('${q.id}')">
       </div>
     </div>
     <div class="qq-section">
@@ -5707,16 +5962,19 @@ function onQQChange(qid){
   const tandemBreakers=parseInt(document.getElementById('qq-tandem')?.value)||0;
   const difficultyFee=_readNum('qq-difficulty', 0);
   const travelMinutes=parseInt(document.getElementById('qq-travel-min')?.value)||0;
-  const travelAdder=Math.ceil(Math.max(0,travelMinutes-30)/30)*80;
+  const travelAdder=Math.ceil(Math.max(0,travelMinutes-60)/30)*80;
   const travelFee=_readNum('qq-travel', 0);
   const travelFeeType=document.getElementById('qq-travtype')?.value||'baked';
   // Update travel calc display
   const tCalcEl=document.getElementById('qq-travel-calc');
   if(tCalcEl) tCalcEl.textContent='$'+travelAdder;
   const _jtQQ = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
-  const _qqPermitFallback = (typeof q.permitFee === 'number')
+  // Saved $0 only honored for noPermit job types — a $0 permit on a
+  // permit-required job (panel swap, EV install) is always a data bug, so
+  // heal it back to the type default (2026-06-12).
+  const _qqPermitFallback = (typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (_jtQQ && _jtQQ.noPermit)))
     ? q.permitFee
-    : ((_jtQQ && _jtQQ.noPermit) ? 0 : (q.specialJurisdiction?500:(q.source==='Qmerit'?250:200)));
+    : defaultPermitFee(q);
   const permitFee=_readNum('qq-permit', _qqPermitFallback);
   // Editable overrides (empty string = use computed value)
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
@@ -6128,9 +6386,10 @@ function _onQQChange_HVAC(qid) {
   const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
-  const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || (q.specialJurisdiction ? 500 : (q.source==='Qmerit' ? 250 : 200));
+  const _pRaw = document.getElementById('qq-permit')?.value;
+  const permitFee = (_pRaw !== '' && _pRaw != null && isFinite(parseFloat(_pRaw))) ? parseFloat(_pRaw) : defaultPermitFee(q); // honors a deliberate 0
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
   const installOverride = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
   const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
@@ -6206,7 +6465,7 @@ function _onQQChange_CircuitReplacement(qid) {
   const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || 0; // no permit by default
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
@@ -6280,9 +6539,10 @@ function _onQQChange_PanelReplacement(qid) {
   const afciCount = upgradeAFCI ? (isNaN(afciCountRaw) ? breakerCount : Math.max(0, Math.min(breakerCount, afciCountRaw))) : 0;
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 30) / 30) * 80;
+  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
-  const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || (q.specialJurisdiction ? 500 : (q.source==='Qmerit' ? 250 : 200));
+  const _pRaw = document.getElementById('qq-permit')?.value;
+  const permitFee = (_pRaw !== '' && _pRaw != null && isFinite(parseFloat(_pRaw))) ? parseFloat(_pRaw) : defaultPermitFee(q); // honors a deliberate 0
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
   const installOverride = installOverrideRaw!=='' && installOverrideRaw!=null ? parseFloat(installOverrideRaw) : null;
   const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
@@ -6669,7 +6929,7 @@ function renderDetailedQuoteForm(q){
     <div class="qq-section">
       <div class="qq-title">Permit</div>
       <div class="frow2">
-        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${(typeof q.permitFee === 'number') ? q.permitFee : (((typeof getJobType==='function' && getJobType(q.jobType))||{}).noPermit ? 0 : (q.source==='Qmerit' ? 250 : 200))}" oninput="onDQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Permit Fee ($)</div><input class="fi" type="number" id="dq-permit" value="${(typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (((typeof getJobType==='function' && getJobType(q.jobType))||{}).noPermit))) ? q.permitFee : defaultPermitFee(q)}" oninput="_permitTouched('${q.id}');onDQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Jurisdiction</div><input class="fi" value="${q.jurisdiction||'Standard'}" readonly style="opacity:0.7"></div>
       </div>
       ${q.specialJurisdiction?`<div class="flag-banner" style="margin-top:8px">⚠ ${q.jurisdiction} — in-person inspection required</div>`:''}
@@ -6743,9 +7003,9 @@ function _renderPreInstallSection(q) {
   const muReason = _MU_REQUIRED_JOB_TYPES.includes(q.jobType)
     ? 'always required for new services / service upgrades (ground rods)'
     : 'auto-detected from scope';
-  // Treat undefined as auto-detected default; once user toggles it explicitly,
-  // the explicit value wins.
-  const muChecked = (q.requiresMissUtility !== undefined) ? !!q.requiresMissUtility : muAuto;
+  // Auto-detected default; once the user toggles it explicitly
+  // (_muSetByUser), the explicit value wins.
+  const muChecked = q._muSetByUser ? !!q.requiresMissUtility : _autoDetectMissUtility(q);
   return `<div style="margin-top:14px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r)">
     <div style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Pre-Install Action Items</div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:10px;line-height:1.5">When this quote is approved, tasks are auto-created for these so they don't slip through. Heads-up: a task only fires once per quote.</div>
@@ -6761,7 +7021,7 @@ function _renderPreInstallSection(q) {
 
 function _onDQMissUtilityChange(qid, checked) {
   const q = getQuote(qid); if (!q) return;
-  upsertQuote({ ...q, requiresMissUtility: !!checked });
+  upsertQuote({ ...q, requiresMissUtility: !!checked, _muSetByUser: true });
 }
 function _onDQSpecialMaterialsChange(qid, value) {
   const q = getQuote(qid); if (!q) return;
@@ -6936,9 +7196,11 @@ function onDQChange(qid){
     return isNaN(n) ? fallback : n;
   };
   const _jtDQ = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
-  const _permitFallback = (typeof q.permitFee === 'number')
+  // Saved $0 only honored for noPermit types — heal $0 on permit-required
+  // jobs back to the type default (2026-06-12).
+  const _permitFallback = (typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (_jtDQ && _jtDQ.noPermit)))
     ? q.permitFee
-    : ((_jtDQ && _jtDQ.noPermit) ? 0 : (q.source==='Qmerit'?250:200));
+    : defaultPermitFee(q);
   const laborHours = _readNum('dq-hours', q.laborHours||0);
   const laborRate  = _readNum('dq-rate',  q.laborRate||160);
   const permitFee  = _readNum('dq-permit', _permitFallback);
@@ -7043,6 +7305,56 @@ function calcQuoteTotals(q){
     ccFee, achFee, cashFee,
     ccTotal, achTotal, cashTotal
   };
+}
+
+// ── 15% MINIMUM MARGIN FLOOR (2026-06-12) ──
+// No quote may go out below 15% estimated gross margin. Admins (Jonathan,
+// Sherri) can override per-quote with a recorded reason. Enforced at the
+// send-email and mark-delivered gates — never blocks editing or saving.
+// Only computable for DETAILED quotes (incl. AI drafts): Quick Quote rates
+// are pre-engineered with margin built in and carry no raw line costs.
+const MARGIN_FLOOR_PCT = 15;
+function calcQuoteCostBasis(q){
+  if(!q || q.type==='quick') return null;
+  if(!(q.lines||[]).length && !(parseFloat(q.laborHours)||0)) return null;
+  let cost=0;
+  for(const ln of (q.lines||[])) cost += (parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0);
+  // Materials allowance: conservative — assume it gets fully spent at cost.
+  cost += (q.matAllowance||0);
+  // Internal labor cost: crew ≈ $65/hr (licensed $40 + apprentice $25) when
+  // billing the $160 crew rate; ≈ $40/hr when billing the $100 solo rate.
+  const rate=parseFloat(q.laborRate)||160;
+  cost += (parseFloat(q.laborHours)||0) * (rate<=100 ? 40 : 65);
+  // Rentals pass through at cost (also included in revenue — cancels out).
+  for(const r of (q.rentals||[])) cost += (parseFloat(r.cost)||0);
+  return cost;
+}
+function calcQuoteMarginPct(q){
+  const cost=calcQuoteCostBasis(q);
+  if(cost==null) return null;
+  const t=calcQuoteTotals(q);
+  // Revenue basis: L&M after discount. Permit + Qmerit fee are pass-throughs
+  // (revenue == cost) so they cancel out of the margin either way.
+  const rev=(t.laborAndMaterials||0)-(t.veteranDiscount||0);
+  if(rev<=0) return null;
+  return Math.round(((rev-cost)/rev)*1000)/10;
+}
+function marginFloorCheck(q){
+  const pct=calcQuoteMarginPct(q);
+  return { pct, below: pct!=null && pct<MARGIN_FLOOR_PCT, overridden: !!(q&&q.marginOverride) };
+}
+function enforceMarginFloor(q){
+  const chk=marginFloorCheck(q);
+  if(!chk.below || chk.overridden) return true;
+  if(S.user?.role!=='admin'){
+    alert(`This quote's estimated gross margin is ${chk.pct}% — below the ${MARGIN_FLOOR_PCT}% floor. An admin (Jonathan or Sherri) must override before it can be sent.`);
+    return false;
+  }
+  const reason=prompt(`This quote's estimated gross margin is ${chk.pct}% — below the ${MARGIN_FLOOR_PCT}% floor.\n\nTo send it anyway, enter a brief reason for the override:`);
+  if(reason==null || !reason.trim()) return false;
+  upsertQuote({...getQuote(q.id), marginOverride:{by:(S.user?.name||S.user?.email||'admin'), at:new Date().toISOString(), reason:reason.trim(), marginPct:chk.pct}});
+  toast('Margin floor overridden — recorded on the quote','warning');
+  return true;
 }
 
 // ── DEPOSIT / PAYMENT SCHEDULE ──
@@ -7237,11 +7549,21 @@ function renderMarginBox(q,totals,isQmerit){
   const net=(totals.laborAndMaterials||0)-(isQmerit?totals.qmeritFee||0:0);
   const royaltyFlag=q.jobType==='ev-residential';
   const royalty=royaltyFlag?totals.quoteTotal*0.03:0;
+  // Gross-margin estimate vs the 15% floor (detailed quotes only — Quick
+  // Quote rates have margin pre-engineered, so no line-cost basis exists).
+  const _mchk=(typeof marginFloorCheck==='function')?marginFloorCheck(q):{pct:null};
+  let marginRow='';
+  if(_mchk.pct!=null){
+    const ok=!_mchk.below;
+    marginRow=`<div class="margin-row" style="font-weight:600;color:${ok?'var(--green)':'var(--red)'}"><span>${ok?'✓':'⚠'} Est. Gross Margin</span><span class="margin-num">${_mchk.pct}% ${ok?'':'(below '+MARGIN_FLOOR_PCT+'% floor)'}</span></div>`
+      + (_mchk.overridden?`<div class="margin-row" style="color:var(--amber);font-size:11px"><span>Floor overridden by ${q.marginOverride.by}</span><span class="margin-num" title="${(q.marginOverride.reason||'').replace(/"/g,'&quot;')}">${(q.marginOverride.at||'').slice(0,10)}</span></div>`:'');
+  }
   return `<div class="margin-box">
     <div class="margin-title">🔒 Internal Margin (Admin Only)</div>
     <div class="margin-row"><span>Labor &amp; Materials</span><span class="margin-num">${fmt$(totals.laborAndMaterials)}</span></div>
     ${isQmerit?`<div class="margin-row" style="color:var(--amber)"><span>− Qmerit Admin Fee</span><span class="margin-num">${fmt$(totals.qmeritFee)}</span></div>`:''}
     <div class="margin-row" style="border-top:1px solid rgba(46,204,113,0.3);padding-top:5px;margin-top:3px;font-weight:600;color:var(--text-primary)"><span>Net Margin Est.</span><span class="margin-num">${fmt$(net)}</span></div>
+    ${marginRow}
     ${royaltyFlag?`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>⚠ 3% Qmerit Royalty (res. EV)</span><span class="margin-num">~${fmt$(royalty)}</span></div>`:''}
   </div>`;
 }
@@ -7299,13 +7621,39 @@ function saveQuoteChanges(qid){
     toast('Quote saved','success');
   }
 }
-function markQuoteStatus(qid,s){const q=getQuote(qid);if(!q)return;upsertQuote({...q,status:s});toast('Quote marked as '+s,'success');renderQuoteBuilder(qid);}
+function markQuoteStatus(qid,s){
+  const q=getQuote(qid);if(!q)return;
+  // Margin floor gate — 'delivered' is the point of no return for pricing.
+  if(s==='delivered' && !enforceMarginFloor(q)) return;
+  // Manual "Mark Approved" = phone/verbal acceptance (2026-06-12). Stamp the
+  // customer action so the kanban ✓ Accepted chip and lead-detail banner show
+  // exactly as if the customer had clicked the email button. Never clobbers a
+  // server-recorded action (email-button accepts win).
+  const extra = (s==='approved' && !q.customerActionAt)
+    ? { customerActionAt:new Date().toISOString(), customerActionAction:'accepted', customerActionSource:'verbal-manual' }
+    : {};
+  upsertQuote({...getQuote(qid),status:s,...extra});toast('Quote marked as '+s,'success');renderQuoteBuilder(qid);
+  // Quote status is on Sherri's info form (incl. 'invoiced') — refresh it.
+  if (typeof _regenLeadInfoForm === 'function' && q.leadId) _regenLeadInfoForm(q.leadId);
+  // Offer to advance the pipeline stage to match — manual accepts don't get
+  // the server-side stage advance that email-button accepts get.
+  if(s==='approved'){
+    const lead=getLead(q.leadId);
+    const pre=['lead-received','info-gathering','estimating','quote-delivered'];
+    if(lead && pre.includes(lead.stage) && confirm('Also move the job to the "Quote Approved" pipeline stage?')){
+      moveLeadToStage(lead.id,'quote-approved');
+    }
+  }
+}
 
 // Holds the pending email payload while the preview modal is open
 let _pendingEmail = null;
 
 async function emailQuote(qid){
-  const q=getQuote(qid);if(!q)return;
+  let q=getQuote(qid);if(!q)return;
+  // 15% margin floor gate (admin override allowed, recorded on the quote).
+  if(!enforceMarginFloor(q)) return;
+  q=getQuote(qid); // re-read in case the override stamped the quote
   // Defensive guard — the button is hidden for these sources but if it's
   // triggered another way (legacy keybind, stale render, console, etc.)
   // confirm before opening the modal so we don't accidentally bypass the
@@ -7688,6 +8036,9 @@ async function sendQuoteEmail(){
   // Generate a PDF for each checked quote.
   const attachments = [];
   let firstFilename = '';
+  // Track the PDFs so we can also save them to the customer's SharePoint
+  // folder after the email send succeeds. Each entry: { leadId, filename, b64 }.
+  const pdfsForSPSave = [];
   for (const cid of checkedIds) {
     const cq = getQuote(cid); if (!cq) continue;
     const clead = getLead(cq.leadId);
@@ -7701,6 +8052,9 @@ async function sendQuoteEmail(){
       contentType: 'application/pdf',
       contentBytes: b64
     });
+    if (clead && cq.leadId) {
+      pdfsForSPSave.push({ leadId: cq.leadId, filename: res.filename, b64 });
+    }
     if (!firstFilename) firstFilename = res.filename;
   }
   // Append any user-selected files from the custom-email uploader. These are
@@ -7770,6 +8124,7 @@ async function sendQuoteEmail(){
             subject,
             body: { contentType: 'HTML', content: htmlContent },
             toRecipients: [{ emailAddress: { address: toEmail } }],
+            ccRecipients: _buildCCRecipients(),
             attachments
           },
           saveToSentItems: true
@@ -7779,6 +8134,27 @@ async function sendQuoteEmail(){
         ? '✅ Courtesy email sent (no PDF attached)'
         : `✅ Email sent with ${attachments.length} PDF${attachments.length>1?'s':''} attached!`,
         'success');
+      // Fire-and-forget: also save each quote PDF to the customer's SharePoint
+      // folder under Sales and Marketing/Active Leads/{Prefix} - {LastName}
+      // Project/. Gives Sherri the PDF without asking her to use the CRM.
+      if (pdfsForSPSave.length > 0 && typeof _saveQuotePDFToCustomerFolder === 'function') {
+        const _regenLeads = new Set();
+        for (const pdf of pdfsForSPSave) {
+          try {
+            // Convert base64 → Uint8Array for the Graph PUT body
+            const binStr = atob(pdf.b64);
+            const bytes = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+            _saveQuotePDFToCustomerFolder(pdf.leadId, bytes, pdf.filename)
+              .catch(e => console.warn('[GK] SP PDF save failed for', pdf.filename, e));
+            _regenLeads.add(pdf.leadId);
+          } catch (e) {
+            console.warn('[GK] Failed to decode PDF for SP save:', e);
+          }
+        }
+        // Quote just went out — refresh the Job Info form alongside the PDF.
+        if (typeof _regenLeadInfoForm === 'function') _regenLeads.forEach(id => _regenLeadInfoForm(id));
+      }
       document.getElementById('email-modal').classList.remove('show');
       _pendingEmail = null;
       returnToLead();
@@ -9443,7 +9819,7 @@ function _renderPreInstallStrip(lead) {
   const muTask   = tasks.find(t => t.id === 'task-mu-'  + lead.id);
   const matTask  = tasks.find(t => t.id === 'task-mat-' + lead.id);
 
-  const muRequired   = quotes.some(q => q.requiresMissUtility);
+  const muRequired   = leadRequiresMissUtility(lead, quotes);
   const matsRequired = quotes.some(q => (q.specialMaterials || '').trim());
 
   const states = [];
@@ -9468,13 +9844,15 @@ function _renderPreInstallStrip(lead) {
     ? { state: 'done',    icon: '✓', label: 'Permit',  meta: (ms.permitReceived.date||'').slice(0,10), click: `clickPermitChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
     : { state: 'pending', icon: '·', label: 'Permit',  meta: '', click: `clickPermitChip('${lead.id}')`, tip: 'Click to upload permit doc or mark received without doc.' });
 
-  // Miss Utility — only show if any quote requires it.
+  // Miss Utility — auto-detected from quotes/scope, or manually flagged.
+  // Click on "MU N/A" flags it manually (for jobs quoted outside the CRM —
+  // Sherri's Excel quotes have no CRM quote to auto-detect from).
   if (!muRequired) {
-    states.push({ state: 'na', icon: '—', label: 'MU N/A', meta: '', tip: 'No quote on this job requires Miss Utility.' });
+    states.push({ state: 'na', icon: '—', label: 'MU N/A', meta: '', click: `flagMissUtility('${lead.id}')`, tip: 'Not auto-detected. Click to flag manually — e.g., when the quote was done outside the CRM. Creates the 811 task and emails Sherri.' });
   } else {
     states.push(muTask?.status === 'done'
       ? { state: 'done',    icon: '✓', label: 'MU Called', meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Auto-flips when the Miss Utility task is marked done.' }
-      : { state: 'pending', icon: '·', label: 'MU Call',   meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Click to open the Miss Utility task. Created automatically on quote approval.' });
+      : { state: 'pending', icon: '·', label: 'MU Call',   meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Click to open the Miss Utility task — or create it now if it hasn\'t fired yet.' });
   }
 
   // Materials Ordered — only show if any quote has special materials.
@@ -9567,7 +9945,14 @@ function clickMissUtilityChip(leadId) {
   if (muTask) {
     openTaskDetail(muTask.id);
   } else {
-    toast('No Miss Utility task yet — auto-created when the quote is approved.', 'info');
+    // Required but no task yet (quote not approved, or detection just turned
+    // on) — offer to create it now instead of making the user wait.
+    const lead = getLead(leadId);
+    if (lead && confirm('No 811 task exists yet (it normally fires on quote approval).\n\nCreate it now and email Sherri?')) {
+      const created = _createMissUtilityTask(lead, '', 'This job');
+      toast(created ? '811 task created + Sherri emailed' : '811 task already exists', 'success');
+      if (typeof openJobDetail === 'function' && S.jobDetailId === leadId) openJobDetail(leadId);
+    }
   }
 }
 
@@ -9715,6 +10100,7 @@ function checkAutoArchive(leadId) {
       if (!arr[idx].milestones.archived) arr[idx].milestones.archived = {};
       arr[idx].milestones.archived.date = new Date().toISOString().slice(0,10);
       saveLeads(arr);
+      if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // info form shows Archived
       toast('Job auto-archived — inspection passed + payment received ✓', 'success');
       // update stage selector in header if visible
       const ss = document.getElementById('jd-stage-sel');
@@ -9731,6 +10117,7 @@ function updateJobStage(leadId, newStage) {
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+  if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
   // update chips inline — preserve the Lost chip if this lead is marked lost
   const chipsEl = document.getElementById('jd-stage-chips');
   if (chipsEl) {
@@ -10628,7 +11015,7 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">Job Type</div><div class="jd-fv">${typeChip(lead.jobType)}</div></div>
         <div class="jd-f"><div class="jd-fl">Lead Source</div><div class="jd-fv">${sourceChip(lead.source)}</div></div>
         <div class="jd-f"><div class="jd-fl">Date Received</div><div class="jd-fv" style="font-size:12px">${lead.createdAt?.slice(0,10)||'—'}</div></div>
-        <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(lead.permitFee || (lead.source==='Qmerit'?250:200))}</div></div>
+        <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(Math.max(lead.permitFee || 0, defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction })))}</div></div>
         <div class="jd-f"><div class="jd-fl">Info Complete</div><div class="jd-fv">${lead.infoComplete?`<span class="chip chip-ok">✓ Yes</span>`:`<span class="chip chip-warn">Pending</span>`}</div></div>
       </div>
       ${lead.description?`<div class="jd-f" style="margin-top:8px"><div class="jd-fl">Description</div><div class="jd-fv" style="font-size:12.5px;white-space:pre-wrap;color:var(--text-secondary)">${lead.description}</div></div>`:''}
@@ -10989,7 +11376,7 @@ function renderJobDetail(id) {
   }
 
   msHtml += msGrp('Permitting');
-  msHtml += msRow('permitApplied',`Permit applied — ${lead.jurisdiction||'Standard'} (${fmt$(lead.permitFee || (lead.source==='Qmerit'?250:200))})`,{date:true,text:true,textKey:'number',textPlaceholder:'Permit #'});
+  msHtml += msRow('permitApplied',`Permit applied — ${lead.jurisdiction||'Standard'} (${fmt$(Math.max(lead.permitFee || 0, defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction })))})`,{date:true,text:true,textKey:'number',textPlaceholder:'Permit #'});
   msHtml += msRow('permitReceived','Permit received',{date:true});
 
   msHtml += msGrp('Scheduling Prerequisites');
@@ -13328,6 +13715,22 @@ function getPrefs() {
   try { return JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'); } catch { return {}; }
 }
 function savePrefs(p) { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); }
+
+// ── CC RECIPIENTS FOR OUTBOUND CUSTOMER EMAILS ──
+// Sherri (or whoever the user designates) gets CC'd on every customer-facing
+// email the CRM sends — quote sends, scheduling confirmations, consent emails.
+// This gives the office visibility into outbound customer communication
+// without requiring Sherri to use the CRM herself. Default: Sherri's address.
+// Configurable in Settings → Pricing & Tax → Email CC. Set to empty string
+// to disable CC entirely.
+const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
+function _buildCCRecipients() {
+  const raw = (getPrefs().ccOutboundEmail);
+  // Treat undefined as "use default". Treat empty string as "user explicitly disabled".
+  const email = (raw === undefined) ? DEFAULT_CC_OUTBOUND_EMAIL : (raw || '').trim();
+  if (!email || !email.includes('@')) return [];
+  return [{ emailAddress: { address: email } }];
+}
 function saveSchedSettings() {
   const p = getPrefs();
   const newHomeBase = document.getElementById('set-homebase')?.value.trim();
@@ -16285,7 +16688,8 @@ async function _executeDayConfirmations() {
           message: {
             subject,
             body: { contentType: 'HTML', content: html },
-            toRecipients: [{ emailAddress: { address: customerEmail } }]
+            toRecipients: [{ emailAddress: { address: customerEmail } }],
+            ccRecipients: _buildCCRecipients()
           },
           saveToSentItems: true
         })
@@ -16398,6 +16802,8 @@ function commitSchedDay(date) {
     arr[idx].updatedAt = new Date().toISOString();
   });
   saveLeads(arr);
+  // Refresh Job Info forms — install dates just landed.
+  if (typeof _regenLeadInfoForm === 'function') plan.scheduled.forEach(s => { if (s.lead) _regenLeadInfoForm(s.lead.id); });
   toast(`${plan.scheduled.length} job(s) committed for ${date}`, 'success');
   // Force re-pull from getSchedulableJobs (those leads should drop out).
   plan.built = false;
@@ -16451,6 +16857,8 @@ function markDayScheduled() {
   });
   saveLeads(arr);
   _persistSched();
+  // Refresh Job Info forms for everything scheduled on this plan.
+  if (typeof _regenLeadInfoForm === 'function') _sched.scheduled.forEach(s => { if (s.lead) _regenLeadInfoForm(s.lead.id); });
   const setN = inPlanIds.size;
   let msg = `${setN} job${setN===1?'':'s'} marked as scheduled`;
   if (removedCount) msg += ` · ${removedCount} previously-scheduled job${removedCount===1?'':'s'} removed from this date`;
@@ -17858,6 +18266,368 @@ async function _resizeAndConvertImage(file, dataUrl, opts) {
 //
 // Token freshness: silent-acquires a fresh Graph token before upload so a
 // stale _gToken doesn't 401 us.
+// ── CUSTOMER SHAREPOINT FOLDER BRIDGE ─────────────────────────────────────
+// Sherri keeps customer files in Sales and Marketing/Active Leads/{Prefix} -
+// {LastName} Project/. When the CRM creates a new lead, mirror that folder
+// structure automatically so she sees everything she's used to without
+// having to use the CRM. Templates from "Old estimate and quote docs" are
+// copied into the new folder with customer fields pre-populated via SheetJS.
+//
+// Prefix mapping based on lead.source:
+//   Qmerit    → "Qmerit"   + Qmerit templates
+//   Electrum  → "Electrum" + no templates (their platform owns estimating)
+//   Treehouse → "Treehouse"+ no templates (accept/decline only)
+//   anything  → "Website"  + standard templates
+const SP_ACTIVE_LEADS_PATH = 'Sales and Marketing/Active Leads';
+const SP_TEMPLATES_PATH    = 'CEO/CRM software/Old estimate and quote docs';
+function _spFolderPrefixForSource(source) {
+  const s = String(source || '').toLowerCase();
+  if (s === 'qmerit')    return 'Qmerit';
+  if (s === 'electrum')  return 'Electrum';
+  if (s === 'treehouse') return 'Treehouse';
+  return 'Website';
+}
+function _buildSPLeadFolderName(lead, customer) {
+  if (!customer) return null;
+  const last = (customer.lastName || customer.businessName || '').trim();
+  if (!last) return null;
+  const prefix = _spFolderPrefixForSource(lead && lead.source);
+  return `${prefix} - ${last} Project`;
+}
+function _shouldCopyTemplates(source) {
+  // Electrum and Treehouse don't use our estimating sheets — the platform
+  // handles it. Copy templates for everything else.
+  const s = String(source || '').toLowerCase();
+  return s !== 'electrum' && s !== 'treehouse';
+}
+// Encode a path segment-by-segment so spaces and other special chars work
+// (encodeURI breaks slashes, encodeURIComponent breaks them too; the
+// segment-wise approach preserves slashes as path separators).
+function _spEncodePath(path) {
+  return path.split('/').map(s => encodeURIComponent(s)).join('/');
+}
+
+async function _spCreateFolder(parentPath, folderName) {
+  if (!_gToken || !_spDrive) return null;
+  const url = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(parentPath)}:/children`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + _gToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: folderName,
+      folder: {},
+      '@microsoft.graph.conflictBehavior': 'fail'  // don't clobber existing
+    })
+  });
+  if (resp.status === 409) return { existed: true, name: folderName };  // already there
+  if (!resp.ok) {
+    const t = await resp.text().catch(()=>'');
+    throw new Error(`Folder create ${resp.status}: ${t.slice(0,200)}`);
+  }
+  const item = await resp.json();
+  return { existed: false, name: folderName, id: item.id, webUrl: item.webUrl };
+}
+
+// Read a template, populate the customer fields, write it into the target
+// folder. Returns the new file's URL or null on failure. Uses SheetJS which
+// is already loaded for the materials import flow.
+async function _spCopyTemplateWithFill(templateFilename, targetFolderPath, newFilename, fillValues) {
+  if (!_gToken || !_spDrive) return null;
+  if (typeof XLSX === 'undefined') {
+    console.warn('[GK] XLSX (SheetJS) not loaded — falling back to plain copy');
+  }
+  // 1. Download template
+  const tplUrl = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(SP_TEMPLATES_PATH + '/' + templateFilename)}:/content`;
+  const tplResp = await fetch(tplUrl, { headers: { 'Authorization': 'Bearer ' + _gToken }});
+  if (!tplResp.ok) throw new Error(`Template download ${tplResp.status} for ${templateFilename}`);
+  const tplBytes = await tplResp.arrayBuffer();
+
+  let outBytes = tplBytes;
+  // 2. Pre-populate cells (only the customer-facing estimate has these fields)
+  if (typeof XLSX !== 'undefined' && fillValues && Object.keys(fillValues).length > 0) {
+    try {
+      const wb = XLSX.read(tplBytes, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (ws) {
+        for (const [coord, value] of Object.entries(fillValues)) {
+          if (value == null || value === '') continue;
+          ws[coord] = { t: 's', v: String(value) };
+        }
+        outBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      }
+    } catch (e) {
+      console.warn('[GK] XLSX modify failed, uploading template unchanged:', e);
+      outBytes = tplBytes;
+    }
+  }
+  // 3. Upload to new location
+  const destPath = targetFolderPath + '/' + newFilename;
+  const uploadUrl = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(destPath)}:/content`;
+  const upResp = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Authorization': 'Bearer ' + _gToken, 'Content-Type': 'application/octet-stream' },
+    body: outBytes
+  });
+  if (!upResp.ok) {
+    const t = await upResp.text().catch(()=>'');
+    throw new Error(`Template upload ${upResp.status}: ${t.slice(0,200)}`);
+  }
+  const result = await upResp.json();
+  return result.webUrl || null;
+}
+
+// Public entry point: ensure a lead's customer folder exists in SharePoint
+// with estimate templates pre-populated. Idempotent — if the folder already
+// exists, it's left alone (we don't re-copy templates Sherri may have already
+// edited). Returns { folderPath, created, templatesCopied } on success.
+// Fire-and-forget — never throws to the caller; logs to console + toast.
+async function _ensureSPLeadFolderForLead(leadId) {
+  try {
+    const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
+    if (!lead) return null;
+    const customer = lead.customerId ? getCustomer(lead.customerId) : null;
+    if (!customer) {
+      console.log('[GK] SP folder skipped — lead has no customer record:', leadId);
+      return null;
+    }
+    const folderName = _buildSPLeadFolderName(lead, customer);
+    if (!folderName) {
+      console.log('[GK] SP folder skipped — couldn\'t build name (no last name?):', leadId);
+      return null;
+    }
+    const targetFolderPath = SP_ACTIVE_LEADS_PATH + '/' + folderName;
+
+    // 1. Create folder (no-op if exists)
+    const folderResult = await _spCreateFolder(SP_ACTIVE_LEADS_PATH, folderName);
+    if (!folderResult) return null;
+    if (folderResult.existed) {
+      console.log('[GK] SP folder already exists:', folderName, '— skipping template copy');
+      return { folderPath: targetFolderPath, created: false, templatesCopied: 0 };
+    }
+
+    // 2. Write the Job Info form (2026-06-12 — replaces the old estimate /
+    //    worksheet template four-pack for ALL sources, per Jonathan).
+    //    The quote PDF itself is auto-saved here separately on email send.
+    try {
+      await _writeLeadInfoFormToSP(leadId);
+    } catch (e) {
+      console.warn('[GK] Info form write failed (folder still created):', e);
+    }
+
+    console.log(`[GK] SP folder created: ${folderName} (info form written)`);
+    return { folderPath: targetFolderPath, created: true };
+  } catch (e) {
+    console.warn('[GK] _ensureSPLeadFolderForLead failed:', e);
+    return null;
+  }
+}
+
+// Small helper for full name that doesn't crash if custFullName isn't defined yet
+function customFullNameSafe(c) {
+  if (!c) return '';
+  if (typeof custFullName === 'function') return custFullName(c);
+  return [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || c.businessName || '';
+}
+
+// Save a quote PDF into the lead's customer folder. Called from sendQuoteEmail
+// after the email send succeeds, so the PDF lands wherever Sherri can find it.
+// fileBlob: Blob or Uint8Array. filename: string with .pdf extension.
+async function _saveQuotePDFToCustomerFolder(leadId, fileBlob, filename) {
+  try {
+    if (!_gToken || !_spDrive) return null;
+    const lead = getLead(leadId);
+    if (!lead) return null;
+    const customer = lead.customerId ? getCustomer(lead.customerId) : null;
+    if (!customer) return null;
+    const folderName = _buildSPLeadFolderName(lead, customer);
+    if (!folderName) return null;
+    // Make sure the folder exists first.
+    await _ensureSPLeadFolderForLead(leadId);
+    const targetPath = SP_ACTIVE_LEADS_PATH + '/' + folderName + '/' + filename;
+    const url = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(targetPath)}:/content`;
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + _gToken, 'Content-Type': 'application/pdf' },
+      body: fileBlob
+    });
+    if (!resp.ok) {
+      const t = await resp.text().catch(()=>'');
+      throw new Error(`PDF upload ${resp.status}: ${t.slice(0,200)}`);
+    }
+    const result = await resp.json();
+    console.log('[GK] Quote PDF saved to SP customer folder:', targetPath);
+    return result.webUrl || null;
+  } catch (e) {
+    console.warn('[GK] _saveQuotePDFToCustomerFolder failed:', e);
+    return null;
+  }
+}
+
+// ── SHERRI'S JOB INFO FORM (2026-06-12) ──
+// One-page PDF written into the lead's Active Leads folder with everything
+// Sherri needs without opening the CRM: contact info, scope, panel/breaker,
+// permitting, Miss Utility, charger, billing/deposit, install date.
+// Customer-facing numbers only — NEVER margin or raw cost data.
+// Regenerated (same filename, overwritten) at: lead creation, quote send,
+// quote accept/approval, and scheduling commit.
+function _buildLeadInfoPdfDoc(lead, customer) {
+  const jsPDF = getPDFLib(); if (!jsPDF) return null;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const M = 48, W = 612 - M * 2;
+  let y = 54;
+  const line = (gap=12) => { y += gap; };
+  const section = (title) => {
+    y += 18;
+    doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(46,125,50);
+    doc.text(title.toUpperCase(), M, y);
+    doc.setDrawColor(46,125,50); doc.setLineWidth(0.75);
+    doc.line(M, y + 4, M + W, y + 4);
+    y += 18;
+  };
+  const row = (label, value, opts={}) => {
+    if (value == null || value === '') return;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(60,60,60);
+    doc.text(label, M, y);
+    doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+    doc.setTextColor(...(opts.color || [20,20,20]));
+    const wrapped = doc.splitTextToSize(String(value), W - 150);
+    doc.text(wrapped, M + 150, y);
+    y += 13 * wrapped.length;
+  };
+
+  const quotes = getQuotes().filter(q => q.leadId === lead.id && q.status !== 'declined');
+  const rank = { invoiced: 4, approved: 3, 'contingent-approved': 3, delivered: 2, draft: 1 };
+  const pq = quotes.slice().sort((a,b) =>
+    (rank[b.status]||0) - (rank[a.status]||0) ||
+    (new Date(b.updatedAt||0) - new Date(a.updatedAt||0))
+  )[0] || null;
+  const jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
+
+  // Header
+  doc.setFont('helvetica','bold'); doc.setFontSize(17); doc.setTextColor(46,125,50);
+  doc.text('GreenKey — Job Info Sheet', M, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120,120,120);
+  doc.text(`${lead.id} · Generated ${new Date().toLocaleString('en-US',{timeZone:'America/New_York',dateStyle:'medium',timeStyle:'short'})}`, M, y + 14);
+  y += 18;
+
+  section('Customer');
+  row('Name', customFullNameSafe(customer));
+  row('Phone', customer.phone || '');
+  row('Email', customer.email || '');
+  row('Site address', [lead.siteStreet, lead.siteCity, lead.siteState || 'VA', lead.siteZip].filter(Boolean).join(', '));
+
+  section('Job');
+  row('Source', lead.source || '');
+  row('Job type', jt ? jt.label : (lead.jobType || ''));
+  row('Stage', (typeof STAGE_MAP !== 'undefined' && STAGE_MAP[lead.stage]) ? STAGE_MAP[lead.stage].label : (lead.stage || ''));
+  const scope = (pq?.scope || lead.scopeOfWork || lead.description || '').trim();
+  row('Scope of work', scope.length > 700 ? scope.slice(0, 700) + '…' : scope);
+
+  section('Panel & Breaker');
+  const panelSum = leadPanelSummary(lead);
+  if (panelSum) row('Panel / breaker', panelSum);
+  else row('Panel / breaker', '⚠ NOT RECORDED — get make + breaker size before quoting/scheduling', { color: [200,120,0], bold: true });
+
+  section('Permitting');
+  if (jt && jt.noPermit) {
+    row('Permit', 'No permit required (replacement / energy-management work)');
+  } else {
+    row('Jurisdiction', lead.siteCity || '—');
+    const pf = (pq && typeof pq.permitFee === 'number') ? pq.permitFee
+             : (lead.source === 'Qmerit' ? (jt?.permitQmerit ?? 250) : (jt?.permitDefault ?? 200));
+    row('Permit fee', '$' + pf + (lead.permitFee === 500 || pf === 500 ? ' (special jurisdiction)' : ''));
+    if (lead.inspectionRequired) row('Inspection', 'IN-PERSON INSPECTION REQUIRED (Stafford / Spotsylvania)', { color: [200,60,40], bold: true });
+    if (lead.permitNumber) row('Permit #', lead.permitNumber);
+  }
+
+  section('Miss Utility (811)');
+  if (leadRequiresMissUtility(lead.id, quotes)) {
+    row('Locate required', 'YES — trenching / ground rods. Call 811 at least 3 BUSINESS DAYS before digging.', { color: [200,60,40], bold: true });
+  } else {
+    row('Locate required', 'Not indicated by current scope (re-check if scope changes)');
+  }
+
+  const ci = lead.chargerInfo || {};
+  if (['ev-residential','nema-1450','v2h-system','energy-management'].includes(lead.jobType) || ci.make) {
+    section('Charger');
+    row('Charger', [ci.make, ci.model, ci.plugType ? '(' + ci.plugType + ')' : ''].filter(Boolean).join(' ') || 'Not confirmed yet');
+  }
+
+  section('Billing & Invoicing');
+  const isPlatform = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(lead.source);
+  const isReferrer = pq && (typeof isQuoteBilledToReferrer === 'function') && isQuoteBilledToReferrer(pq);
+  if (isPlatform) {
+    row('Model', `${lead.source} bills the customer — NO GreenKey invoice, NO deposit. GreenKey is paid by ${lead.source}.`);
+    if (pq) row('Quote total', fmt$(pq.quoteTotal || 0) + ' (uploaded to platform)');
+  } else if (isReferrer) {
+    row('Model', 'Billed to referrer (B2B) — Net 30 invoice to the referrer, no deposit, no card buffer.');
+    if (pq) row('Quote total', fmt$(pq.quoteTotal || 0));
+  } else if (pq) {
+    const t = calcQuoteTotals(pq);
+    row('Model', 'Direct customer pay — invoice at completion, before final inspection.');
+    row('Quote total (CC)', fmt$(t.ccTotal || t.quoteTotal || 0));
+    if (t.achTotal !== t.ccTotal) row('ACH price', fmt$(t.achTotal));
+    if (t.cashTotal !== t.ccTotal) row('Cash/Zelle/check', fmt$(t.cashTotal));
+    const dep = (typeof calcDepositAmount === 'function') ? calcDepositAmount(t.quoteTotal) : 0;
+    row('Deposit due upfront', dep > 0 ? fmt$(dep) : 'None (under $1,000)');
+    row('Quote status', pq.status);
+  } else {
+    row('Model', 'Direct customer pay — no quote built yet.');
+  }
+
+  section('Schedule');
+  const inst = lead.milestones?.installScheduled;
+  row('Install date', inst?.date ? inst.date + (inst.techId ? ' (tech assigned)' : '') : 'Not scheduled yet');
+
+  // Footer
+  doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(150,150,150);
+  doc.text('Auto-generated by GreenKey CRM. This file is overwritten when the job changes (quote sent / accepted / scheduled) — don\'t edit it directly.', M, 760, { maxWidth: W });
+  return doc;
+}
+
+// Generate + upload the info form into the lead's Active Leads folder.
+// Overwrites "{LastName} - Job Info.pdf" in place. Never throws.
+async function _writeLeadInfoFormToSP(leadId) {
+  try {
+    if (!_gToken || !_spDrive) return null;
+    const lead = getLead(leadId); if (!lead) return null;
+    const customer = lead.customerId ? getCustomer(lead.customerId) : null;
+    if (!customer) return null;
+    const folderName = _buildSPLeadFolderName(lead, customer);
+    if (!folderName) return null;
+    const doc = _buildLeadInfoPdfDoc(lead, customer);
+    if (!doc) return null;
+    // Ensure the folder exists (idempotent), then PUT the PDF.
+    try { await _spCreateFolder(SP_ACTIVE_LEADS_PATH, folderName); } catch (_) {}
+    const last = (customer.lastName || customer.businessName || '').trim();
+    const targetPath = `${SP_ACTIVE_LEADS_PATH}/${folderName}/${last} - Job Info.pdf`;
+    const bytes = doc.output('arraybuffer');
+    const url = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(targetPath)}:/content`;
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + _gToken, 'Content-Type': 'application/pdf' },
+      body: bytes
+    });
+    if (!resp.ok) throw new Error('Info form upload ' + resp.status);
+    console.log('[GK] Job Info form written:', targetPath);
+    return true;
+  } catch (e) {
+    console.warn('[GK] _writeLeadInfoFormToSP failed:', e);
+    return null;
+  }
+}
+
+// Debounced fire-and-forget regenerate — safe to call from any hook.
+const _infoFormTimers = {};
+function _regenLeadInfoForm(leadId) {
+  if (!leadId) return;
+  clearTimeout(_infoFormTimers[leadId]);
+  _infoFormTimers[leadId] = setTimeout(() => {
+    delete _infoFormTimers[leadId];
+    _writeLeadInfoFormToSP(leadId);
+  }, 1500);
+}
+
 async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
   if (!_spDrive) return null;
 
@@ -18253,12 +19023,19 @@ async function _writeBackupSnapshot() {
       console.log('[GK] Backup skipped: data looks empty (leads=' + leadCount + ', customers=' + custCount + ')');
       return null;
     }
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const now = new Date();
+    const ts = now.toISOString().replace(/[:.]/g, '-');
     const filename = `gk_backup_${ts}.json`;
     const filePath = `${SP_BACKUP_DIR}/${filename}`;
+    // Add a human-readable local-time label alongside the UTC timestamp. The
+    // file system + the ISO timestamp are still UTC (which is correct for a
+    // multi-device system), but a reader skimming the meta block sees the
+    // local time too so the filename's "T20:25Z" isn't mistaken for 8pm.
+    const localLabel = now.toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'long' });
     const body = JSON.stringify({
       _meta: {
-        timestamp: new Date().toISOString(),
+        timestamp: now.toISOString(),
+        timestampLocal: localLabel,
         source: 'auto-backup',
         leadCount, customerCount: custCount,
         userEmail: S.user?.username || S.user?.email || ''
@@ -19464,7 +20241,8 @@ Class A Electrical Contractor · Richmond, VA · Licensed & Insured`;
           message: {
             subject,
             body: { contentType: 'HTML', content: htmlBody },
-            toRecipients: [{ emailAddress: { address: ce.toEmail } }]
+            toRecipients: [{ emailAddress: { address: ce.toEmail } }],
+            ccRecipients: _buildCCRecipients()
           },
           saveToSentItems: true
         })
