@@ -8,8 +8,9 @@
   :root{
     --green:#2e7d32; --green-dim:#e8f5e9; --bg:#f4f6f8; --surface:#ffffff;
     --border:#d7dde3; --text:#1a1f2a; --muted:#5e6a78; --shadow:0 1px 3px rgba(0,0,0,.12);
-    --feed:#f5b301; --trench:#e6552e; --stand:#2563eb; --pedestal:#2e7d32;
+    --lateral:#f5b301; --branch:#0ea5e9; --trench:#e6552e; --stand:#2563eb; --pedestal:#2e7d32;
     --bollard:#f5b301; --panel:#7c3aed; --transformer:#0891b2; --disconnect:#db2777; --stall:#ea7317;
+    --ada:#1d4ed8; --sel:#e6552e;
   }
   *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif}
   body{background:var(--bg);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
@@ -39,10 +40,10 @@
   .swatch.dash{height:0;border-top:3px dashed var(--trench);background:none;border-radius:0}
   .swatch.dot{border-radius:50%}
   .canvas-wrap{flex:1;position:relative;overflow:hidden;background:#dfe4e8;display:flex;align-items:center;justify-content:center}
-  #stage{position:relative;box-shadow:0 2px 16px rgba(0,0,0,.25);background:#c9d1d8}
-  #base{display:block;user-select:none;-webkit-user-drag:none}
-  #draw{position:absolute;top:0;left:0;cursor:crosshair}
-  .empty-hint{position:absolute;color:var(--muted);font-size:14px;text-align:center;padding:30px;line-height:1.6}
+  #stage{position:relative;box-shadow:0 2px 16px rgba(0,0,0,.25);background:#c9d1d8;overflow:hidden}
+  #base{display:block;user-select:none;-webkit-user-drag:none;position:absolute;top:0;left:0}
+  #draw{position:absolute;top:0;left:0}
+  .empty-hint{position:absolute;color:var(--muted);font-size:14px;text-align:center;padding:30px;line-height:1.6;left:50%;top:50%;transform:translate(-50%,-50%);width:80%}
   #zoomctl{position:absolute;bottom:14px;right:14px;display:flex;flex-direction:column;gap:5px;z-index:4}
   #zoomctl button{width:34px;height:34px;border-radius:7px;border:1px solid var(--border);background:var(--surface);font-size:18px;cursor:pointer;box-shadow:var(--shadow)}
   .scale-badge{position:absolute;bottom:14px;left:14px;background:rgba(255,255,255,.92);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11.5px;color:var(--muted);z-index:4}
@@ -55,6 +56,17 @@
   input.txt,select.txt{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none}
   input.txt:focus,select.txt:focus{border-color:var(--green)}
   .pill{display:inline-block;font-size:10.5px;background:var(--green-dim);color:var(--green);padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px}
+  .swatch.ada{background:rgba(29,78,216,.28);border:2px solid var(--ada);border-radius:2px}
+  .run-card{border:1px solid var(--border);border-radius:8px;padding:9px;margin-bottom:8px}
+  .run-card .rc-top{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;margin-bottom:6px}
+  .run-card .rc-x{cursor:pointer;color:var(--muted);font-weight:700;padding:0 4px;line-height:1}
+  .run-card .rc-x:hover{color:var(--sel)}
+  label.mini{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:2px;font-weight:600}
+  select.sm,input.sm{width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px;outline:none;background:var(--surface)}
+  select.sm:focus,input.sm:focus{border-color:var(--green)}
+  .meas-tot-row{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;padding:3px 0}
+  #sel-props{border:1px solid var(--ada);border-radius:8px;padding:10px;margin-top:10px;display:none;background:#f7faff}
+  #sel-props .sp-title{font-size:12px;font-weight:700;color:var(--ada);margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -78,10 +90,15 @@
 </header>
 <main>
   <div id="toolbar">
-    <div class="tb-sec">Draw</div>
-    <button class="tool" data-tool="select"><span style="font-size:15px">⤭</span> Select / move</button>
-    <button class="tool" data-tool="feed"><span class="swatch line" style="background:var(--feed)"></span> Conductor route</button>
+    <div class="tb-sec">Navigate</div>
+    <button class="tool" data-tool="pan"><span style="font-size:15px">✋</span> Pan / move view</button>
+    <button class="tool" data-tool="select"><span style="font-size:15px">⤭</span> Select / move item</button>
+    <div class="tb-sec">Draw runs</div>
+    <button class="tool" data-tool="lateral"><span class="swatch line" style="background:var(--lateral)"></span> Service lateral</button>
+    <button class="tool" data-tool="branch"><span class="swatch line" style="background:var(--branch)"></span> Branch circuit</button>
     <button class="tool" data-tool="trench"><span class="swatch dash"></span> Trench</button>
+    <div class="tb-sec">ADA</div>
+    <button class="tool" data-tool="ada"><span class="swatch ada"></span> Accessible space + aisle</button>
     <div class="tb-sec">Place symbol</div>
     <button class="tool" data-tool="stand"><span class="swatch" style="background:var(--stand)"></span> Service stand</button>
     <button class="tool" data-tool="panel"><span class="swatch" style="background:var(--panel)"></span> Panel</button>
@@ -94,14 +111,14 @@
     <div class="tb-sec">Edit</div>
     <button class="tool" data-tool="delete"><span style="font-size:15px">⌫</span> Delete (click item)</button>
     <button class="btn" id="btn-clear" style="width:100%;margin-top:4px">Clear all</button>
-    <div class="hint">Tip: for lines, click each vertex, then double-click (or Enter) to finish. Footage is measured live from the satellite scale.</div>
+    <div class="hint">Everything you draw is <b>anchored to the ground</b> — pan and zoom freely; items stay locked in place. For lines, click each point, then double-click (or Enter) to finish. Footage is measured from real coordinates.</div>
   </div>
 
   <div class="canvas-wrap">
     <div id="stage">
       <img id="base" alt="">
       <canvas id="draw"></canvas>
-      <div class="empty-hint" id="empty-hint">Search a property address above to load satellite imagery,<br>then draw the install on top.</div>
+      <div class="empty-hint" id="empty-hint">Search a property address above to load satellite imagery,<br>then pan/zoom to frame the site and draw the install on top.</div>
       <div class="scale-badge" id="scale-badge" style="display:none"></div>
     </div>
     <div id="zoomctl">
@@ -113,6 +130,7 @@
   <div id="rightbar">
     <label class="fld">Site label (on plan)</label>
     <input id="plan-title" class="txt" placeholder="e.g. Detailed Site Plan">
+    <div id="sel-props"></div>
     <div class="tb-sec" style="margin-top:18px">Measured runs</div>
     <div id="meas-list"><div class="hint">No runs drawn yet.</div></div>
     <div class="tb-sec" style="margin-top:18px">Legend <span class="pill" id="legend-count">0</span></div>
@@ -126,7 +144,6 @@
 <script>
 const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9uYXRoYW4zMjk5IiwiYSI6ImNtcWJuNThtdzBnbmQycm9xM3RlNjUxODYifQ.ZCA5uC-Ws56-7vnmEMrjPA';
 const MAPBOX_PROXIMITY = '-77.55,37.62';
-// Logical render size of the static map (the @2x request returns double pixels).
 const MAP_W = 900, MAP_H = 620, SCALE2X = 2;
 const STYLE = 'satellite-v9';
 
@@ -140,19 +157,46 @@ const SYMBOLS = {
   stall:       {label:'EV stall',       color:'var(--stall)',       shape:'rect'}
 };
 const LINES = {
-  feed:   {label:'Conductor route', color:'var(--feed)',   dash:false},
-  trench: {label:'Trench',          color:'var(--trench)', dash:true}
+  lateral: {label:'Service lateral', color:'var(--lateral)', dash:false, spec:true},
+  branch:  {label:'Branch circuit',  color:'var(--branch)',  dash:false, spec:true},
+  trench:  {label:'Trench',          color:'var(--trench)',  dash:true,  spec:false}
 };
+// Dropdown choices for run wire/conduit. AI scope-review will pre-fill these;
+// editable here and (later) in the catalog.
+const RUN_WIRE=['','#8 Cu','#6 Cu','#4 Cu','#2 Cu','#1 Cu','#1/0 Al','#2/0 Al','#4/0 Al','350 kcmil Al','500 kcmil Al','#6 Cu bare (gnd)'];
+const RUN_CONDUIT=['','3/4"','1"','1-1/4"','1-1/2"','2"','2-1/2"','3"','4"'];
+// Sensible starting wire/conduit/vertical-add per run type (all editable per run).
+// Service lateral default = 4/0 Al ×3 in 2-1/2" with a ~30 ft pole riser; branch = #6 Cu with stand/panel drops.
+const RUN_DEFAULTS={
+  lateral:{wire:'#4/0 Al', conduit:'2-1/2"', vert:30},
+  branch :{wire:'#6 Cu',   conduit:'1"',     vert:5},
+  trench :{wire:'',        conduit:'',       vert:0}
+};
+// ADA accessible space + access aisle (real-world feet). Van-accessible per ADA/IBC.
+const ADA={
+  van:{space:11, aisle:8, len:18, tag:'VAN ACCESSIBLE'},
+  std:{space:8,  aisle:5, len:18, tag:'ACCESSIBLE'}
+};
+function totalRunFt(it){ return lineFt(it.pts)+(+it.vert||0); }
 function cssVar(v){ if(!v||!v.startsWith('var('))return v; const n=v.slice(4,-1).trim(); return getComputedStyle(document.documentElement).getPropertyValue(n).trim()||'#333'; }
 
 const stage=document.getElementById('stage'), baseImg=document.getElementById('base'),
       canvas=document.getElementById('draw'), ctx=canvas.getContext('2d');
-let center=null, zoom=18, metersPerPx=0; // metersPerPx in CANVAS pixels (already /SCALE2X)
-let tool='select';
-let items=[];               // {type:'line', kind, pts:[{x,y}], ...} or {type:'symbol', kind, x, y, n} or {type:'label', x, y, text}
-let draft=null;             // in-progress line
-let dragItem=null, dragOff=null;
+let center=null, zoom=18, metersPerPx=0;
+let tool='pan';
+// All geometry stored in GEOGRAPHIC coords (lon/lat) so it's anchored to the
+// ground and survives pan + zoom. Lines: {type:'line',kind,pts:[{lon,lat}]}.
+// Symbols: {type:'symbol',kind,lon,lat,n}. Labels: {type:'label',lon,lat,text}.
+let items=[];
+let draft=null;
+let dragItem=null;          // symbol/label/ADA being moved
+let rotating=null;          // ADA item being rotated via its handle
+let selIdx=-1;              // index of the selected item (ADA shows a properties panel)
+let panning=false, panStart=null, panDelta={x:0,y:0};
 let history=[];
+
+// device px per foot at the current zoom/latitude (metersPerPx is meters per device px)
+function ftToPx(ft){ return metersPerPx? (ft/3.28084)/metersPerPx : 0; }
 
 function setCanvasSize(){
   canvas.width=MAP_W*SCALE2X; canvas.height=MAP_H*SCALE2X;
@@ -162,98 +206,152 @@ function setCanvasSize(){
 }
 setCanvasSize();
 
-// ---- Web Mercator ground resolution ----
+// ---- Web Mercator projection (logical px at current zoom) ----
+function worldSize(){ return 256*Math.pow(2,zoom); }
+function lonLatToWorld(lon,lat){
+  const wp=worldSize();
+  const x=(lon+180)/360*wp;
+  const s=Math.min(Math.max(Math.sin(lat*Math.PI/180),-0.9999),0.9999);
+  const y=(0.5 - Math.log((1+s)/(1-s))/(4*Math.PI))*wp;
+  return {x,y};
+}
+function worldToLonLat(x,y){
+  const wp=worldSize();
+  const lon=x/wp*360-180;
+  const n=Math.PI-2*Math.PI*y/wp;
+  const lat=180/Math.PI*Math.atan(Math.sinh(n));
+  return {lon,lat};
+}
+// geo {lon,lat} -> canvas device px
+function project(ll){
+  const w=lonLatToWorld(ll.lon,ll.lat), c=lonLatToWorld(center.lon,center.lat);
+  return { x:canvas.width/2+(w.x-c.x)*SCALE2X, y:canvas.height/2+(w.y-c.y)*SCALE2X };
+}
+// canvas device px -> geo {lon,lat}
+function unproject(px,py){
+  const c=lonLatToWorld(center.lon,center.lat);
+  return worldToLonLat(c.x+(px-canvas.width/2)/SCALE2X, c.y+(py-canvas.height/2)/SCALE2X);
+}
+
 function computeScale(){
   if(!center) return;
   const latRad=center.lat*Math.PI/180;
-  // meters per logical pixel at this zoom/lat
-  const mPerLogicalPx = 156543.03392 * Math.cos(latRad) / Math.pow(2, zoom);
-  // canvas is drawn at SCALE2X density but represents the same ground area as the logical map
-  metersPerPx = mPerLogicalPx / SCALE2X;
+  const mPerLogicalPx=156543.03392*Math.cos(latRad)/Math.pow(2,zoom);
+  metersPerPx=mPerLogicalPx/SCALE2X;
   drawScaleBadge();
 }
-function metersToFt(m){ return m*3.28084; }
-function pxLenToFt(px){ return metersToFt(px*metersPerPx); }
+function haversineFt(a,b){
+  const R=6371000, toR=Math.PI/180;
+  const dLat=(b.lat-a.lat)*toR, dLon=(b.lon-a.lon)*toR;
+  const la1=a.lat*toR, la2=b.lat*toR;
+  const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h))*3.28084;
+}
+function lineFt(pts){ let t=0; for(let i=1;i<pts.length;i++)t+=haversineFt(pts[i-1],pts[i]); return t; }
 
-function loadBase(){
+function loadBase(redrawAfter=true){
   if(!center) return;
   computeScale();
   const url=`https://api.mapbox.com/styles/v1/mapbox/${STYLE}/static/${center.lon},${center.lat},${zoom},0/${MAP_W}x${MAP_H}@2x?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
   baseImg.onload=()=>{ document.getElementById('empty-hint').style.display='none'; document.getElementById('scale-badge').style.display='block'; redraw(); };
   baseImg.onerror=()=>{ alert('Could not load satellite imagery — check the address or your connection.'); };
   baseImg.src=url;
+  if(redrawAfter) redraw();
 }
 function drawScaleBadge(){
   const badge=document.getElementById('scale-badge');
   if(!metersPerPx){badge.style.display='none';return;}
-  // pick a ~120px bar, round feet to a nice number
-  const rawFt=pxLenToFt(120);
+  const rawFt=metersPerPx*120*3.28084;
   const nice=[10,20,25,50,75,100,150,200,300,500].reduce((a,b)=>Math.abs(b-rawFt)<Math.abs(a-rawFt)?b:a);
-  const barPx=(nice/3.28084)/metersPerPx;
+  const barPx=(nice/3.28084)/metersPerPx/SCALE2X; // CSS px
   badge.innerHTML=`<div style="display:flex;align-items:center;gap:7px"><div style="width:${barPx.toFixed(0)}px;height:4px;background:#1a1f2a;border-radius:2px"></div><span>${nice} ft</span></div>`;
 }
 
-// ---- coordinate helpers (canvas pixel space) ----
 function evtPt(e){
   const r=canvas.getBoundingClientRect();
   return { x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height) };
 }
-function lineLenPx(pts){ let t=0; for(let i=1;i<pts.length;i++){t+=Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);} return t; }
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 
-// ---- drawing ----
+// ---- render ----
 function redraw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  // lines
+  if(!center) return;
   for(const it of items){ if(it.type==='line') drawLine(it); }
   if(draft) drawLine(draft, true);
-  // symbols + labels on top
-  for(const it of items){
-    if(it.type==='symbol') drawSymbol(it);
+  for(let i=0;i<items.length;i++){ const it=items[i];
+    if(it.type==='ada') drawAda(it, i===selIdx);
+    else if(it.type==='symbol') drawSymbol(it);
     else if(it.type==='label') drawLabel(it);
   }
   updatePanels();
 }
+function drawAda(it, selected){
+  const c=project(it), d=ADA[it.variant];
+  const spx=ftToPx(d.space), apx=ftToPx(d.aisle), lpx=ftToPx(d.len), wpx=spx+apx;
+  const left=-wpx/2, top=-lpx/2;
+  let spaceX, aisleX;
+  if(it.aisleSide==='left'){ aisleX=left; spaceX=left+apx; } else { spaceX=left; aisleX=left+spx; }
+  ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(it.rot*Math.PI/180);
+  // accessible space
+  ctx.fillStyle='rgba(29,78,216,.28)'; ctx.strokeStyle=cssVar('var(--ada)'); ctx.lineWidth=3;
+  ctx.fillRect(spaceX,top,spx,lpx); ctx.strokeRect(spaceX,top,spx,lpx);
+  // access aisle + diagonal striping
+  ctx.fillStyle='rgba(255,255,255,.34)'; ctx.fillRect(aisleX,top,apx,lpx); ctx.strokeRect(aisleX,top,apx,lpx);
+  ctx.save(); ctx.beginPath(); ctx.rect(aisleX,top,apx,lpx); ctx.clip();
+  ctx.strokeStyle=cssVar('var(--ada)'); ctx.lineWidth=2;
+  const step=Math.max(10,ftToPx(2));
+  for(let x=aisleX-lpx; x<aisleX+apx; x+=step){ ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x+lpx,top+lpx); ctx.stroke(); }
+  ctx.restore();
+  // ISA wheelchair + tag, counter-rotated so they stay upright
+  ctx.save(); ctx.translate(spaceX+spx/2, top+lpx*0.42); ctx.rotate(-it.rot*Math.PI/180);
+  ctx.fillStyle=cssVar('var(--ada)'); ctx.textAlign='center'; ctx.textBaseline='middle';
+  const isa=Math.max(13,Math.min(spx,lpx)*0.42);
+  ctx.font=`${isa}px 'Segoe UI Symbol','Segoe UI',Arial`; ctx.fillText('♿',0,0);
+  ctx.font=`bold ${Math.max(8,spx*0.12)}px Segoe UI,Arial`; ctx.fillText(d.tag,0,isa*0.72);
+  ctx.restore();
+  if(selected){
+    ctx.strokeStyle=cssVar('var(--sel)'); ctx.setLineDash([8,6]); ctx.lineWidth=2.5;
+    ctx.strokeRect(left-4,top-4,wpx+8,lpx+8); ctx.setLineDash([]);
+    const hy=top-30; ctx.beginPath(); ctx.moveTo(0,top); ctx.lineTo(0,hy); ctx.strokeStyle=cssVar('var(--sel)'); ctx.lineWidth=2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,hy,7,0,7); ctx.fillStyle=cssVar('var(--sel)'); ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+  }
+  ctx.restore();
+}
+// local (un-rotated) coords of a point relative to an ADA group's centre
+function adaLocal(it,p){ const c=project(it); const dx=p.x-c.x,dy=p.y-c.y,a=-it.rot*Math.PI/180; return {x:dx*Math.cos(a)-dy*Math.sin(a), y:dx*Math.sin(a)+dy*Math.cos(a)}; }
+function adaInside(it,p){ const d=ADA[it.variant]; const l=adaLocal(it,p); return Math.abs(l.x)<=(ftToPx(d.space)+ftToPx(d.aisle))/2 && Math.abs(l.y)<=ftToPx(d.len)/2; }
+function adaHandle(it){ const c=project(it); const ly=-ftToPx(ADA[it.variant].len)/2-30, a=it.rot*Math.PI/180; return {x:c.x-ly*Math.sin(a), y:c.y+ly*Math.cos(a)}; }
 function drawLine(it, isDraft){
-  const def=LINES[it.kind]; const col=cssVar(def.color);
-  ctx.save();
-  ctx.lineWidth=6; ctx.strokeStyle=col; ctx.lineJoin='round'; ctx.lineCap='round';
+  const def=LINES[it.kind], col=cssVar(def.color);
+  const sp=it.pts.map(project);
+  ctx.save(); ctx.lineWidth=6; ctx.strokeStyle=col; ctx.lineJoin='round'; ctx.lineCap='round';
   if(def.dash) ctx.setLineDash([16,12]);
-  ctx.beginPath();
-  it.pts.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
-  ctx.stroke();
-  ctx.setLineDash([]);
-  // vertices
-  ctx.fillStyle=col;
-  it.pts.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
-  // footage label at midpoint
+  ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke();
+  ctx.setLineDash([]); ctx.fillStyle=col;
+  sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
   if(it.pts.length>=2 && !isDraft){
-    const ft=Math.round(pxLenToFt(lineLenPx(it.pts)));
-    const mid=it.pts[Math.floor(it.pts.length/2)];
+    const ft=Math.round(lineFt(it.pts));
+    const mid=sp[Math.floor(sp.length/2)];
     labelChip(`${ft} ft`, mid.x, mid.y-14, col);
   }
   ctx.restore();
 }
 function drawSymbol(it){
-  const def=SYMBOLS[it.kind]; const col=cssVar(def.color);
-  ctx.save();
-  ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
-  const s=26;
-  if(def.shape==='circle'){ ctx.beginPath();ctx.arc(it.x,it.y,s/2,0,7);ctx.fill();ctx.stroke(); }
-  else if(def.shape==='rect'){ roundRect(it.x-s*0.9,it.y-s*0.55,s*1.8,s*1.1,5);ctx.fill();ctx.stroke(); }
-  else { roundRect(it.x-s/2,it.y-s/2,s,s,5);ctx.fill();ctx.stroke(); }
-  // number badge
+  const def=SYMBOLS[it.kind], col=cssVar(def.color), p=project(it), s=26;
+  ctx.save(); ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  if(def.shape==='circle'){ ctx.beginPath();ctx.arc(p.x,p.y,s/2,0,7);ctx.fill();ctx.stroke(); }
+  else if(def.shape==='rect'){ roundRect(p.x-s*0.9,p.y-s*0.55,s*1.8,s*1.1,5);ctx.fill();ctx.stroke(); }
+  else { roundRect(p.x-s/2,p.y-s/2,s,s,5);ctx.fill();ctx.stroke(); }
   ctx.fillStyle='#fff'; ctx.font='bold 15px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(it.n, it.x, it.y);
-  ctx.restore();
+  ctx.fillText(it.n,p.x,p.y); ctx.restore();
 }
 function drawLabel(it){
-  ctx.save();
-  ctx.font='bold 17px Segoe UI,Arial'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  const p=project(it);
+  ctx.save(); ctx.font='bold 17px Segoe UI,Arial'; ctx.textAlign='left'; ctx.textBaseline='middle';
   const w=ctx.measureText(it.text).width;
-  ctx.fillStyle='rgba(26,31,42,.78)'; roundRect(it.x-6,it.y-15,w+12,30,5); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.fillText(it.text,it.x,it.y);
-  ctx.restore();
+  ctx.fillStyle='rgba(26,31,42,.78)'; roundRect(p.x-6,p.y-15,w+12,30,5); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.fillText(it.text,p.x,p.y); ctx.restore();
 }
 function labelChip(txt,x,y,col){
   ctx.save(); ctx.font='bold 15px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -263,47 +361,79 @@ function labelChip(txt,x,y,col){
 }
 function roundRect(x,y,w,h,r){ ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath(); }
 
-// ---- side panels ----
 function updatePanels(){
-  // measured runs
-  const lines=items.filter(i=>i.type==='line');
   const ml=document.getElementById('meas-list');
-  if(!lines.length){ ml.innerHTML='<div class="hint">No runs drawn yet.</div>'; }
+  const idxLines=items.map((it,i)=>({it,i})).filter(o=>o.it.type==='line');
+  if(!idxLines.length){ ml.innerHTML='<div class="hint">No runs drawn yet.</div>'; }
   else{
-    let tot={feed:0,trench:0};
-    ml.innerHTML=lines.map((it)=>{ const ft=Math.round(pxLenToFt(lineLenPx(it.pts))); tot[it.kind]+=ft;
-      return `<div class="meas-row"><span style="color:${cssVar(LINES[it.kind].color)}">${LINES[it.kind].label}</span><b>${ft} ft</b></div>`; }).join('')
-      + `<div class="meas-row" style="border:none;font-weight:700;margin-top:4px"><span>Total trench</span><b>${tot.trench} ft</b></div>`
-      + `<div class="meas-row" style="border:none;font-weight:700"><span>Total conductor</span><b>${tot.feed} ft</b></div>`;
+    let cards=idxLines.map(({it,i})=>{
+      const def=LINES[it.kind], ft=Math.round(lineFt(it.pts)), col=cssVar(def.color);
+      let body='';
+      if(def.spec){
+        const wopt=RUN_WIRE.map(w=>`<option value="${w}" ${w===(it.wire||'')?'selected':''}>${w||'— wire —'}</option>`).join('');
+        const copt=RUN_CONDUIT.map(c=>`<option value="${c}" ${c===(it.conduit||'')?'selected':''}>${c||'— conduit —'}</option>`).join('');
+        body=`<div><label class="mini">Wire (×3 unless noted)</label><select class="sm" onchange="updateRun(${i},'wire',this.value)">${wopt}</select></div>
+          <div style="display:flex;gap:6px;margin-top:5px">
+            <div style="flex:1"><label class="mini">Conduit</label><select class="sm" onchange="updateRun(${i},'conduit',this.value)">${copt}</select></div>
+            <div style="width:84px"><label class="mini">Vert. ft</label><input class="sm" type="number" min="0" value="${it.vert||0}" onchange="updateRun(${i},'vert',this.value)" title="Pole riser + stand/panel drops"></div>
+          </div>`;
+      }
+      return `<div class="run-card"><div class="rc-top"><span style="color:${col}">${def.label} · ${ft} ft</span><span class="rc-x" title="Delete this run" onclick="deleteItem(${i})">✕</span></div>${body}</div>`;
+    }).join('');
+    const tot={};
+    for(const {it} of idxLines){ tot[it.kind]=(tot[it.kind]||0)+Math.round(totalRunFt(it)); }
+    const totRows=Object.keys(LINES).filter(k=>tot[k]!=null).map(k=>
+      `<div class="meas-tot-row"><span style="color:${cssVar(LINES[k].color)}">${LINES[k].label} total${LINES[k].spec?' (incl. vert.)':''}</span><b>${tot[k]} ft</b></div>`).join('');
+    ml.innerHTML=cards+'<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">'+totRows+'</div>';
   }
   // legend
   const used=new Map();
-  for(const it of items){
-    if(it.type==='symbol'){ const k='s_'+it.kind; if(!used.has(k))used.set(k,{def:SYMBOLS[it.kind],shape:SYMBOLS[it.kind].shape,n:0}); used.get(k).n++; }
-  }
+  for(const it of items){ if(it.type==='symbol'){ const k='s_'+it.kind; if(!used.has(k))used.set(k,{def:SYMBOLS[it.kind],shape:SYMBOLS[it.kind].shape,n:0}); used.get(k).n++; } }
   for(const it of items){ if(it.type==='line'){ const k='l_'+it.kind; if(!used.has(k))used.set(k,{def:LINES[it.kind],line:true}); } }
+  if(items.some(it=>it.type==='ada')) used.set('ada',{def:{label:'ADA accessible space',color:'var(--ada)'},ada:true});
   const ll=document.getElementById('legend-list');
   document.getElementById('legend-count').textContent=used.size;
   if(!used.size){ ll.innerHTML='<div class="hint">Symbols you place appear here automatically.</div>'; }
-  else{
-    ll.innerHTML=[...used.values()].map(u=>{
-      const col=cssVar(u.def.color);
-      const sw=u.line?`<span class="swatch ${u.def.dash?'dash':'line'}" style="${u.def.dash?'border-top-color:'+col:'background:'+col}"></span>`
-        :`<span class="swatch ${u.shape==='circle'?'dot':''}" style="background:${col};${u.shape==='rect'?'width:22px':''}"></span>`;
-      return `<div class="legend-row">${sw}<span>${u.def.label}${u.n?` <b>×${u.n}</b>`:''}</span></div>`;
-    }).join('');
-  }
+  else{ ll.innerHTML=[...used.values()].map(u=>{ const col=cssVar(u.def.color);
+    let sw;
+    if(u.ada) sw='<span class="swatch ada"></span>';
+    else if(u.line) sw=`<span class="swatch ${u.def.dash?'dash':'line'}" style="${u.def.dash?'border-top-color:'+col:'background:'+col}"></span>`;
+    else sw=`<span class="swatch ${u.shape==='circle'?'dot':''}" style="background:${col};${u.shape==='rect'?'width:22px':''}"></span>`;
+    return `<div class="legend-row">${sw}<span>${u.def.label}${u.n?` <b>×${u.n}</b>`:''}</span></div>`; }).join(''); }
+  renderSelProps();
 }
+function renderSelProps(){
+  const box=document.getElementById('sel-props'); const it=items[selIdx];
+  if(!it || it.type!=='ada'){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  box.innerHTML=`<div class="sp-title">ADA space selected</div>
+    <label class="mini">Type</label>
+    <select class="sm" onchange="updateAda('variant',this.value)">
+      <option value="van" ${it.variant==='van'?'selected':''}>Van accessible (11′ space + 8′ aisle)</option>
+      <option value="std" ${it.variant==='std'?'selected':''}>Standard accessible (8′ space + 5′ aisle)</option>
+    </select>
+    <label class="mini" style="margin-top:6px">Access aisle side</label>
+    <select class="sm" onchange="updateAda('aisleSide',this.value)">
+      <option value="right" ${it.aisleSide==='right'?'selected':''}>Right of space</option>
+      <option value="left" ${it.aisleSide==='left'?'selected':''}>Left of space</option>
+    </select>
+    <label class="mini" style="margin-top:6px">Rotation (°) — or drag the handle</label>
+    <input class="sm" type="number" value="${Math.round(it.rot)}" onchange="updateAda('rot',this.value)">
+    <div class="hint" style="margin-top:8px">Rotate to line up with the existing stalls. This footprint replaces one standard parking space.</div>`;
+}
+function updateRun(i,field,val){ if(!items[i])return; items[i][field]= field==='vert'?Math.max(0,+val||0):val; redraw(); }
+function updateAda(field,val){ const it=items[selIdx]; if(!it)return; pushHistory(); it[field]= field==='rot'?(+val||0):val; redraw(); }
+function deleteItem(i){ if(!items[i])return; pushHistory(); items.splice(i,1); if(selIdx===i)selIdx=-1; else if(selIdx>i)selIdx--; redraw(); }
+window.updateRun=updateRun; window.updateAda=updateAda; window.deleteItem=deleteItem;
 
-// ---- interaction ----
-function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>50)history.shift(); }
+function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>60)history.shift(); }
 function symbolCount(kind){ return items.filter(i=>i.type==='symbol'&&i.kind===kind).length; }
 function hitTest(p){
-  // topmost first
   for(let i=items.length-1;i>=0;i--){ const it=items[i];
-    if(it.type==='symbol'&&dist(p,it)<20) return i;
-    if(it.type==='label'&&Math.abs(p.x-it.x)<90&&Math.abs(p.y-it.y)<18) return i;
-    if(it.type==='line'){ for(const v of it.pts) if(dist(p,v)<12) return i; }
+    if(it.type==='ada'){ if(adaInside(it,p)) return i; }
+    if(it.type==='symbol'){ const s=project(it); if(dist(p,s)<22) return i; }
+    if(it.type==='label'){ const s=project(it); if(Math.abs(p.x-s.x)<90&&Math.abs(p.y-s.y)<20) return i; }
+    if(it.type==='line'){ for(const v of it.pts){ const s=project(v); if(dist(p,s)<12) return i; } }
   }
   return -1;
 }
@@ -311,41 +441,74 @@ function hitTest(p){
 canvas.addEventListener('mousedown',e=>{
   if(!center) return;
   const p=evtPt(e);
-  if(tool==='select'){ const h=hitTest(p); if(h>=0){ const it=items[h]; if(it.type!=='line'){ dragItem=it; dragOff={x:p.x-it.x,y:p.y-it.y}; pushHistory(); } } return; }
-  if(tool==='delete'){ const h=hitTest(p); if(h>=0){ pushHistory(); items.splice(h,1); redraw(); } return; }
-  if(tool==='label'){ const t=prompt('Label text:'); if(t){ pushHistory(); items.push({type:'label',x:p.x,y:p.y,text:t}); redraw(); } return; }
-  if(LINES[tool]){ if(!draft){ draft={type:'line',kind:tool,pts:[p]}; } else { draft.pts.push(p); } redraw(); return; }
-  if(SYMBOLS[tool]){ pushHistory(); items.push({type:'symbol',kind:tool,x:p.x,y:p.y,n:symbolCount(tool)+1}); redraw(); return; }
+  // rotate handle of a selected ADA space takes priority
+  if(selIdx>=0 && items[selIdx] && items[selIdx].type==='ada' && dist(p,adaHandle(items[selIdx]))<14){ pushHistory(); rotating=items[selIdx]; return; }
+  if(tool==='pan'){ panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; canvas.style.cursor='grabbing'; return; }
+  if(tool==='select'){ const h=hitTest(p);
+    if(h>=0 && items[h].type!=='line'){ dragItem=items[h]; selIdx=(items[h].type==='ada')?h:-1; pushHistory(); redraw(); }
+    else { selIdx=-1; panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; redraw(); }
+    return;
+  }
+  if(tool==='delete'){ const h=hitTest(p); if(h>=0) deleteItem(h); return; }
+  if(tool==='ada'){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'ada',lon:g.lon,lat:g.lat,rot:0,variant:'van',aisleSide:'right'}); selIdx=items.length-1; redraw(); return; }
+  if(tool==='label'){ const t=prompt('Label text:'); if(t){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'label',lon:g.lon,lat:g.lat,text:t}); redraw(); } return; }
+  if(LINES[tool]){ const g=unproject(p.x,p.y);
+    if(!draft){ const d=RUN_DEFAULTS[tool]||{}; draft={type:'line',kind:tool,pts:[g],wire:d.wire||'',conduit:d.conduit||'',vert:d.vert||0}; }
+    else { draft.pts.push(g); } redraw(); return;
+  }
+  if(SYMBOLS[tool]){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'symbol',kind:tool,lon:g.lon,lat:g.lat,n:symbolCount(tool)+1}); redraw(); return; }
 });
 canvas.addEventListener('mousemove',e=>{
+  if(panning){ panDelta={x:e.clientX-panStart.cx, y:e.clientY-panStart.cy};
+    baseImg.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`;
+    canvas.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`; return; }
   const p=evtPt(e);
-  if(dragItem){ dragItem.x=p.x-dragOff.x; dragItem.y=p.y-dragOff.y; redraw(); return; }
-  if(draft){ const tmp={...draft,pts:[...draft.pts,p]}; ctx.clearRect(0,0,canvas.width,canvas.height); for(const it of items){if(it.type==='line')drawLine(it);} drawLine(tmp,true); for(const it of items){if(it.type==='symbol')drawSymbol(it);else if(it.type==='label')drawLabel(it);} }
+  if(rotating){ const c=project(rotating); rotating.rot=Math.atan2(p.y-c.y,p.x-c.x)*180/Math.PI+90; redraw(); return; }
+  if(dragItem){ const g=unproject(p.x,p.y); dragItem.lon=g.lon; dragItem.lat=g.lat; redraw(); return; }
+  if(draft){ const g=unproject(p.x,p.y); const tmp={...draft,pts:[...draft.pts,g]};
+    ctx.clearRect(0,0,canvas.width,canvas.height); for(const it of items){if(it.type==='line')drawLine(it);} drawLine(tmp,true);
+    for(const it of items){if(it.type==='symbol')drawSymbol(it);else if(it.type==='label')drawLabel(it);} }
 });
-window.addEventListener('mouseup',()=>{ dragItem=null; });
-canvas.addEventListener('dblclick',()=>{ finishDraft(); });
+window.addEventListener('mouseup',()=>{
+  if(panning){ panning=false; canvas.style.cursor=(tool==='pan')?'grab':(tool==='select')?'grab':'crosshair';
+    // commit pan: shift center by the drag delta, reload imagery, items re-project (anchored)
+    if(panDelta.x||panDelta.y){ const g=unproject(canvas.width/2 - panDelta.x*SCALE2X, canvas.height/2 - panDelta.y*SCALE2X); center={lon:g.lon,lat:g.lat}; }
+    baseImg.style.transform=''; canvas.style.transform=''; panDelta={x:0,y:0}; loadBase();
+  }
+  dragItem=null; rotating=null;
+});
+canvas.addEventListener('dblclick',finishDraft);
 function finishDraft(){ if(draft&&draft.pts.length>=2){ pushHistory(); items.push(draft); } draft=null; redraw(); }
 document.addEventListener('keydown',e=>{
+  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) return;
   if(e.key==='Enter'&&draft) finishDraft();
-  if(e.key==='Escape'){ draft=null; redraw(); }
+  if(e.key==='Escape'){ draft=null; selIdx=-1; redraw(); }
+  if((e.key==='Delete'||e.key==='Backspace')&&selIdx>=0&&!draft){ e.preventDefault(); deleteItem(selIdx); }
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){ e.preventDefault(); undo(); }
 });
-function undo(){ if(draft){draft=null;redraw();return;} if(history.length){ items=JSON.parse(history.pop()); redraw(); } }
+function undo(){ if(draft){draft=null;redraw();return;} if(history.length){ items=JSON.parse(history.pop()); selIdx=-1; redraw(); } }
 document.getElementById('btn-undo').onclick=undo;
-document.getElementById('btn-clear').onclick=()=>{ if(items.length&&confirm('Clear all drawn items?')){ pushHistory(); items=[]; draft=null; redraw(); } };
+document.getElementById('btn-clear').onclick=()=>{ if(items.length&&confirm('Clear all drawn items?')){ pushHistory(); items=[]; draft=null; selIdx=-1; redraw(); } };
 
-// tool buttons
 document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>{
   finishDraft();
   document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));
   b.classList.add('active'); tool=b.dataset.tool;
-  canvas.style.cursor = (tool==='select')?'grab':(tool==='delete')?'not-allowed':'crosshair';
+  if(tool!=='select') selIdx=-1;
+  canvas.style.cursor=(tool==='pan'||tool==='select')?'grab':(tool==='delete')?'not-allowed':'crosshair';
+  redraw();
 });
-document.querySelector('[data-tool="select"]').classList.add('active');
+document.querySelector('[data-tool="pan"]').classList.add('active');
+canvas.style.cursor='grab';
 
-// zoom
 document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} };
 document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
+// scroll to zoom, centered on cursor
+canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault();
+  const dir=e.deltaY<0?1:-1; const nz=zoom+dir; if(nz<15||nz>20)return;
+  const p=evtPt(e); const g=unproject(p.x,p.y); // keep cursor point stable-ish: recenter toward it slightly
+  zoom=nz; loadBase();
+},{passive:false});
 
 // ---- address search ----
 const addr=document.getElementById('addr'), drop=document.getElementById('addr-drop');
@@ -356,12 +519,10 @@ async function geocode(q){
     const url=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&proximity=${MAPBOX_PROXIMITY}`;
     const r=await fetch(url); const j=await r.json(); const fs=j.features||[];
     if(!fs.length){drop.style.display='none';return;}
-    drop.innerHTML=''; fs.forEach(f=>{
-      const d=document.createElement('div'); d.className='addr-item';
+    drop.innerHTML=''; fs.forEach(f=>{ const d=document.createElement('div'); d.className='addr-item';
       d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`;
       d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=18; loadBase(); };
-      drop.appendChild(d);
-    });
+      drop.appendChild(d); });
     drop.style.display='block';
   }catch(e){ drop.style.display='none'; }
 }
@@ -371,8 +532,8 @@ document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target)) d
 document.getElementById('btn-export').onclick=()=>{
   if(!center){ alert('Load a site first.'); return; }
   finishDraft();
-  // compose: base image + canvas + title + legend bar onto an export canvas
-  const pad=0, titleH=document.getElementById('plan-title').value.trim()?44:0;
+  const savedSel=selIdx; selIdx=-1; redraw();   // drop the selection handle/outline from the export
+  const titleH=document.getElementById('plan-title').value.trim()?44:0;
   const legendItems=buildLegendForExport();
   const legendH=legendItems.length?54:0;
   const W=canvas.width, H=canvas.height;
@@ -383,20 +544,24 @@ document.getElementById('btn-export').onclick=()=>{
   if(titleH){ o.fillStyle='#2e7d32'; o.fillRect(0,0,out.width,titleH*SCALE2X); o.fillStyle='#fff'; o.font=`bold ${22*SCALE2X}px Segoe UI,Arial`; o.textBaseline='middle'; o.textAlign='left'; o.fillText(document.getElementById('plan-title').value.trim(),16*SCALE2X,titleH*SCALE2X/2); y=titleH*SCALE2X; }
   o.drawImage(baseImg,0,y,W,H);
   o.drawImage(canvas,0,y);
-  if(legendH){ const ly=y+H; o.fillStyle='#f4f6f8'; o.fillRect(0,ly,out.width,legendH*SCALE2X); o.fillStyle='#1a1f2a'; o.textBaseline='middle';
+  if(legendH){ const ly=y+H; o.fillStyle='#f4f6f8'; o.fillRect(0,ly,out.width,legendH*SCALE2X); o.textBaseline='middle';
     let lx=16*SCALE2X; o.font=`bold ${13*SCALE2X}px Segoe UI,Arial`;
-    legendItems.forEach(li=>{ const cy=ly+legendH*SCALE2X/2;
-      o.fillStyle=li.color; if(li.line){ o.fillRect(lx,cy-2*SCALE2X,26*SCALE2X,4*SCALE2X);} else { o.beginPath(); if(li.shape==='circle')o.arc(lx+9*SCALE2X,cy,9*SCALE2X,0,7); else o.rect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.fill(); }
-      o.fillStyle='#1a1f2a'; o.fillText(li.text, lx+34*SCALE2X, cy); lx+= (40+li.text.length*8.5)*SCALE2X; });
+    legendItems.forEach(li=>{ const cy=ly+legendH*SCALE2X/2; o.fillStyle=li.color;
+      if(li.line){ o.fillRect(lx,cy-2*SCALE2X,26*SCALE2X,4*SCALE2X);}
+      else if(li.ada){ o.globalAlpha=.28; o.fillRect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.globalAlpha=1; o.strokeStyle=li.color; o.lineWidth=2*SCALE2X; o.strokeRect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); }
+      else { o.beginPath(); if(li.shape==='circle')o.arc(lx+9*SCALE2X,cy,9*SCALE2X,0,7); else o.rect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.fill(); }
+      o.fillStyle='#1a1f2a'; o.fillText(li.text, lx+34*SCALE2X, cy); lx+=(40+li.text.length*8.5)*SCALE2X; });
   }
   const a=document.createElement('a');
   const fn=(addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_');
   a.download=`GreenKey_SitePlan_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
+  selIdx=savedSel; redraw();
 };
 function buildLegendForExport(){
-  const used=new Map(); const arr=[];
+  const used=new Map(), arr=[];
   for(const it of items){ if(it.type==='symbol'&&!used.has('s'+it.kind)){used.set('s'+it.kind,1);const d=SYMBOLS[it.kind];arr.push({text:d.label,color:cssVar(d.color),shape:d.shape});} }
   for(const it of items){ if(it.type==='line'&&!used.has('l'+it.kind)){used.set('l'+it.kind,1);const d=LINES[it.kind];arr.push({text:d.label,color:cssVar(d.color),line:true});} }
+  if(items.some(it=>it.type==='ada')) arr.push({text:'ADA accessible space',color:cssVar('var(--ada)'),ada:true});
   return arr;
 }
 </script>
