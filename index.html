@@ -1525,6 +1525,11 @@
 // ── CONSTANTS ──
 const UK = 'gk_users', SK = 'gk_session';
 const CK = 'gk_customers', LK = 'gk_leads';
+// Declared early (2026-06-12): the Settings page template at ~line 2508 is
+// evaluated at LOAD TIME and references this. With const, even a typeof
+// guard throws "Cannot access before initialization" if the declaration
+// hasn't run yet — declaring it here keeps it ahead of every reference.
+const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
 // Clean up legacy biometric enrollment data from previous builds.
 try { localStorage.removeItem('gk_biometric'); } catch(_){}
 
@@ -13723,7 +13728,10 @@ function savePrefs(p) { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); }
 // without requiring Sherri to use the CRM herself. Default: Sherri's address.
 // Configurable in Settings → Pricing & Tax → Email CC. Set to empty string
 // to disable CC entirely.
-const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
+// NOTE: DEFAULT_CC_OUTBOUND_EMAIL is declared near the TOP of the script
+// (after CK/LK) — the Settings template evaluated at load time references it,
+// and a const referenced before its declaration line throws even with a
+// typeof guard. Don't redeclare it here.
 function _buildCCRecipients() {
   const raw = (getPrefs().ccOutboundEmail);
   // Treat undefined as "use default". Treat empty string as "user explicitly disabled".
