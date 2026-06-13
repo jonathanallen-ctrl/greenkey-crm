@@ -128,8 +128,13 @@
   </div>
 
   <div id="rightbar">
-    <label class="fld">Site label (on plan)</label>
-    <input id="plan-title" class="txt" placeholder="e.g. Detailed Site Plan">
+    <label class="fld">Sheet title (on plan)</label>
+    <input id="plan-title" class="txt" placeholder="e.g. Site Plan — Exhibit A">
+    <label class="fld">Project / client</label>
+    <input id="proj-name" class="txt" placeholder="e.g. Hampton Inn — Ashland">
+    <label class="fld">Prepared by</label>
+    <input id="prepared-by" class="txt" value="Jonathan Allen, GreenKey">
+    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-top:10px;cursor:pointer"><input type="checkbox" id="dim-img"> Dim satellite (make linework pop)</label>
     <div id="sel-props"></div>
     <div class="tb-sec" style="margin-top:18px">Measured runs</div>
     <div id="meas-list"><div class="hint">No runs drawn yet.</div></div>
@@ -195,6 +200,7 @@ let draft=null;
 let dragItem=null;          // symbol/label/ADA being moved
 let rotating=null;          // ADA item being rotated via its handle
 let selIdx=-1;              // index of the selected item (ADA shows a properties panel)
+let dimImg=false;          // dim the satellite so coloured linework pops
 let panning=false, panStart=null, panDelta={x:0,y:0};
 let history=[];
 
@@ -280,6 +286,7 @@ function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 function redraw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!center) return;
+  if(dimImg){ ctx.save(); ctx.fillStyle='rgba(255,255,255,.22)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.restore(); }
   for(const it of items){ if(it.type==='line') drawLine(it); }
   if(draft) drawLine(draft, true);
   for(let i=0;i<items.length;i++){ const it=items[i];
@@ -287,6 +294,8 @@ function redraw(){
     else if(it.type==='symbol') drawSymbol(it);
     else if(it.type==='label') drawLabel(it);
   }
+  // run callouts last so the labels sit on top of everything
+  for(const it of items){ if(it.type==='line' && it.pts.length>=2) drawRunCallout(it); }
   updatePanels();
 }
 // px-per-foot for an ADA group — always true to real-world scale, so it renders correctly at any zoom
@@ -330,24 +339,26 @@ function adaHandle(it){ const c=project(it); const ly=-ftToPx(ADA[it.variant].le
 function drawLine(it, isDraft){
   const def=LINES[it.kind], col=cssVar(def.color);
   const sp=it.pts.map(project);
-  ctx.save(); ctx.lineWidth=6; ctx.strokeStyle=col; ctx.lineJoin='round'; ctx.lineCap='round';
-  if(def.dash) ctx.setLineDash([16,12]);
-  ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke();
-  ctx.setLineDash([]); ctx.fillStyle=col;
-  sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
-  if(it.pts.length>=2 && !isDraft){
-    const ft=Math.round(lineFt(it.pts));
-    const mid=pathMidpoint(sp);
-    labelChip(`${ft} ft`, mid.x, mid.y-14, col);
-  }
+  ctx.save(); ctx.lineJoin='round'; ctx.lineCap='round';
+  // dark casing (always solid) under the colour so the run reads on busy imagery
+  ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  ctx.lineWidth=10; ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.stroke();
+  // coloured run
+  ctx.lineWidth=6; ctx.strokeStyle=col; if(def.dash) ctx.setLineDash([16,12]); ctx.stroke(); ctx.setLineDash([]);
+  // vertices with white edge
+  ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+  sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();ctx.stroke();});
   ctx.restore();
 }
 function drawSymbol(it){
   const def=SYMBOLS[it.kind], col=cssVar(def.color), p=project(it), s=44;
-  ctx.save(); ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,.45)'; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+  ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
   if(def.shape==='circle'){ ctx.beginPath();ctx.arc(p.x,p.y,s/2,0,7);ctx.fill();ctx.stroke(); }
   else if(def.shape==='rect'){ roundRect(p.x-s*0.9,p.y-s*0.55,s*1.8,s*1.1,7);ctx.fill();ctx.stroke(); }
   else { roundRect(p.x-s/2,p.y-s/2,s,s,7);ctx.fill();ctx.stroke(); }
+  ctx.shadowColor='transparent'; ctx.shadowBlur=0; ctx.shadowOffsetY=0;
   ctx.fillStyle='#fff'; ctx.font='bold 23px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText(it.n,p.x,p.y); ctx.restore();
 }
@@ -371,6 +382,31 @@ function pathMidpoint(sp){
   let half=total/2;
   for(let i=1;i<sp.length;i++){ const d=Math.hypot(sp[i].x-sp[i-1].x, sp[i].y-sp[i-1].y); if(half<=d){ const t=d?half/d:0; return {x:sp[i-1].x+(sp[i].x-sp[i-1].x)*t, y:sp[i-1].y+(sp[i].y-sp[i-1].y)*t}; } half-=d; }
   return sp[sp.length-1];
+}
+// leader-line callout: run length + wire/conduit spec, offset off the line so it never sits on clutter
+function drawRunCallout(it){
+  const def=LINES[it.kind], col=cssVar(def.color);
+  const sp=it.pts.map(project); if(sp.length<2) return;
+  const mid=pathMidpoint(sp);
+  const a=sp[0], b=sp[sp.length-1];
+  let dx=b.x-a.x, dy=b.y-a.y; const len=Math.hypot(dx,dy)||1; dx/=len; dy/=len;
+  let px=-dy, py=dx; if(py>0){px=-px;py=-py;}      // perpendicular, biased upward
+  const off=44, bx=mid.x+px*off, by=mid.y+py*off;
+  const l1=Math.round(lineFt(it.pts))+' ft';
+  const l2 = def.spec ? [it.wire, it.conduit?it.conduit+'" PVC':''].filter(Boolean).join('  ·  ') : def.label;
+  ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle';
+  // leader
+  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(mid.x,mid.y); ctx.lineTo(bx,by); ctx.stroke();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(mid.x,mid.y,4,0,7); ctx.fill();
+  // box
+  ctx.font='bold 16px Segoe UI,Arial'; const w1=ctx.measureText(l1).width;
+  ctx.font='12px Segoe UI,Arial'; const w2=l2?ctx.measureText(l2).width:0;
+  const bw=Math.max(w1,w2)+22, bh=l2?46:30, rx=bx-bw/2, ry=by-bh/2;
+  ctx.fillStyle='rgba(255,255,255,.96)'; ctx.strokeStyle=col; ctx.lineWidth=2.5;
+  roundRect(rx,ry,bw,bh,8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=col; ctx.font='bold 16px Segoe UI,Arial'; ctx.fillText(l1, bx, l2?ry+15:by);
+  if(l2){ ctx.fillStyle='#1a1f2a'; ctx.font='12px Segoe UI,Arial'; ctx.fillText(l2, bx, ry+32); }
+  ctx.restore();
 }
 
 function updatePanels(){
@@ -539,42 +575,96 @@ async function geocode(q){
   }catch(e){ drop.style.display='none'; }
 }
 document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target)) drop.style.display='none'; });
+document.getElementById('dim-img').onchange=function(){ dimImg=this.checked; redraw(); };
 
 // ---- export ----
 document.getElementById('btn-export').onclick=()=>{
   if(!center){ alert('Load a site first.'); return; }
   finishDraft();
   const savedSel=selIdx; selIdx=-1; redraw();   // drop the selection handle/outline from the export
-  const titleH=document.getElementById('plan-title').value.trim()?44:0;
-  const legendItems=buildLegendForExport();
-  const legendH=legendItems.length?54:0;
-  const W=canvas.width, H=canvas.height;
-  const out=document.createElement('canvas'); out.width=W; out.height=H+titleH*SCALE2X+legendH*SCALE2X;
+  const W=canvas.width, H=canvas.height, band=420;
+  const out=document.createElement('canvas'); out.width=W; out.height=H+band;
   const o=out.getContext('2d');
   o.fillStyle='#fff'; o.fillRect(0,0,out.width,out.height);
-  let y=0;
-  if(titleH){ o.fillStyle='#2e7d32'; o.fillRect(0,0,out.width,titleH*SCALE2X); o.fillStyle='#fff'; o.font=`bold ${22*SCALE2X}px Segoe UI,Arial`; o.textBaseline='middle'; o.textAlign='left'; o.fillText(document.getElementById('plan-title').value.trim(),16*SCALE2X,titleH*SCALE2X/2); y=titleH*SCALE2X; }
-  o.drawImage(baseImg,0,y,W,H);
-  o.drawImage(canvas,0,y);
-  if(legendH){ const ly=y+H; o.fillStyle='#f4f6f8'; o.fillRect(0,ly,out.width,legendH*SCALE2X); o.textBaseline='middle';
-    let lx=16*SCALE2X; o.font=`bold ${13*SCALE2X}px Segoe UI,Arial`;
-    legendItems.forEach(li=>{ const cy=ly+legendH*SCALE2X/2; o.fillStyle=li.color;
-      if(li.line){ o.fillRect(lx,cy-2*SCALE2X,26*SCALE2X,4*SCALE2X);}
-      else if(li.ada){ o.globalAlpha=.28; o.fillRect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.globalAlpha=1; o.strokeStyle=li.color; o.lineWidth=2*SCALE2X; o.strokeRect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); }
-      else { o.beginPath(); if(li.shape==='circle')o.arc(lx+9*SCALE2X,cy,9*SCALE2X,0,7); else o.rect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.fill(); }
-      o.fillStyle='#1a1f2a'; o.fillText(li.text, lx+34*SCALE2X, cy); lx+=(40+li.text.length*8.5)*SCALE2X; });
-  }
+  o.drawImage(baseImg,0,0,W,H);
+  o.drawImage(canvas,0,0);
+  drawNorthArrow(o, W-60, 92, 32);
+  const tbW=720, tbX=W-tbW;
+  drawLegendTableExport(o, 0, H, tbX, band);
+  drawTitleBlockExport(o, tbX, H, tbW, band);
+  o.strokeStyle='#1a1f2a'; o.lineWidth=3; o.strokeRect(1.5,1.5,W-3,H-3);                 // map frame
+  o.lineWidth=2; o.beginPath(); o.moveTo(0,H); o.lineTo(W,H); o.stroke();                 // band divider
+  o.lineWidth=4; o.strokeRect(2,2,out.width-4,out.height-4);                              // outer sheet frame
   const a=document.createElement('a');
-  const fn=(addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_');
+  const fn=(document.getElementById('proj-name').value||addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_');
   a.download=`GreenKey_SitePlan_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
   selIdx=savedSel; redraw();
 };
 function buildLegendForExport(){
-  const used=new Map(), arr=[];
-  for(const it of items){ if(it.type==='symbol'&&!used.has('s'+it.kind)){used.set('s'+it.kind,1);const d=SYMBOLS[it.kind];arr.push({text:d.label,color:cssVar(d.color),shape:d.shape});} }
-  for(const it of items){ if(it.type==='line'&&!used.has('l'+it.kind)){used.set('l'+it.kind,1);const d=LINES[it.kind];arr.push({text:d.label,color:cssVar(d.color),line:true});} }
-  if(items.some(it=>it.type==='ada')) arr.push({text:'ADA accessible space',color:cssVar('var(--ada)'),ada:true});
+  const arr=[];
+  Object.keys(LINES).forEach(k=>{
+    const ls=items.filter(it=>it.type==='line'&&it.kind===k); if(!ls.length) return;
+    const d=LINES[k]; const total=Math.round(ls.reduce((s,it)=>s+totalRunFt(it),0));
+    let spec='';
+    if(d.spec){ const w=[...new Set(ls.map(it=>it.wire).filter(Boolean))], c=[...new Set(ls.map(it=>it.conduit).filter(Boolean))];
+      spec=[w.length===1?w[0]:(w.length?'mixed wire':''), c.length===1?c[0]+'" PVC':(c.length?'mixed conduit':'')].filter(Boolean).join(', '); }
+    arr.push({text:d.label, spec:(spec?spec+' · ':'')+total+' ft', color:cssVar(d.color), line:true, dash:d.dash});
+  });
+  Object.keys(SYMBOLS).forEach(k=>{ const c=items.filter(it=>it.type==='symbol'&&it.kind===k).length; if(!c) return; const d=SYMBOLS[k]; arr.push({text:d.label, spec:'×'+c, color:cssVar(d.color), shape:d.shape}); });
+  const adas=items.filter(it=>it.type==='ada'); if(adas.length) arr.push({text:'ADA accessible space + aisle', spec:'×'+adas.length, color:cssVar('var(--ada)'), ada:true});
   return arr;
+}
+function drawNorthArrow(o,x,y,r){
+  o.save(); o.fillStyle='rgba(255,255,255,.92)'; o.strokeStyle='#1a1f2a'; o.lineWidth=2.5;
+  o.beginPath(); o.arc(x,y,r,0,7); o.fill(); o.stroke();
+  o.fillStyle='#1a1f2a'; o.beginPath(); o.moveTo(x,y-r*0.62); o.lineTo(x-r*0.34,y+r*0.20); o.lineTo(x,y+r*0.04); o.lineTo(x+r*0.34,y+r*0.20); o.closePath(); o.fill();
+  o.font='bold '+(r*0.6)+'px Segoe UI,Arial'; o.textAlign='center'; o.textBaseline='middle'; o.fillText('N', x, y+r*0.52);
+  o.restore();
+}
+function drawLegendTableExport(o,x,y,w,h){
+  const S=SCALE2X, pad=18*S;
+  o.fillStyle='#1a1f2a'; o.textAlign='left'; o.textBaseline='alphabetic';
+  o.font='bold '+(13*S)+'px Segoe UI,Arial'; o.fillText('LEGEND / KEY', x+pad, y+pad+11*S);
+  const rows=buildLegendForExport();
+  const top=y+pad+26*S, avail=h-(pad+34*S);
+  const rowH=Math.min(32*S, avail/Math.max(rows.length,1));
+  rows.forEach((li,idx)=>{
+    const cy=top+rowH*idx+rowH/2, lx=x+pad;
+    if(li.line){ o.lineCap='round'; o.strokeStyle='rgba(0,0,0,.5)'; o.lineWidth=7*S; o.beginPath(); o.moveTo(lx,cy); o.lineTo(lx+28*S,cy); o.stroke();
+      o.strokeStyle=li.color; o.lineWidth=4*S; if(li.dash)o.setLineDash([7*S,5*S]); o.beginPath(); o.moveTo(lx,cy); o.lineTo(lx+28*S,cy); o.stroke(); o.setLineDash([]); }
+    else if(li.ada){ o.globalAlpha=.28; o.fillStyle=li.color; o.fillRect(lx,cy-10*S,22*S,20*S); o.globalAlpha=1; o.strokeStyle=li.color; o.lineWidth=2.5*S; o.strokeRect(lx,cy-10*S,22*S,20*S); }
+    else { o.fillStyle=li.color; o.strokeStyle='#fff'; o.lineWidth=2*S; if(li.shape==='circle'){o.beginPath();o.arc(lx+11*S,cy,10*S,0,7);o.fill();o.stroke();} else {o.fillRect(lx,cy-10*S,22*S,20*S);o.strokeRect(lx,cy-10*S,22*S,20*S);} }
+    o.fillStyle='#1a1f2a'; o.textBaseline='middle'; o.font='bold '+(13.5*S)+'px Segoe UI,Arial';
+    o.fillText(li.text, lx+40*S, cy);
+    if(li.spec){ const tw=o.measureText(li.text).width; o.font=(12.5*S)+'px Segoe UI,Arial'; o.fillStyle='#5e6a78'; o.fillText('  —  '+li.spec, lx+40*S+tw, cy); }
+    o.textBaseline='alphabetic';
+  });
+}
+function drawTitleBlockExport(o,x,y,w,h){
+  const S=SCALE2X, pad=20*S;
+  o.strokeStyle='#1a1f2a'; o.lineWidth=2; o.beginPath(); o.moveTo(x,y); o.lineTo(x,y+h); o.stroke();
+  const tx=x+pad, ty=y+pad;
+  o.textAlign='left'; o.textBaseline='top';
+  o.font='bold '+(24*S)+'px Segoe UI,Arial'; o.fillStyle=cssVar('var(--green)'); o.fillText('GreenKey', tx, ty);
+  o.font=(11*S)+'px Segoe UI,Arial'; o.fillStyle='#5e6a78'; o.fillText('Commercial EV Charging Infrastructure  ·  Class A Electrical, Virginia', tx, ty+32*S);
+  o.strokeStyle='#d7dde3'; o.lineWidth=1.5; o.beginPath(); o.moveTo(tx, ty+52*S); o.lineTo(x+w-pad, ty+52*S); o.stroke();
+  const fields=[
+    ['PROJECT / CLIENT', document.getElementById('proj-name').value||'—'],
+    ['PROPERTY', (addr.value||'—').split(',').slice(0,2).join(',')],
+    ['SHEET', document.getElementById('plan-title').value||'Site Plan Exhibit'],
+    ['DATE', new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})],
+    ['PREPARED BY', document.getElementById('prepared-by').value||'—']
+  ];
+  const colW=(w-2*pad)/2, fy=ty+70*S, rowGap=46*S;
+  fields.forEach((f,i)=>{
+    const col=i%2, row=(i/2)|0, fx=tx+col*colW, yy=fy+row*rowGap;
+    const lone=(i===fields.length-1 && col===0), maxW=(lone?w-2*pad:colW);
+    o.font='bold '+(9.5*S)+'px Segoe UI,Arial'; o.fillStyle='#5e6a78'; o.textBaseline='top'; o.fillText(f[0], fx, yy);
+    o.font=(13.5*S)+'px Segoe UI,Arial'; o.fillStyle='#1a1f2a';
+    let v=String(f[1]); while(o.measureText(v).width>maxW-12*S && v.length>5){ v=v.slice(0,-2); }
+    if(v!==String(f[1])) v=v+'…';
+    o.fillText(v, fx, yy+14*S);
+  });
 }
 </script>
 </body>
