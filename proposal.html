@@ -174,9 +174,16 @@ const RUN_CONDUIT=['','3/4"','1"','1-1/4"','1-1/2"','2"','2-1/2"','3"','4"'];
 // Defaults use the code-minimum conduit; upsize via the dropdown when preferred (e.g. 2-1/2" for easier pulls).
 // Service lateral = 4/0 Al ×3 in 2" with a ~30 ft pole riser; branch = #6 Cu with stand/panel drops.
 const RUN_DEFAULTS={
-  lateral:{wire:'#4/0 Al', conduit:'2"', vert:30},
-  branch :{wire:'#6 Cu',   conduit:'1"',     vert:5},
-  trench :{wire:'',        conduit:'',       vert:0}
+  lateral:{wire:'#4/0 Al', conduit:'2"', vert:30, inTrench:true, trench:'pvc18'},
+  branch :{wire:'#6 Cu',   conduit:'1"', vert:5,  inTrench:true, trench:'pvc18'},
+  trench :{wire:'',        conduit:'',   vert:0,                 trench:'pvc18'}
+};
+// Trench / raceway method. PVC in an 18"+ trench is required under parking & roads;
+// IMC in a shallow 6" trench is allowed in some spots and can be cheaper when it benefits the job.
+const TRENCH={
+  pvc18:{label:'PVC · 18″ (under paving)', material:'PVC', depth:18},
+  imc6 :{label:'IMC · 6″ (shallow)',       material:'IMC', depth:6},
+  pvc24:{label:'PVC · 24″ (road/bore)',    material:'PVC', depth:24}
 };
 // ADA accessible space + access aisle (real-world feet). Van-accessible per ADA/IBC.
 // Van-accessible per ADA/IBC: 11' space + 5' aisle (the wide space is the tell).
@@ -199,10 +206,12 @@ let items=[];
 let draft=null;
 let dragItem=null;          // symbol/label/ADA being moved
 let rotating=null;          // ADA item being rotated via its handle
+let resizing=null;          // ADA item being resized via its corner grip
 let selIdx=-1;              // index of the selected item (ADA shows a properties panel)
 let dimImg=false;          // dim the satellite so coloured linework pops
 let panning=false, panStart=null, panDelta={x:0,y:0};
 let history=[];
+let calloutRects=[];        // placed callout boxes this frame, for overlap avoidance
 
 // device px per foot at the current zoom/latitude (metersPerPx is meters per device px)
 function ftToPx(ft){ return metersPerPx? (ft/3.28084)/metersPerPx : 0; }
@@ -295,13 +304,16 @@ function redraw(){
     else if(it.type==='label') drawLabel(it);
   }
   // run callouts last so the labels sit on top of everything
+  calloutRects=[];
   for(const it of items){ if(it.type==='line' && it.pts.length>=2) drawRunCallout(it); }
   updatePanels();
 }
 // px-per-foot for an ADA group — always true to real-world scale, so it renders correctly at any zoom
 function adaScale(){ return ftToPx(1); }
+// effective real-world dimensions = variant base × the item's user scale (drag-to-fit the lot)
+function adaDims(it){ const b=ADA[it.variant], s=it.scale||1; return {space:b.space*s, aisle:b.aisle*s, len:b.len*s, tag:b.tag}; }
 function drawAda(it, selected){
-  const c=project(it), d=ADA[it.variant], sc=adaScale(it);
+  const c=project(it), d=adaDims(it), sc=adaScale();
   const spx=d.space*sc, apx=d.aisle*sc, lpx=d.len*sc, wpx=spx+apx;
   const left=-wpx/2, top=-lpx/2;
   let spaceX, aisleX;
@@ -329,13 +341,18 @@ function drawAda(it, selected){
     ctx.strokeRect(left-4,top-4,wpx+8,lpx+8); ctx.setLineDash([]);
     const hy=top-30; ctx.beginPath(); ctx.moveTo(0,top); ctx.lineTo(0,hy); ctx.strokeStyle=cssVar('var(--sel)'); ctx.lineWidth=2; ctx.stroke();
     ctx.beginPath(); ctx.arc(0,hy,7,0,7); ctx.fillStyle=cssVar('var(--sel)'); ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+    // resize grip at the bottom-right corner (drag to size to the lot)
+    ctx.fillStyle=cssVar('var(--sel)'); ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+    ctx.fillRect(wpx/2-7,lpx/2-7,14,14); ctx.strokeRect(wpx/2-7,lpx/2-7,14,14);
   }
   ctx.restore();
 }
 // local (un-rotated) coords of a point relative to an ADA group's centre
 function adaLocal(it,p){ const c=project(it); const dx=p.x-c.x,dy=p.y-c.y,a=-it.rot*Math.PI/180; return {x:dx*Math.cos(a)-dy*Math.sin(a), y:dx*Math.sin(a)+dy*Math.cos(a)}; }
-function adaInside(it,p){ const d=ADA[it.variant]; const l=adaLocal(it,p); return Math.abs(l.x)<=(ftToPx(d.space)+ftToPx(d.aisle))/2 && Math.abs(l.y)<=ftToPx(d.len)/2; }
-function adaHandle(it){ const c=project(it); const ly=-ftToPx(ADA[it.variant].len)/2-30, a=it.rot*Math.PI/180; return {x:c.x-ly*Math.sin(a), y:c.y+ly*Math.cos(a)}; }
+function adaInside(it,p){ const d=adaDims(it); const l=adaLocal(it,p); return Math.abs(l.x)<=(ftToPx(d.space)+ftToPx(d.aisle))/2 && Math.abs(l.y)<=ftToPx(d.len)/2; }
+function adaHandle(it){ const c=project(it); const ly=-ftToPx(adaDims(it).len)/2-30, a=it.rot*Math.PI/180; return {x:c.x-ly*Math.sin(a), y:c.y+ly*Math.cos(a)}; }
+// bottom-right resize grip in canvas space
+function adaResizeHandle(it){ const d=adaDims(it), sc=adaScale(), c=project(it); const lx=(d.space+d.aisle)/2*sc, ly=d.len/2*sc, a=it.rot*Math.PI/180; return {x:c.x+lx*Math.cos(a)-ly*Math.sin(a), y:c.y+lx*Math.sin(a)+ly*Math.cos(a)}; }
 function drawLine(it, isDraft){
   const def=LINES[it.kind], col=cssVar(def.color);
   const sp=it.pts.map(project);
@@ -344,7 +361,8 @@ function drawLine(it, isDraft){
   ctx.beginPath(); sp.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
   ctx.lineWidth=10; ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.stroke();
   // coloured run
-  ctx.lineWidth=6; ctx.strokeStyle=col; if(def.dash) ctx.setLineDash([16,12]); ctx.stroke(); ctx.setLineDash([]);
+  const dashed = def.dash || (def.spec && it.inTrench);   // buried conductors drawn dashed (drafting convention)
+  ctx.lineWidth=6; ctx.strokeStyle=col; if(dashed) ctx.setLineDash([16,12]); ctx.stroke(); ctx.setLineDash([]);
   // vertices with white edge
   ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=2;
   sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();ctx.stroke();});
@@ -383,29 +401,39 @@ function pathMidpoint(sp){
   for(let i=1;i<sp.length;i++){ const d=Math.hypot(sp[i].x-sp[i-1].x, sp[i].y-sp[i-1].y); if(half<=d){ const t=d?half/d:0; return {x:sp[i-1].x+(sp[i].x-sp[i-1].x)*t, y:sp[i-1].y+(sp[i].y-sp[i-1].y)*t}; } half-=d; }
   return sp[sp.length-1];
 }
-// leader-line callout: run length + wire/conduit spec, offset off the line so it never sits on clutter
+function rectsOverlap(a,b){ return !(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y); }
+function calloutObstacles(){ const o=[]; for(const it of items){ if(it.type==='symbol'){ const p=project(it); o.push({x:p.x-28,y:p.y-28,w:56,h:56}); } else if(it.type==='ada'){ const p=project(it); o.push({x:p.x-34,y:p.y-34,w:68,h:68}); } } return o; }
+// leader-line callout: run length + wire/conduit spec, auto-placed to clear symbols, ADA and other callouts
 function drawRunCallout(it){
   const def=LINES[it.kind], col=cssVar(def.color);
   const sp=it.pts.map(project); if(sp.length<2) return;
   const mid=pathMidpoint(sp);
   const a=sp[0], b=sp[sp.length-1];
   let dx=b.x-a.x, dy=b.y-a.y; const len=Math.hypot(dx,dy)||1; dx/=len; dy/=len;
-  let px=-dy, py=dx; if(py>0){px=-px;py=-py;}      // perpendicular, biased upward
-  const off=44, bx=mid.x+px*off, by=mid.y+py*off;
+  const px=-dy, py=dx;                                   // perpendicular to the run
   const l1=Math.round(lineFt(it.pts))+' ft';
-  const l2 = def.spec ? [it.wire, it.conduit?it.conduit+'" PVC':''].filter(Boolean).join('  ·  ') : def.label;
+  let l2;
+  if(def.spec){ const parts=[it.wire, it.conduit?it.conduit+'"':'']; if(it.inTrench&&TRENCH[it.trench]) parts.push(TRENCH[it.trench].material+' '+TRENCH[it.trench].depth+'" tr.'); l2=parts.filter(Boolean).join('  ·  '); }
+  else l2 = (it.trench&&TRENCH[it.trench]) ? TRENCH[it.trench].label : def.label;
   ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle';
-  // leader
-  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(mid.x,mid.y); ctx.lineTo(bx,by); ctx.stroke();
-  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(mid.x,mid.y,4,0,7); ctx.fill();
-  // box
   ctx.font='bold 16px Segoe UI,Arial'; const w1=ctx.measureText(l1).width;
   ctx.font='12px Segoe UI,Arial'; const w2=l2?ctx.measureText(l2).width:0;
-  const bw=Math.max(w1,w2)+22, bh=l2?46:30, rx=bx-bw/2, ry=by-bh/2;
+  const bw=Math.max(w1,w2)+22, bh=l2?46:30;
+  // try offsets on both sides; keep the first that clears obstacles + earlier callouts (prefer higher placement)
+  const obst=calloutObstacles(), cands=[];
+  [-1,1].forEach(sgn=>[48,80,114,152].forEach(off=>cands.push({x:mid.x+px*sgn*off, y:mid.y+py*sgn*off})));
+  cands.sort((A,B)=>A.y-B.y);
+  let best=cands[0];
+  for(const cc of cands){ const r={x:cc.x-bw/2,y:cc.y-bh/2,w:bw,h:bh};
+    if(!obst.some(o=>rectsOverlap(r,o)) && !calloutRects.some(o=>rectsOverlap(r,o))){ best=cc; break; } }
+  const bx=best.x, by=best.y, rx=bx-bw/2, ry=by-bh/2;
+  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(mid.x,mid.y); ctx.lineTo(bx,by); ctx.stroke();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(mid.x,mid.y,4,0,7); ctx.fill();
   ctx.fillStyle='rgba(255,255,255,.96)'; ctx.strokeStyle=col; ctx.lineWidth=2.5;
   roundRect(rx,ry,bw,bh,8); ctx.fill(); ctx.stroke();
   ctx.fillStyle=col; ctx.font='bold 16px Segoe UI,Arial'; ctx.fillText(l1, bx, l2?ry+15:by);
   if(l2){ ctx.fillStyle='#1a1f2a'; ctx.font='12px Segoe UI,Arial'; ctx.fillText(l2, bx, ry+32); }
+  calloutRects.push({x:rx,y:ry,w:bw,h:bh});
   ctx.restore();
 }
 
@@ -414,24 +442,35 @@ function updatePanels(){
   const idxLines=items.map((it,i)=>({it,i})).filter(o=>o.it.type==='line');
   if(!idxLines.length){ ml.innerHTML='<div class="hint">No runs drawn yet.</div>'; }
   else{
+    const trenchOpts=(sel)=>Object.keys(TRENCH).map(k=>`<option value="${k}" ${k===(sel||'pvc18')?'selected':''}>${TRENCH[k].label}</option>`).join('');
     let cards=idxLines.map(({it,i})=>{
       const def=LINES[it.kind], ft=Math.round(lineFt(it.pts)), col=cssVar(def.color);
       let body='';
       if(def.spec){
         const wopt=RUN_WIRE.map(w=>`<option value="${w}" ${w===(it.wire||'')?'selected':''}>${w||'— wire —'}</option>`).join('');
-        const copt=RUN_CONDUIT.map(c=>`<option value="${c}" ${c===(it.conduit||'')?'selected':''}>${c||'— conduit —'}</option>`).join('');
+        const copt=RUN_CONDUIT.map(c=>`<option value="${c}" ${c===(it.conduit||'')?'selected':''}>${c||'— size —'}</option>`).join('');
         body=`<div><label class="mini">Wire (×3 unless noted)</label><select class="sm" onchange="updateRun(${i},'wire',this.value)">${wopt}</select></div>
           <div style="display:flex;gap:6px;margin-top:5px">
-            <div style="flex:1"><label class="mini">Conduit</label><select class="sm" onchange="updateRun(${i},'conduit',this.value)">${copt}</select></div>
+            <div style="flex:1"><label class="mini">Conduit size</label><select class="sm" onchange="updateRun(${i},'conduit',this.value)">${copt}</select></div>
             <div style="width:84px"><label class="mini">Vert. ft</label><input class="sm" type="number" min="0" value="${it.vert||0}" onchange="updateRun(${i},'vert',this.value)" title="Pole riser + stand/panel drops"></div>
-          </div>`;
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;margin-top:6px;cursor:pointer"><input type="checkbox" ${it.inTrench?'checked':''} onchange="updateRun(${i},'inTrench',this.checked)"> In trench (buried)</label>
+          ${it.inTrench?`<div style="margin-top:4px"><label class="mini">Trench method</label><select class="sm" onchange="updateRun(${i},'trench',this.value)">${trenchOpts(it.trench)}</select></div>`:''}`;
+      } else {
+        body=`<div><label class="mini">Trench method</label><select class="sm" onchange="updateRun(${i},'trench',this.value)">${trenchOpts(it.trench)}</select></div>`;
       }
       return `<div class="run-card"><div class="rc-top"><span style="color:${col}">${def.label} · ${ft} ft</span><span class="rc-x" title="Delete this run" onclick="deleteItem(${i})">✕</span></div>${body}</div>`;
     }).join('');
+    // conductor totals (incl. vertical riser/drops)
     const tot={};
-    for(const {it} of idxLines){ tot[it.kind]=(tot[it.kind]||0)+Math.round(totalRunFt(it)); }
-    const totRows=Object.keys(LINES).filter(k=>tot[k]!=null).map(k=>
-      `<div class="meas-tot-row"><span style="color:${cssVar(LINES[k].color)}">${LINES[k].label} total${LINES[k].spec?' (incl. vert.)':''}</span><b>${tot[k]} ft</b></div>`).join('');
+    for(const {it} of idxLines){ if(LINES[it.kind].spec) tot[it.kind]=(tot[it.kind]||0)+Math.round(totalRunFt(it)); }
+    let totRows=Object.keys(LINES).filter(k=>LINES[k].spec&&tot[k]!=null).map(k=>
+      `<div class="meas-tot-row"><span style="color:${cssVar(LINES[k].color)}">${LINES[k].label} total (incl. vert.)</span><b>${tot[k]} ft</b></div>`).join('');
+    // trench (buried) total = standalone trench lines + in-trench conductors, broken out by method
+    let trTotal=0; const byM={};
+    for(const {it} of idxLines){ const buried = it.kind==='trench' || (LINES[it.kind].spec && it.inTrench); if(buried){ const f=Math.round(lineFt(it.pts)); trTotal+=f; const m=it.trench||'pvc18'; byM[m]=(byM[m]||0)+f; } }
+    if(trTotal){ totRows+=`<div class="meas-tot-row"><span style="color:${cssVar('var(--trench)')}">Trench total (buried)</span><b>${trTotal} ft</b></div>`;
+      totRows+=Object.keys(byM).map(m=>`<div class="meas-tot-row" style="font-weight:500;font-size:11px;color:var(--muted)"><span>&nbsp;&nbsp;${TRENCH[m].label}</span><b>${byM[m]} ft</b></div>`).join(''); }
     ml.innerHTML=cards+'<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">'+totRows+'</div>';
   }
   // legend
@@ -465,12 +504,14 @@ function renderSelProps(){
       <option value="right" ${it.aisleSide==='right'?'selected':''}>Right of space</option>
       <option value="left" ${it.aisleSide==='left'?'selected':''}>Left of space</option>
     </select>
-    <label class="mini" style="margin-top:6px">Rotation (°) — or drag the handle</label>
+    <label class="mini" style="margin-top:6px">Size % — or drag the ◢ corner grip to fit the lot's stalls</label>
+    <input class="sm" type="number" min="40" max="500" step="5" value="${Math.round((it.scale||1)*100)}" onchange="updateAda('scale',(+this.value||100)/100)">
+    <label class="mini" style="margin-top:6px">Rotation (°) — or drag the top handle</label>
     <input class="sm" type="number" value="${Math.round(it.rot)}" onchange="updateAda('rot',this.value)">
-    <div class="hint" style="margin-top:8px">Rotate to line up with the existing stalls. This footprint replaces one standard parking space.</div>`;
+    <div class="hint" style="margin-top:8px">Drag the corner grip to match the painted stalls and the top handle to rotate. Once placed it's locked to the ground and scales with zoom. This footprint replaces one standard parking space.</div>`;
 }
 function updateRun(i,field,val){ if(!items[i])return; items[i][field]= field==='vert'?Math.max(0,+val||0):val; redraw(); }
-function updateAda(field,val){ const it=items[selIdx]; if(!it)return; pushHistory(); it[field]= field==='rot'?(+val||0):val; redraw(); }
+function updateAda(field,val){ const it=items[selIdx]; if(!it)return; pushHistory(); it[field]= field==='rot'?(+val||0) : field==='scale'?Math.max(0.4,Math.min(5,+val||1)) : val; redraw(); }
 function deleteItem(i){ if(!items[i])return; pushHistory(); items.splice(i,1); if(selIdx===i)selIdx=-1; else if(selIdx>i)selIdx--; redraw(); }
 window.updateRun=updateRun; window.updateAda=updateAda; window.deleteItem=deleteItem;
 
@@ -489,8 +530,11 @@ function hitTest(p){
 canvas.addEventListener('mousedown',e=>{
   if(!center) return;
   const p=evtPt(e);
-  // rotate handle of a selected ADA space takes priority
-  if(selIdx>=0 && items[selIdx] && items[selIdx].type==='ada' && dist(p,adaHandle(items[selIdx]))<14){ pushHistory(); rotating=items[selIdx]; return; }
+  // resize grip / rotate handle of a selected ADA space take priority
+  if(selIdx>=0 && items[selIdx] && items[selIdx].type==='ada'){
+    if(dist(p,adaResizeHandle(items[selIdx]))<16){ pushHistory(); resizing=items[selIdx]; return; }
+    if(dist(p,adaHandle(items[selIdx]))<14){ pushHistory(); rotating=items[selIdx]; return; }
+  }
   if(tool==='pan'){ panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; canvas.style.cursor='grabbing'; return; }
   if(tool==='select'){ const h=hitTest(p);
     if(h>=0 && items[h].type!=='line'){ dragItem=items[h]; selIdx=(items[h].type==='ada')?h:-1; pushHistory(); redraw(); }
@@ -498,10 +542,10 @@ canvas.addEventListener('mousedown',e=>{
     return;
   }
   if(tool==='delete'){ const h=hitTest(p); if(h>=0) deleteItem(h); return; }
-  if(tool==='ada'){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'ada',lon:g.lon,lat:g.lat,rot:0,variant:'van',aisleSide:'right'}); selIdx=items.length-1; redraw(); return; }
+  if(tool==='ada'){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'ada',lon:g.lon,lat:g.lat,rot:0,variant:'van',aisleSide:'right',scale:1}); selIdx=items.length-1; redraw(); return; }
   if(tool==='label'){ const t=prompt('Label text:'); if(t){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'label',lon:g.lon,lat:g.lat,text:t}); redraw(); } return; }
   if(LINES[tool]){ const g=unproject(p.x,p.y);
-    if(!draft){ const d=RUN_DEFAULTS[tool]||{}; draft={type:'line',kind:tool,pts:[g],wire:d.wire||'',conduit:d.conduit||'',vert:d.vert||0}; }
+    if(!draft){ const d=RUN_DEFAULTS[tool]||{}; draft={type:'line',kind:tool,pts:[g],wire:d.wire||'',conduit:d.conduit||'',vert:d.vert||0,inTrench:!!d.inTrench,trench:d.trench||'pvc18'}; }
     else { draft.pts.push(g); } redraw(); return;
   }
   if(SYMBOLS[tool]){ pushHistory(); const g=unproject(p.x,p.y); items.push({type:'symbol',kind:tool,lon:g.lon,lat:g.lat,n:symbolCount(tool)+1}); redraw(); return; }
@@ -511,6 +555,7 @@ canvas.addEventListener('mousemove',e=>{
     baseImg.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`;
     canvas.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`; return; }
   const p=evtPt(e);
+  if(resizing){ const b=ADA[resizing.variant], sc=adaScale(); const l=adaLocal(resizing,p); const unit=Math.hypot((b.space+b.aisle)/2*sc, b.len/2*sc)||1; resizing.scale=Math.max(0.4,Math.min(5, Math.hypot(l.x,l.y)/unit)); redraw(); return; }
   if(rotating){ const c=project(rotating); rotating.rot=Math.atan2(p.y-c.y,p.x-c.x)*180/Math.PI+90; redraw(); return; }
   if(dragItem){ const g=unproject(p.x,p.y); dragItem.lon=g.lon; dragItem.lat=g.lat; redraw(); return; }
   if(draft){ const g=unproject(p.x,p.y); const tmp={...draft,pts:[...draft.pts,g]};
@@ -523,7 +568,7 @@ window.addEventListener('mouseup',()=>{
     if(panDelta.x||panDelta.y){ const g=unproject(canvas.width/2 - panDelta.x*SCALE2X, canvas.height/2 - panDelta.y*SCALE2X); center={lon:g.lon,lat:g.lat}; }
     baseImg.style.transform=''; canvas.style.transform=''; panDelta={x:0,y:0}; loadBase();
   }
-  dragItem=null; rotating=null;
+  dragItem=null; rotating=null; resizing=null;
 });
 canvas.addEventListener('dblclick',finishDraft);
 function finishDraft(){ if(draft&&draft.pts.length>=2){ pushHistory(); items.push(draft); } draft=null; redraw(); }
@@ -606,8 +651,9 @@ function buildLegendForExport(){
     const ls=items.filter(it=>it.type==='line'&&it.kind===k); if(!ls.length) return;
     const d=LINES[k]; const total=Math.round(ls.reduce((s,it)=>s+totalRunFt(it),0));
     let spec='';
-    if(d.spec){ const w=[...new Set(ls.map(it=>it.wire).filter(Boolean))], c=[...new Set(ls.map(it=>it.conduit).filter(Boolean))];
-      spec=[w.length===1?w[0]:(w.length?'mixed wire':''), c.length===1?c[0]+'" PVC':(c.length?'mixed conduit':'')].filter(Boolean).join(', '); }
+    if(d.spec){ const w=[...new Set(ls.map(it=>it.wire).filter(Boolean))], c=[...new Set(ls.map(it=>it.conduit).filter(Boolean))], trm=[...new Set(ls.filter(it=>it.inTrench).map(it=>it.trench))];
+      spec=[w.length===1?w[0]:(w.length?'mixed wire':''), c.length===1?c[0]+'"':(c.length?'mixed size':''), trm.length===1?TRENCH[trm[0]].label:(trm.length?'trench (mixed)':'')].filter(Boolean).join(', '); }
+    else { const trm=[...new Set(ls.map(it=>it.trench||'pvc18'))]; spec=trm.length===1?TRENCH[trm[0]].label:'mixed methods'; }
     arr.push({text:d.label, spec:(spec?spec+' · ':'')+total+' ft', color:cssVar(d.color), line:true, dash:d.dash});
   });
   Object.keys(SYMBOLS).forEach(k=>{ const c=items.filter(it=>it.type==='symbol'&&it.kind===k).length; if(!c) return; const d=SYMBOLS[k]; arr.push({text:d.label, spec:'×'+c, color:cssVar(d.color), shape:d.shape}); });
