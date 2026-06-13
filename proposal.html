@@ -166,9 +166,10 @@ const LINES = {
 const RUN_WIRE=['','#8 Cu','#6 Cu','#4 Cu','#2 Cu','#1 Cu','#1/0 Al','#2/0 Al','#4/0 Al','350 kcmil Al','500 kcmil Al','#6 Cu bare (gnd)'];
 const RUN_CONDUIT=['','3/4"','1"','1-1/4"','1-1/2"','2"','2-1/2"','3"','4"'];
 // Sensible starting wire/conduit/vertical-add per run type (all editable per run).
-// Service lateral default = 4/0 Al ×3 in 2-1/2" with a ~30 ft pole riser; branch = #6 Cu with stand/panel drops.
+// Defaults use the code-minimum conduit; upsize via the dropdown when preferred (e.g. 2-1/2" for easier pulls).
+// Service lateral = 4/0 Al ×3 in 2" with a ~30 ft pole riser; branch = #6 Cu with stand/panel drops.
 const RUN_DEFAULTS={
-  lateral:{wire:'#4/0 Al', conduit:'2-1/2"', vert:30},
+  lateral:{wire:'#4/0 Al', conduit:'2"', vert:30},
   branch :{wire:'#6 Cu',   conduit:'1"',     vert:5},
   trench :{wire:'',        conduit:'',       vert:0}
 };
@@ -288,9 +289,11 @@ function redraw(){
   }
   updatePanels();
 }
+// px-per-foot for an ADA group — always true to real-world scale, so it renders correctly at any zoom
+function adaScale(){ return ftToPx(1); }
 function drawAda(it, selected){
-  const c=project(it), d=ADA[it.variant];
-  const spx=ftToPx(d.space), apx=ftToPx(d.aisle), lpx=ftToPx(d.len), wpx=spx+apx;
+  const c=project(it), d=ADA[it.variant], sc=adaScale(it);
+  const spx=d.space*sc, apx=d.aisle*sc, lpx=d.len*sc, wpx=spx+apx;
   const left=-wpx/2, top=-lpx/2;
   let spaceX, aisleX;
   if(it.aisleSide==='left'){ aisleX=left; spaceX=left+apx; } else { spaceX=left; aisleX=left+spx; }
@@ -302,7 +305,7 @@ function drawAda(it, selected){
   ctx.fillStyle='rgba(255,255,255,.34)'; ctx.fillRect(aisleX,top,apx,lpx); ctx.strokeRect(aisleX,top,apx,lpx);
   ctx.save(); ctx.beginPath(); ctx.rect(aisleX,top,apx,lpx); ctx.clip();
   ctx.strokeStyle=cssVar('var(--ada)'); ctx.lineWidth=2;
-  const step=Math.max(10,ftToPx(2));
+  const step=Math.max(8,sc*2);
   for(let x=aisleX-lpx; x<aisleX+apx; x+=step){ ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x+lpx,top+lpx); ctx.stroke(); }
   ctx.restore();
   // ISA wheelchair + tag, counter-rotated so they stay upright
@@ -334,18 +337,18 @@ function drawLine(it, isDraft){
   sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
   if(it.pts.length>=2 && !isDraft){
     const ft=Math.round(lineFt(it.pts));
-    const mid=sp[Math.floor(sp.length/2)];
+    const mid=pathMidpoint(sp);
     labelChip(`${ft} ft`, mid.x, mid.y-14, col);
   }
   ctx.restore();
 }
 function drawSymbol(it){
-  const def=SYMBOLS[it.kind], col=cssVar(def.color), p=project(it), s=26;
-  ctx.save(); ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  const def=SYMBOLS[it.kind], col=cssVar(def.color), p=project(it), s=44;
+  ctx.save(); ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=4;
   if(def.shape==='circle'){ ctx.beginPath();ctx.arc(p.x,p.y,s/2,0,7);ctx.fill();ctx.stroke(); }
-  else if(def.shape==='rect'){ roundRect(p.x-s*0.9,p.y-s*0.55,s*1.8,s*1.1,5);ctx.fill();ctx.stroke(); }
-  else { roundRect(p.x-s/2,p.y-s/2,s,s,5);ctx.fill();ctx.stroke(); }
-  ctx.fillStyle='#fff'; ctx.font='bold 15px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  else if(def.shape==='rect'){ roundRect(p.x-s*0.9,p.y-s*0.55,s*1.8,s*1.1,7);ctx.fill();ctx.stroke(); }
+  else { roundRect(p.x-s/2,p.y-s/2,s,s,7);ctx.fill();ctx.stroke(); }
+  ctx.fillStyle='#fff'; ctx.font='bold 23px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText(it.n,p.x,p.y); ctx.restore();
 }
 function drawLabel(it){
@@ -362,6 +365,13 @@ function labelChip(txt,x,y,col){
   ctx.fillStyle=col; ctx.fillText(txt,x,y); ctx.restore();
 }
 function roundRect(x,y,w,h,r){ ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath(); }
+// geometric midpoint along a projected polyline (by length) — keeps the footage label centred on the run, not on its endpoint
+function pathMidpoint(sp){
+  let total=0; for(let i=1;i<sp.length;i++) total+=Math.hypot(sp[i].x-sp[i-1].x, sp[i].y-sp[i-1].y);
+  let half=total/2;
+  for(let i=1;i<sp.length;i++){ const d=Math.hypot(sp[i].x-sp[i-1].x, sp[i].y-sp[i-1].y); if(half<=d){ const t=d?half/d:0; return {x:sp[i-1].x+(sp[i].x-sp[i-1].x)*t, y:sp[i-1].y+(sp[i].y-sp[i-1].y)*t}; } half-=d; }
+  return sp[sp.length-1];
+}
 
 function updatePanels(){
   const ml=document.getElementById('meas-list');
