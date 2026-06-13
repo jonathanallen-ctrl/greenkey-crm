@@ -173,8 +173,10 @@ const RUN_DEFAULTS={
   trench :{wire:'',        conduit:'',       vert:0}
 };
 // ADA accessible space + access aisle (real-world feet). Van-accessible per ADA/IBC.
+// Van-accessible per ADA/IBC: 11' space + 5' aisle (the wide space is the tell).
+// Standard accessible car: 8' space + 5' aisle. Stall length ~18'.
 const ADA={
-  van:{space:11, aisle:8, len:18, tag:'VAN ACCESSIBLE'},
+  van:{space:11, aisle:5, len:18, tag:'VAN ACCESSIBLE'},
   std:{space:8,  aisle:5, len:18, tag:'ACCESSIBLE'}
 };
 function totalRunFt(it){ return lineFt(it.pts)+(+it.vert||0); }
@@ -306,9 +308,9 @@ function drawAda(it, selected){
   // ISA wheelchair + tag, counter-rotated so they stay upright
   ctx.save(); ctx.translate(spaceX+spx/2, top+lpx*0.42); ctx.rotate(-it.rot*Math.PI/180);
   ctx.fillStyle=cssVar('var(--ada)'); ctx.textAlign='center'; ctx.textBaseline='middle';
-  const isa=Math.max(13,Math.min(spx,lpx)*0.42);
-  ctx.font=`${isa}px 'Segoe UI Symbol','Segoe UI',Arial`; ctx.fillText('♿',0,0);
-  ctx.font=`bold ${Math.max(8,spx*0.12)}px Segoe UI,Arial`; ctx.fillText(d.tag,0,isa*0.72);
+  const isa=Math.max(18,Math.min(spx,lpx)*0.58);
+  ctx.font=`${isa}px 'Segoe UI Symbol','Segoe UI',Arial`; ctx.fillText('♿',0,-isa*0.12);
+  ctx.font=`bold ${Math.max(10,spx*0.17)}px Segoe UI,Arial`; ctx.fillText(d.tag,0,isa*0.72);
   ctx.restore();
   if(selected){
     ctx.strokeStyle=cssVar('var(--sel)'); ctx.setLineDash([8,6]); ctx.lineWidth=2.5;
@@ -409,7 +411,7 @@ function renderSelProps(){
   box.innerHTML=`<div class="sp-title">ADA space selected</div>
     <label class="mini">Type</label>
     <select class="sm" onchange="updateAda('variant',this.value)">
-      <option value="van" ${it.variant==='van'?'selected':''}>Van accessible (11′ space + 8′ aisle)</option>
+      <option value="van" ${it.variant==='van'?'selected':''}>Van accessible (11′ space + 5′ aisle)</option>
       <option value="std" ${it.variant==='std'?'selected':''}>Standard accessible (8′ space + 5′ aisle)</option>
     </select>
     <label class="mini" style="margin-top:6px">Access aisle side</label>
