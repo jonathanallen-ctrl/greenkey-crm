@@ -85,6 +85,10 @@
     <option value="5">5 · Service upgrade</option>
     <option value="6">6 · New service</option>
   </select>
+  <select id="view-sel" class="txt" style="max-width:210px" title="Which exhibit you're working on / exporting">
+    <option value="detail">Detailed Site Plan</option>
+    <option value="overall">Overall Site Plan (locator)</option>
+  </select>
   <button class="btn" id="btn-undo" title="Undo last (Ctrl+Z)">↶ Undo</button>
   <button class="btn primary" id="btn-export">⤓ Export PNG</button>
 </header>
@@ -99,12 +103,14 @@
     <button class="tool" data-tool="trench"><span class="swatch dash"></span> Trench</button>
     <div class="tb-sec">ADA</div>
     <button class="tool" data-tool="ada"><span class="swatch ada"></span> Accessible space + aisle</button>
+    <div class="tb-sec">Overall view</div>
+    <button class="tool" data-tool="area"><span class="swatch" style="background:rgba(46,125,50,.3);border:2px solid var(--green)"></span> Charging area box</button>
     <div class="tb-sec">Place symbol</div>
     <button class="tool" data-tool="stand"><span class="swatch" style="background:var(--stand)"></span> Service stand</button>
     <button class="tool" data-tool="panel"><span class="swatch" style="background:var(--panel)"></span> Panel</button>
     <button class="tool" data-tool="transformer"><span class="swatch" style="background:var(--transformer)"></span> Transformer</button>
     <button class="tool" data-tool="disconnect"><span class="swatch" style="background:var(--disconnect)"></span> Disconnect</button>
-    <button class="tool" data-tool="pedestal"><span class="swatch dot" style="background:var(--pedestal)"></span> Tesla pedestal</button>
+    <button class="tool" data-tool="pedestal"><span class="swatch dot" style="background:var(--pedestal)"></span> Charger pedestal</button>
     <button class="tool" data-tool="bollard"><span class="swatch dot" style="background:var(--bollard)"></span> Bollard</button>
     <button class="tool" data-tool="stall"><span class="swatch" style="background:var(--stall)"></span> EV stall</button>
     <button class="tool" data-tool="label"><span style="font-size:14px">T</span> Text label</button>
@@ -157,7 +163,7 @@ const SYMBOLS = {
   panel:       {label:'Panel',          color:'var(--panel)',       shape:'square'},
   transformer: {label:'Transformer',    color:'var(--transformer)', shape:'square'},
   disconnect:  {label:'Disconnect',     color:'var(--disconnect)',  shape:'square'},
-  pedestal:    {label:'Tesla pedestal', color:'var(--pedestal)',    shape:'circle'},
+  pedestal:    {label:'Charger pedestal', color:'var(--pedestal)',  shape:'circle'},
   bollard:     {label:'Bollard',        color:'var(--bollard)',     shape:'circle'},
   stall:       {label:'EV stall',       color:'var(--stall)',       shape:'rect'}
 };
@@ -205,6 +211,10 @@ let tool='pan';
 let items=[];
 let draft=null;
 let dragItem=null;          // symbol/label/ADA being moved
+let dragCallout=null;       // run whose callout label is being repositioned
+let draftArea=null, dragArea=null, resizingArea=null;   // Overall-view locator box being drawn/moved/resized
+let view='detail';          // active exhibit: 'detail' or 'overall'
+let views={detail:null, overall:null};   // remembered {center,zoom} per view
 let rotating=null;          // ADA item being rotated via its handle
 let resizing=null;          // ADA item being resized via its corner grip
 let selIdx=-1;              // index of the selected item (ADA shows a properties panel)
@@ -295,6 +305,11 @@ function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 function redraw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!center) return;
+  if(view==='overall'){   // locator exhibit: show only the charging-area box(es), hide all detail
+    for(let i=0;i<items.length;i++){ if(items[i].type==='area') drawArea(items[i], i===selIdx); }
+    if(draftArea) drawArea(draftArea, false, true);
+    updatePanels(); return;
+  }
   if(dimImg){ ctx.save(); ctx.fillStyle='rgba(255,255,255,.22)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.restore(); }
   for(const it of items){ if(it.type==='line') drawLine(it); }
   if(draft) drawLine(draft, true);
@@ -353,6 +368,27 @@ function adaInside(it,p){ const d=adaDims(it); const l=adaLocal(it,p); return Ma
 function adaHandle(it){ const c=project(it); const ly=-ftToPx(adaDims(it).len)/2-30, a=it.rot*Math.PI/180; return {x:c.x-ly*Math.sin(a), y:c.y+ly*Math.cos(a)}; }
 // bottom-right resize grip in canvas space
 function adaResizeHandle(it){ const d=adaDims(it), sc=adaScale(), c=project(it); const lx=(d.space+d.aisle)/2*sc, ly=d.len/2*sc, a=it.rot*Math.PI/180; return {x:c.x+lx*Math.cos(a)-ly*Math.sin(a), y:c.y+lx*Math.sin(a)+ly*Math.cos(a)}; }
+// ---- Overall-view locator box ----
+function drawArea(it, selected, isDraft){
+  const A=project(it.a), B=project(it.b);
+  const x=Math.min(A.x,B.x), y=Math.min(A.y,B.y), w=Math.abs(B.x-A.x), h=Math.abs(B.y-A.y);
+  ctx.save();
+  ctx.fillStyle='rgba(46,125,50,.16)'; ctx.strokeStyle=cssVar('var(--green)'); ctx.lineWidth=4; ctx.setLineDash([16,10]);
+  ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h); ctx.setLineDash([]);
+  if(!isDraft){
+    const txt=it.label||'EV Charging Area';
+    ctx.font='bold 18px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const tw=ctx.measureText(txt).width, ly=Math.max(24,y);
+    ctx.fillStyle=cssVar('var(--green)'); roundRect(x+w/2-tw/2-11, ly-30, tw+22, 26, 6); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.fillText(txt, x+w/2, ly-17);
+  }
+  if(selected){
+    ctx.strokeStyle=cssVar('var(--sel)'); ctx.setLineDash([6,5]); ctx.lineWidth=2; ctx.strokeRect(x-3,y-3,w+6,h+6); ctx.setLineDash([]);
+    ctx.fillStyle=cssVar('var(--sel)'); ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.fillRect(B.x-7,B.y-7,14,14); ctx.strokeRect(B.x-7,B.y-7,14,14);
+  }
+  ctx.restore();
+}
+function areaInside(it,p){ const A=project(it.a),B=project(it.b); return p.x>=Math.min(A.x,B.x)&&p.x<=Math.max(A.x,B.x)&&p.y>=Math.min(A.y,B.y)&&p.y<=Math.max(A.y,B.y); }
 function drawLine(it, isDraft){
   const def=LINES[it.kind], col=cssVar(def.color);
   const sp=it.pts.map(project);
@@ -419,21 +455,26 @@ function drawRunCallout(it){
   ctx.font='bold 16px Segoe UI,Arial'; const w1=ctx.measureText(l1).width;
   ctx.font='12px Segoe UI,Arial'; const w2=l2?ctx.measureText(l2).width:0;
   const bw=Math.max(w1,w2)+22, bh=l2?46:30;
-  // try offsets on both sides; keep the first that clears obstacles + earlier callouts (prefer higher placement)
-  const obst=calloutObstacles(), cands=[];
-  [-1,1].forEach(sgn=>[48,80,114,152].forEach(off=>cands.push({x:mid.x+px*sgn*off, y:mid.y+py*sgn*off})));
-  cands.sort((A,B)=>A.y-B.y);
-  let best=cands[0];
-  for(const cc of cands){ const r={x:cc.x-bw/2,y:cc.y-bh/2,w:bw,h:bh};
-    if(!obst.some(o=>rectsOverlap(r,o)) && !calloutRects.some(o=>rectsOverlap(r,o))){ best=cc; break; } }
-  const bx=best.x, by=best.y, rx=bx-bw/2, ry=by-bh/2;
+  let bx, by;
+  if(it.co){ const c2=project(it.co); bx=c2.x; by=c2.y; }   // user-positioned (dragged) callout, anchored to the ground
+  else {
+    // auto-place: try both sides at increasing offsets, keep the first that clears symbols/ADA/other callouts
+    const obst=calloutObstacles(), cands=[];
+    [-1,1].forEach(sgn=>[48,80,114,152].forEach(off=>cands.push({x:mid.x+px*sgn*off, y:mid.y+py*sgn*off})));
+    cands.sort((A,B)=>A.y-B.y);
+    let best=cands[0];
+    for(const cc of cands){ const r={x:cc.x-bw/2,y:cc.y-bh/2,w:bw,h:bh};
+      if(!obst.some(o=>rectsOverlap(r,o)) && !calloutRects.some(o=>rectsOverlap(r,o))){ best=cc; break; } }
+    bx=best.x; by=best.y;
+  }
+  const rx=bx-bw/2, ry=by-bh/2;
   ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(mid.x,mid.y); ctx.lineTo(bx,by); ctx.stroke();
   ctx.fillStyle=col; ctx.beginPath(); ctx.arc(mid.x,mid.y,4,0,7); ctx.fill();
   ctx.fillStyle='rgba(255,255,255,.96)'; ctx.strokeStyle=col; ctx.lineWidth=2.5;
   roundRect(rx,ry,bw,bh,8); ctx.fill(); ctx.stroke();
   ctx.fillStyle=col; ctx.font='bold 16px Segoe UI,Arial'; ctx.fillText(l1, bx, l2?ry+15:by);
   if(l2){ ctx.fillStyle='#1a1f2a'; ctx.font='12px Segoe UI,Arial'; ctx.fillText(l2, bx, ry+32); }
-  calloutRects.push({x:rx,y:ry,w:bw,h:bh});
+  calloutRects.push({x:rx,y:ry,w:bw,h:bh,it});
   ctx.restore();
 }
 
@@ -491,6 +532,7 @@ function updatePanels(){
 }
 function renderSelProps(){
   const box=document.getElementById('sel-props'); const it=items[selIdx];
+  if(it && it.type==='area'){ box.style.display='block'; box.innerHTML=`<div class="sp-title" style="color:var(--green)">Charging-area box</div><label class="mini">Label on plan</label><input class="sm" value="${(it.label||'').replace(/"/g,'&quot;')}" onchange="updateAreaLabel(this.value)"><div class="hint" style="margin-top:8px">Drag inside to move, the corner grip to resize. Marks the EV charging spaces on the Overall plan.</div>`; return; }
   if(!it || it.type!=='ada'){ box.style.display='none'; box.innerHTML=''; return; }
   box.style.display='block';
   box.innerHTML=`<div class="sp-title">ADA space selected</div>
@@ -513,7 +555,8 @@ function renderSelProps(){
 function updateRun(i,field,val){ if(!items[i])return; items[i][field]= field==='vert'?Math.max(0,+val||0):val; redraw(); }
 function updateAda(field,val){ const it=items[selIdx]; if(!it)return; pushHistory(); it[field]= field==='rot'?(+val||0) : field==='scale'?Math.max(0.4,Math.min(5,+val||1)) : val; redraw(); }
 function deleteItem(i){ if(!items[i])return; pushHistory(); items.splice(i,1); if(selIdx===i)selIdx=-1; else if(selIdx>i)selIdx--; redraw(); }
-window.updateRun=updateRun; window.updateAda=updateAda; window.deleteItem=deleteItem;
+function updateAreaLabel(v){ const it=items[selIdx]; if(it&&it.type==='area'){ it.label=v; redraw(); } }
+window.updateRun=updateRun; window.updateAda=updateAda; window.deleteItem=deleteItem; window.updateAreaLabel=updateAreaLabel;
 
 function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>60)history.shift(); }
 function symbolCount(kind){ return items.filter(i=>i.type==='symbol'&&i.kind===kind).length; }
@@ -535,8 +578,22 @@ canvas.addEventListener('mousedown',e=>{
     if(dist(p,adaResizeHandle(items[selIdx]))<16){ pushHistory(); resizing=items[selIdx]; return; }
     if(dist(p,adaHandle(items[selIdx]))<14){ pushHistory(); rotating=items[selIdx]; return; }
   }
+  if(view==='overall'){   // locator exhibit: draw/move/resize the charging-area box, else pan
+    if(tool==='area'){ const g=unproject(p.x,p.y); draftArea={type:'area',a:{lon:g.lon,lat:g.lat},b:{lon:g.lon,lat:g.lat},label:'EV Charging Area'}; return; }
+    if(tool==='delete'){ for(let i=items.length-1;i>=0;i--){ if(items[i].type==='area'&&areaInside(items[i],p)){ deleteItem(i); return; } } return; }
+    if(tool!=='pan'){
+      if(selIdx>=0 && items[selIdx] && items[selIdx].type==='area' && dist(p,project(items[selIdx].b))<16){ pushHistory(); resizingArea=items[selIdx]; return; }
+      for(let i=items.length-1;i>=0;i--){ if(items[i].type==='area'&&areaInside(items[i],p)){ pushHistory(); selIdx=i; dragArea={it:items[i],start:unproject(p.x,p.y),a0:{...items[i].a},b0:{...items[i].b}}; redraw(); return; } }
+      selIdx=-1;
+    }
+    panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; canvas.style.cursor='grabbing'; redraw(); return;
+  }
   if(tool==='pan'){ panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; canvas.style.cursor='grabbing'; return; }
-  if(tool==='select'){ const h=hitTest(p);
+  if(tool==='select'){
+    // grab a callout label first (so it can be dragged off a line it's covering)
+    const cr=calloutRects.find(r=>p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h);
+    if(cr){ pushHistory(); dragCallout=cr.it; selIdx=-1; return; }
+    const h=hitTest(p);
     if(h>=0 && items[h].type!=='line'){ dragItem=items[h]; selIdx=(items[h].type==='ada')?h:-1; pushHistory(); redraw(); }
     else { selIdx=-1; panning=true; panStart={cx:e.clientX,cy:e.clientY}; panDelta={x:0,y:0}; redraw(); }
     return;
@@ -555,7 +612,11 @@ canvas.addEventListener('mousemove',e=>{
     baseImg.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`;
     canvas.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`; return; }
   const p=evtPt(e);
+  if(draftArea){ const g=unproject(p.x,p.y); draftArea.b={lon:g.lon,lat:g.lat}; redraw(); return; }
+  if(resizingArea){ const g=unproject(p.x,p.y); resizingArea.b={lon:g.lon,lat:g.lat}; redraw(); return; }
+  if(dragArea){ const g=unproject(p.x,p.y); const dLon=g.lon-dragArea.start.lon, dLat=g.lat-dragArea.start.lat; dragArea.it.a={lon:dragArea.a0.lon+dLon,lat:dragArea.a0.lat+dLat}; dragArea.it.b={lon:dragArea.b0.lon+dLon,lat:dragArea.b0.lat+dLat}; redraw(); return; }
   if(resizing){ const b=ADA[resizing.variant], sc=adaScale(); const l=adaLocal(resizing,p); const unit=Math.hypot((b.space+b.aisle)/2*sc, b.len/2*sc)||1; resizing.scale=Math.max(0.4,Math.min(5, Math.hypot(l.x,l.y)/unit)); redraw(); return; }
+  if(dragCallout){ const g=unproject(p.x,p.y); dragCallout.co={lon:g.lon,lat:g.lat}; redraw(); return; }
   if(rotating){ const c=project(rotating); rotating.rot=Math.atan2(p.y-c.y,p.x-c.x)*180/Math.PI+90; redraw(); return; }
   if(dragItem){ const g=unproject(p.x,p.y); dragItem.lon=g.lon; dragItem.lat=g.lat; redraw(); return; }
   if(draft){ const g=unproject(p.x,p.y); const tmp={...draft,pts:[...draft.pts,g]};
@@ -563,12 +624,13 @@ canvas.addEventListener('mousemove',e=>{
     for(const it of items){if(it.type==='symbol')drawSymbol(it);else if(it.type==='label')drawLabel(it);} }
 });
 window.addEventListener('mouseup',()=>{
+  if(draftArea){ const A=project(draftArea.a),B=project(draftArea.b); if(Math.abs(A.x-B.x)>12&&Math.abs(A.y-B.y)>12){ pushHistory(); items.push(draftArea); selIdx=items.length-1; } draftArea=null; redraw(); }
   if(panning){ panning=false; canvas.style.cursor=(tool==='pan')?'grab':(tool==='select')?'grab':'crosshair';
     // commit pan: shift center by the drag delta, reload imagery, items re-project (anchored)
     if(panDelta.x||panDelta.y){ const g=unproject(canvas.width/2 - panDelta.x*SCALE2X, canvas.height/2 - panDelta.y*SCALE2X); center={lon:g.lon,lat:g.lat}; }
     baseImg.style.transform=''; canvas.style.transform=''; panDelta={x:0,y:0}; loadBase();
   }
-  dragItem=null; rotating=null; resizing=null;
+  dragItem=null; rotating=null; resizing=null; dragCallout=null; dragArea=null; resizingArea=null;
 });
 canvas.addEventListener('dblclick',finishDraft);
 function finishDraft(){ if(draft&&draft.pts.length>=2){ pushHistory(); items.push(draft); } draft=null; redraw(); }
@@ -583,13 +645,24 @@ function undo(){ if(draft){draft=null;redraw();return;} if(history.length){ item
 document.getElementById('btn-undo').onclick=undo;
 document.getElementById('btn-clear').onclick=()=>{ if(items.length&&confirm('Clear all drawn items?')){ pushHistory(); items=[]; draft=null; selIdx=-1; redraw(); } };
 
+function setView(v){
+  if(center) views[view]={center:{...center},zoom};
+  view=v;
+  const s=views[v];
+  if(s&&s.center){ center={...s.center}; zoom=s.zoom; }
+  else if(v==='overall'&&center){ zoom=Math.max(15,zoom-2); }
+  selIdx=-1; draft=null; draftArea=null;
+  document.getElementById('view-sel').value=v;
+  if(center) loadBase(); else redraw();
+}
+document.getElementById('view-sel').onchange=function(){ setView(this.value); };
 document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>{
   finishDraft();
   document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));
   b.classList.add('active'); tool=b.dataset.tool;
   if(tool!=='select') selIdx=-1;
   canvas.style.cursor=(tool==='pan'||tool==='select')?'grab':(tool==='delete')?'not-allowed':'crosshair';
-  redraw();
+  if(tool==='area' && view!=='overall') setView('overall'); else redraw();
 });
 document.querySelector('[data-tool="pan"]').classList.add('active');
 canvas.style.cursor='grab';
@@ -627,6 +700,8 @@ document.getElementById('btn-export').onclick=()=>{
   if(!center){ alert('Load a site first.'); return; }
   finishDraft();
   const savedSel=selIdx; selIdx=-1; redraw();   // drop the selection handle/outline from the export
+  const isOverall=view==='overall';
+  const sheet = isOverall ? 'Overall Site Plan — Exhibit A' : (document.getElementById('plan-title').value||'Detailed Site Plan — Exhibit B');
   const W=canvas.width, H=canvas.height, band=420;
   const out=document.createElement('canvas'); out.width=W; out.height=H+band;
   const o=out.getContext('2d');
@@ -634,15 +709,23 @@ document.getElementById('btn-export').onclick=()=>{
   o.drawImage(baseImg,0,0,W,H);
   o.drawImage(canvas,0,0);
   drawNorthArrow(o, W-60, 92, 32);
-  const tbW=720, tbX=W-tbW;
-  drawLegendTableExport(o, 0, H, tbX, band);
-  drawTitleBlockExport(o, tbX, H, tbW, band);
+  const tbW=720, tbX=W-tbW, S=SCALE2X, pad=18*S;
+  if(isOverall){
+    o.fillStyle='#1a1f2a'; o.textAlign='left'; o.textBaseline='top';
+    o.font='bold '+(13*S)+'px Segoe UI,Arial'; o.fillText('OVERALL SITE PLAN', pad, H+pad+6*S);
+    o.font=(13*S)+'px Segoe UI,Arial'; o.fillStyle='#5e6a78';
+    o.fillText('Proposed EV charging location shown. See the Detailed Site Plan', pad, H+pad+34*S);
+    o.fillText('for scope, equipment, conductor runs and footage.', pad, H+pad+56*S);
+  } else {
+    drawLegendTableExport(o, 0, H, tbX, band);
+  }
+  drawTitleBlockExport(o, tbX, H, tbW, band, sheet);
   o.strokeStyle='#1a1f2a'; o.lineWidth=3; o.strokeRect(1.5,1.5,W-3,H-3);                 // map frame
   o.lineWidth=2; o.beginPath(); o.moveTo(0,H); o.lineTo(W,H); o.stroke();                 // band divider
   o.lineWidth=4; o.strokeRect(2,2,out.width-4,out.height-4);                              // outer sheet frame
   const a=document.createElement('a');
   const fn=(document.getElementById('proj-name').value||addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_');
-  a.download=`GreenKey_SitePlan_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
+  a.download=`GreenKey_${isOverall?'OverallPlan':'SitePlan'}_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
   selIdx=savedSel; redraw();
 };
 function buildLegendForExport(){
@@ -686,7 +769,7 @@ function drawLegendTableExport(o,x,y,w,h){
     o.textBaseline='alphabetic';
   });
 }
-function drawTitleBlockExport(o,x,y,w,h){
+function drawTitleBlockExport(o,x,y,w,h,sheetName){
   const S=SCALE2X, pad=20*S;
   o.strokeStyle='#1a1f2a'; o.lineWidth=2; o.beginPath(); o.moveTo(x,y); o.lineTo(x,y+h); o.stroke();
   const tx=x+pad, ty=y+pad;
@@ -697,7 +780,7 @@ function drawTitleBlockExport(o,x,y,w,h){
   const fields=[
     ['PROJECT / CLIENT', document.getElementById('proj-name').value||'—'],
     ['PROPERTY', (addr.value||'—').split(',').slice(0,2).join(',')],
-    ['SHEET', document.getElementById('plan-title').value||'Site Plan Exhibit'],
+    ['SHEET', sheetName||document.getElementById('plan-title').value||'Site Plan Exhibit'],
     ['DATE', new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})],
     ['PREPARED BY', document.getElementById('prepared-by').value||'—']
   ];
