@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GreenKey — Commercial Site Plan Studio</title>
+<style>
+  :root{
+    --green:#2e7d32; --green-dim:#e8f5e9; --bg:#f4f6f8; --surface:#ffffff;
+    --border:#d7dde3; --text:#1a1f2a; --muted:#5e6a78; --shadow:0 1px 3px rgba(0,0,0,.12);
+    --feed:#f5b301; --trench:#e6552e; --stand:#2563eb; --pedestal:#2e7d32;
+    --bollard:#f5b301; --panel:#7c3aed; --transformer:#0891b2; --disconnect:#db2777; --stall:#ea7317;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif}
+  body{background:var(--bg);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:14px;flex-shrink:0;box-shadow:var(--shadow);z-index:5}
+  .logo{font-size:17px;font-weight:700;color:var(--green);letter-spacing:-.3px;white-space:nowrap}
+  .logo span{color:var(--text)}
+  .addr-wrap{position:relative;flex:1;max-width:520px}
+  #addr{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:7px;font-size:13.5px;outline:none}
+  #addr:focus{border-color:var(--green)}
+  #addr-drop{position:absolute;top:38px;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:7px;box-shadow:0 4px 14px rgba(0,0,0,.14);z-index:20;display:none;max-height:280px;overflow:auto}
+  .addr-item{padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #eef1f4}
+  .addr-item:hover{background:var(--green-dim)}
+  .addr-item .sub{font-size:11.5px;color:var(--muted);margin-top:1px}
+  .btn{padding:8px 13px;border:1px solid var(--border);background:var(--surface);border-radius:7px;font-size:13px;cursor:pointer;color:var(--text);white-space:nowrap;font-weight:500}
+  .btn:hover{background:#f0f3f6}
+  .btn.primary{background:var(--green);color:#fff;border-color:var(--green)}
+  .btn.primary:hover{background:#256528}
+  main{flex:1;display:flex;min-height:0}
+  #toolbar{width:236px;background:var(--surface);border-right:1px solid var(--border);padding:14px;overflow-y:auto;flex-shrink:0}
+  .tb-sec{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:16px 0 8px}
+  .tb-sec:first-child{margin-top:0}
+  .tool{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;margin-bottom:6px;cursor:pointer;font-size:13px;background:var(--surface);width:100%;text-align:left}
+  .tool:hover{background:#f0f3f6}
+  .tool.active{border-color:var(--green);background:var(--green-dim);font-weight:600}
+  .swatch{width:15px;height:15px;border-radius:3px;flex-shrink:0}
+  .swatch.line{height:4px;border-radius:2px}
+  .swatch.dash{height:0;border-top:3px dashed var(--trench);background:none;border-radius:0}
+  .swatch.dot{border-radius:50%}
+  .canvas-wrap{flex:1;position:relative;overflow:hidden;background:#dfe4e8;display:flex;align-items:center;justify-content:center}
+  #stage{position:relative;box-shadow:0 2px 16px rgba(0,0,0,.25);background:#c9d1d8}
+  #base{display:block;user-select:none;-webkit-user-drag:none}
+  #draw{position:absolute;top:0;left:0;cursor:crosshair}
+  .empty-hint{position:absolute;color:var(--muted);font-size:14px;text-align:center;padding:30px;line-height:1.6}
+  #zoomctl{position:absolute;bottom:14px;right:14px;display:flex;flex-direction:column;gap:5px;z-index:4}
+  #zoomctl button{width:34px;height:34px;border-radius:7px;border:1px solid var(--border);background:var(--surface);font-size:18px;cursor:pointer;box-shadow:var(--shadow)}
+  .scale-badge{position:absolute;bottom:14px;left:14px;background:rgba(255,255,255,.92);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11.5px;color:var(--muted);z-index:4}
+  #rightbar{width:230px;background:var(--surface);border-left:1px solid var(--border);padding:14px;overflow-y:auto;flex-shrink:0}
+  .legend-row{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0}
+  .meas-row{display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid #eef1f4}
+  .meas-row b{font-variant-numeric:tabular-nums}
+  .hint{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:6px}
+  label.fld{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px;font-weight:600}
+  input.txt,select.txt{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none}
+  input.txt:focus,select.txt:focus{border-color:var(--green)}
+  .pill{display:inline-block;font-size:10.5px;background:var(--green-dim);color:var(--green);padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Green<span>Key</span> · Site Plan Studio</div>
+  <div class="addr-wrap">
+    <input id="addr" placeholder="Search a property address to load satellite imagery…" autocomplete="off">
+    <div id="addr-drop"></div>
+  </div>
+  <select id="proj-scenario" class="txt" style="max-width:230px" title="Power scenario for this site">
+    <option value="">— Power scenario —</option>
+    <option value="1">1 · Existing 208/240, new panel</option>
+    <option value="2">2 · Existing 208/240, add breakers</option>
+    <option value="3">3 · 480V + transformer (full)</option>
+    <option value="4">4 · 480V, downstream only</option>
+    <option value="5">5 · Service upgrade</option>
+    <option value="6">6 · New service</option>
+  </select>
+  <button class="btn" id="btn-undo" title="Undo last (Ctrl+Z)">↶ Undo</button>
+  <button class="btn primary" id="btn-export">⤓ Export PNG</button>
+</header>
+<main>
+  <div id="toolbar">
+    <div class="tb-sec">Draw</div>
+    <button class="tool" data-tool="select"><span style="font-size:15px">⤭</span> Select / move</button>
+    <button class="tool" data-tool="feed"><span class="swatch line" style="background:var(--feed)"></span> Conductor route</button>
+    <button class="tool" data-tool="trench"><span class="swatch dash"></span> Trench</button>
+    <div class="tb-sec">Place symbol</div>
+    <button class="tool" data-tool="stand"><span class="swatch" style="background:var(--stand)"></span> Service stand</button>
+    <button class="tool" data-tool="panel"><span class="swatch" style="background:var(--panel)"></span> Panel</button>
+    <button class="tool" data-tool="transformer"><span class="swatch" style="background:var(--transformer)"></span> Transformer</button>
+    <button class="tool" data-tool="disconnect"><span class="swatch" style="background:var(--disconnect)"></span> Disconnect</button>
+    <button class="tool" data-tool="pedestal"><span class="swatch dot" style="background:var(--pedestal)"></span> Tesla pedestal</button>
+    <button class="tool" data-tool="bollard"><span class="swatch dot" style="background:var(--bollard)"></span> Bollard</button>
+    <button class="tool" data-tool="stall"><span class="swatch" style="background:var(--stall)"></span> EV stall</button>
+    <button class="tool" data-tool="label"><span style="font-size:14px">T</span> Text label</button>
+    <div class="tb-sec">Edit</div>
+    <button class="tool" data-tool="delete"><span style="font-size:15px">⌫</span> Delete (click item)</button>
+    <button class="btn" id="btn-clear" style="width:100%;margin-top:4px">Clear all</button>
+    <div class="hint">Tip: for lines, click each vertex, then double-click (or Enter) to finish. Footage is measured live from the satellite scale.</div>
+  </div>
+
+  <div class="canvas-wrap">
+    <div id="stage">
+      <img id="base" alt="">
+      <canvas id="draw"></canvas>
+      <div class="empty-hint" id="empty-hint">Search a property address above to load satellite imagery,<br>then draw the install on top.</div>
+      <div class="scale-badge" id="scale-badge" style="display:none"></div>
+    </div>
+    <div id="zoomctl">
+      <button id="zin" title="Zoom in (closer)">+</button>
+      <button id="zout" title="Zoom out (wider)">−</button>
+    </div>
+  </div>
+
+  <div id="rightbar">
+    <label class="fld">Site label (on plan)</label>
+    <input id="plan-title" class="txt" placeholder="e.g. Detailed Site Plan">
+    <div class="tb-sec" style="margin-top:18px">Measured runs</div>
+    <div id="meas-list"><div class="hint">No runs drawn yet.</div></div>
+    <div class="tb-sec" style="margin-top:18px">Legend <span class="pill" id="legend-count">0</span></div>
+    <div id="legend-list"><div class="hint">Symbols you place appear here automatically.</div></div>
+    <div class="hint" style="margin-top:18px;border-top:1px solid var(--border);padding-top:10px">
+      Mapbox satellite imagery is licensed for use in your proposals. Export drops a print-resolution PNG into your Downloads — attach it to the proposal's Site Plan Exhibits.
+    </div>
+  </div>
+</main>
+
+<script>
+const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9uYXRoYW4zMjk5IiwiYSI6ImNtcWJuNThtdzBnbmQycm9xM3RlNjUxODYifQ.ZCA5uC-Ws56-7vnmEMrjPA';
+const MAPBOX_PROXIMITY = '-77.55,37.62';
+// Logical render size of the static map (the @2x request returns double pixels).
+const MAP_W = 900, MAP_H = 620, SCALE2X = 2;
+const STYLE = 'satellite-v9';
+
+const SYMBOLS = {
+  stand:       {label:'Service stand',  color:'var(--stand)',       shape:'square'},
+  panel:       {label:'Panel',          color:'var(--panel)',       shape:'square'},
+  transformer: {label:'Transformer',    color:'var(--transformer)', shape:'square'},
+  disconnect:  {label:'Disconnect',     color:'var(--disconnect)',  shape:'square'},
+  pedestal:    {label:'Tesla pedestal', color:'var(--pedestal)',    shape:'circle'},
+  bollard:     {label:'Bollard',        color:'var(--bollard)',     shape:'circle'},
+  stall:       {label:'EV stall',       color:'var(--stall)',       shape:'rect'}
+};
+const LINES = {
+  feed:   {label:'Conductor route', color:'var(--feed)',   dash:false},
+  trench: {label:'Trench',          color:'var(--trench)', dash:true}
+};
+function cssVar(v){ if(!v||!v.startsWith('var('))return v; const n=v.slice(4,-1).trim(); return getComputedStyle(document.documentElement).getPropertyValue(n).trim()||'#333'; }
+
+const stage=document.getElementById('stage'), baseImg=document.getElementById('base'),
+      canvas=document.getElementById('draw'), ctx=canvas.getContext('2d');
+let center=null, zoom=18, metersPerPx=0; // metersPerPx in CANVAS pixels (already /SCALE2X)
+let tool='select';
+let items=[];               // {type:'line', kind, pts:[{x,y}], ...} or {type:'symbol', kind, x, y, n} or {type:'label', x, y, text}
+let draft=null;             // in-progress line
+let dragItem=null, dragOff=null;
+let history=[];
+
+function setCanvasSize(){
+  canvas.width=MAP_W*SCALE2X; canvas.height=MAP_H*SCALE2X;
+  canvas.style.width=MAP_W+'px'; canvas.style.height=MAP_H+'px';
+  stage.style.width=MAP_W+'px'; stage.style.height=MAP_H+'px';
+  baseImg.style.width=MAP_W+'px'; baseImg.style.height=MAP_H+'px';
+}
+setCanvasSize();
+
+// ---- Web Mercator ground resolution ----
+function computeScale(){
+  if(!center) return;
+  const latRad=center.lat*Math.PI/180;
+  // meters per logical pixel at this zoom/lat
+  const mPerLogicalPx = 156543.03392 * Math.cos(latRad) / Math.pow(2, zoom);
+  // canvas is drawn at SCALE2X density but represents the same ground area as the logical map
+  metersPerPx = mPerLogicalPx / SCALE2X;
+  drawScaleBadge();
+}
+function metersToFt(m){ return m*3.28084; }
+function pxLenToFt(px){ return metersToFt(px*metersPerPx); }
+
+function loadBase(){
+  if(!center) return;
+  computeScale();
+  const url=`https://api.mapbox.com/styles/v1/mapbox/${STYLE}/static/${center.lon},${center.lat},${zoom},0/${MAP_W}x${MAP_H}@2x?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
+  baseImg.onload=()=>{ document.getElementById('empty-hint').style.display='none'; document.getElementById('scale-badge').style.display='block'; redraw(); };
+  baseImg.onerror=()=>{ alert('Could not load satellite imagery — check the address or your connection.'); };
+  baseImg.src=url;
+}
+function drawScaleBadge(){
+  const badge=document.getElementById('scale-badge');
+  if(!metersPerPx){badge.style.display='none';return;}
+  // pick a ~120px bar, round feet to a nice number
+  const rawFt=pxLenToFt(120);
+  const nice=[10,20,25,50,75,100,150,200,300,500].reduce((a,b)=>Math.abs(b-rawFt)<Math.abs(a-rawFt)?b:a);
+  const barPx=(nice/3.28084)/metersPerPx;
+  badge.innerHTML=`<div style="display:flex;align-items:center;gap:7px"><div style="width:${barPx.toFixed(0)}px;height:4px;background:#1a1f2a;border-radius:2px"></div><span>${nice} ft</span></div>`;
+}
+
+// ---- coordinate helpers (canvas pixel space) ----
+function evtPt(e){
+  const r=canvas.getBoundingClientRect();
+  return { x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height) };
+}
+function lineLenPx(pts){ let t=0; for(let i=1;i<pts.length;i++){t+=Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);} return t; }
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+
+// ---- drawing ----
+function redraw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // lines
+  for(const it of items){ if(it.type==='line') drawLine(it); }
+  if(draft) drawLine(draft, true);
+  // symbols + labels on top
+  for(const it of items){
+    if(it.type==='symbol') drawSymbol(it);
+    else if(it.type==='label') drawLabel(it);
+  }
+  updatePanels();
+}
+function drawLine(it, isDraft){
+  const def=LINES[it.kind]; const col=cssVar(def.color);
+  ctx.save();
+  ctx.lineWidth=6; ctx.strokeStyle=col; ctx.lineJoin='round'; ctx.lineCap='round';
+  if(def.dash) ctx.setLineDash([16,12]);
+  ctx.beginPath();
+  it.pts.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // vertices
+  ctx.fillStyle=col;
+  it.pts.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();});
+  // footage label at midpoint
+  if(it.pts.length>=2 && !isDraft){
+    const ft=Math.round(pxLenToFt(lineLenPx(it.pts)));
+    const mid=it.pts[Math.floor(it.pts.length/2)];
+    labelChip(`${ft} ft`, mid.x, mid.y-14, col);
+  }
+  ctx.restore();
+}
+function drawSymbol(it){
+  const def=SYMBOLS[it.kind]; const col=cssVar(def.color);
+  ctx.save();
+  ctx.fillStyle=col; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  const s=26;
+  if(def.shape==='circle'){ ctx.beginPath();ctx.arc(it.x,it.y,s/2,0,7);ctx.fill();ctx.stroke(); }
+  else if(def.shape==='rect'){ roundRect(it.x-s*0.9,it.y-s*0.55,s*1.8,s*1.1,5);ctx.fill();ctx.stroke(); }
+  else { roundRect(it.x-s/2,it.y-s/2,s,s,5);ctx.fill();ctx.stroke(); }
+  // number badge
+  ctx.fillStyle='#fff'; ctx.font='bold 15px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(it.n, it.x, it.y);
+  ctx.restore();
+}
+function drawLabel(it){
+  ctx.save();
+  ctx.font='bold 17px Segoe UI,Arial'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  const w=ctx.measureText(it.text).width;
+  ctx.fillStyle='rgba(26,31,42,.78)'; roundRect(it.x-6,it.y-15,w+12,30,5); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.fillText(it.text,it.x,it.y);
+  ctx.restore();
+}
+function labelChip(txt,x,y,col){
+  ctx.save(); ctx.font='bold 15px Segoe UI,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  const w=ctx.measureText(txt).width;
+  ctx.fillStyle='rgba(255,255,255,.92)'; roundRect(x-w/2-7,y-12,w+14,24,6); ctx.fill();
+  ctx.fillStyle=col; ctx.fillText(txt,x,y); ctx.restore();
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath(); }
+
+// ---- side panels ----
+function updatePanels(){
+  // measured runs
+  const lines=items.filter(i=>i.type==='line');
+  const ml=document.getElementById('meas-list');
+  if(!lines.length){ ml.innerHTML='<div class="hint">No runs drawn yet.</div>'; }
+  else{
+    let tot={feed:0,trench:0};
+    ml.innerHTML=lines.map((it)=>{ const ft=Math.round(pxLenToFt(lineLenPx(it.pts))); tot[it.kind]+=ft;
+      return `<div class="meas-row"><span style="color:${cssVar(LINES[it.kind].color)}">${LINES[it.kind].label}</span><b>${ft} ft</b></div>`; }).join('')
+      + `<div class="meas-row" style="border:none;font-weight:700;margin-top:4px"><span>Total trench</span><b>${tot.trench} ft</b></div>`
+      + `<div class="meas-row" style="border:none;font-weight:700"><span>Total conductor</span><b>${tot.feed} ft</b></div>`;
+  }
+  // legend
+  const used=new Map();
+  for(const it of items){
+    if(it.type==='symbol'){ const k='s_'+it.kind; if(!used.has(k))used.set(k,{def:SYMBOLS[it.kind],shape:SYMBOLS[it.kind].shape,n:0}); used.get(k).n++; }
+  }
+  for(const it of items){ if(it.type==='line'){ const k='l_'+it.kind; if(!used.has(k))used.set(k,{def:LINES[it.kind],line:true}); } }
+  const ll=document.getElementById('legend-list');
+  document.getElementById('legend-count').textContent=used.size;
+  if(!used.size){ ll.innerHTML='<div class="hint">Symbols you place appear here automatically.</div>'; }
+  else{
+    ll.innerHTML=[...used.values()].map(u=>{
+      const col=cssVar(u.def.color);
+      const sw=u.line?`<span class="swatch ${u.def.dash?'dash':'line'}" style="${u.def.dash?'border-top-color:'+col:'background:'+col}"></span>`
+        :`<span class="swatch ${u.shape==='circle'?'dot':''}" style="background:${col};${u.shape==='rect'?'width:22px':''}"></span>`;
+      return `<div class="legend-row">${sw}<span>${u.def.label}${u.n?` <b>×${u.n}</b>`:''}</span></div>`;
+    }).join('');
+  }
+}
+
+// ---- interaction ----
+function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>50)history.shift(); }
+function symbolCount(kind){ return items.filter(i=>i.type==='symbol'&&i.kind===kind).length; }
+function hitTest(p){
+  // topmost first
+  for(let i=items.length-1;i>=0;i--){ const it=items[i];
+    if(it.type==='symbol'&&dist(p,it)<20) return i;
+    if(it.type==='label'&&Math.abs(p.x-it.x)<90&&Math.abs(p.y-it.y)<18) return i;
+    if(it.type==='line'){ for(const v of it.pts) if(dist(p,v)<12) return i; }
+  }
+  return -1;
+}
+
+canvas.addEventListener('mousedown',e=>{
+  if(!center) return;
+  const p=evtPt(e);
+  if(tool==='select'){ const h=hitTest(p); if(h>=0){ const it=items[h]; if(it.type!=='line'){ dragItem=it; dragOff={x:p.x-it.x,y:p.y-it.y}; pushHistory(); } } return; }
+  if(tool==='delete'){ const h=hitTest(p); if(h>=0){ pushHistory(); items.splice(h,1); redraw(); } return; }
+  if(tool==='label'){ const t=prompt('Label text:'); if(t){ pushHistory(); items.push({type:'label',x:p.x,y:p.y,text:t}); redraw(); } return; }
+  if(LINES[tool]){ if(!draft){ draft={type:'line',kind:tool,pts:[p]}; } else { draft.pts.push(p); } redraw(); return; }
+  if(SYMBOLS[tool]){ pushHistory(); items.push({type:'symbol',kind:tool,x:p.x,y:p.y,n:symbolCount(tool)+1}); redraw(); return; }
+});
+canvas.addEventListener('mousemove',e=>{
+  const p=evtPt(e);
+  if(dragItem){ dragItem.x=p.x-dragOff.x; dragItem.y=p.y-dragOff.y; redraw(); return; }
+  if(draft){ const tmp={...draft,pts:[...draft.pts,p]}; ctx.clearRect(0,0,canvas.width,canvas.height); for(const it of items){if(it.type==='line')drawLine(it);} drawLine(tmp,true); for(const it of items){if(it.type==='symbol')drawSymbol(it);else if(it.type==='label')drawLabel(it);} }
+});
+window.addEventListener('mouseup',()=>{ dragItem=null; });
+canvas.addEventListener('dblclick',()=>{ finishDraft(); });
+function finishDraft(){ if(draft&&draft.pts.length>=2){ pushHistory(); items.push(draft); } draft=null; redraw(); }
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&draft) finishDraft();
+  if(e.key==='Escape'){ draft=null; redraw(); }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){ e.preventDefault(); undo(); }
+});
+function undo(){ if(draft){draft=null;redraw();return;} if(history.length){ items=JSON.parse(history.pop()); redraw(); } }
+document.getElementById('btn-undo').onclick=undo;
+document.getElementById('btn-clear').onclick=()=>{ if(items.length&&confirm('Clear all drawn items?')){ pushHistory(); items=[]; draft=null; redraw(); } };
+
+// tool buttons
+document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>{
+  finishDraft();
+  document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); tool=b.dataset.tool;
+  canvas.style.cursor = (tool==='select')?'grab':(tool==='delete')?'not-allowed':'crosshair';
+});
+document.querySelector('[data-tool="select"]').classList.add('active');
+
+// zoom
+document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} };
+document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
+
+// ---- address search ----
+const addr=document.getElementById('addr'), drop=document.getElementById('addr-drop');
+let t=null;
+addr.addEventListener('input',()=>{ clearTimeout(t); const q=addr.value.trim(); if(q.length<4){drop.style.display='none';return;} t=setTimeout(()=>geocode(q),350); });
+async function geocode(q){
+  try{
+    const url=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&proximity=${MAPBOX_PROXIMITY}`;
+    const r=await fetch(url); const j=await r.json(); const fs=j.features||[];
+    if(!fs.length){drop.style.display='none';return;}
+    drop.innerHTML=''; fs.forEach(f=>{
+      const d=document.createElement('div'); d.className='addr-item';
+      d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`;
+      d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=18; loadBase(); };
+      drop.appendChild(d);
+    });
+    drop.style.display='block';
+  }catch(e){ drop.style.display='none'; }
+}
+document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target)) drop.style.display='none'; });
+
+// ---- export ----
+document.getElementById('btn-export').onclick=()=>{
+  if(!center){ alert('Load a site first.'); return; }
+  finishDraft();
+  // compose: base image + canvas + title + legend bar onto an export canvas
+  const pad=0, titleH=document.getElementById('plan-title').value.trim()?44:0;
+  const legendItems=buildLegendForExport();
+  const legendH=legendItems.length?54:0;
+  const W=canvas.width, H=canvas.height;
+  const out=document.createElement('canvas'); out.width=W; out.height=H+titleH*SCALE2X+legendH*SCALE2X;
+  const o=out.getContext('2d');
+  o.fillStyle='#fff'; o.fillRect(0,0,out.width,out.height);
+  let y=0;
+  if(titleH){ o.fillStyle='#2e7d32'; o.fillRect(0,0,out.width,titleH*SCALE2X); o.fillStyle='#fff'; o.font=`bold ${22*SCALE2X}px Segoe UI,Arial`; o.textBaseline='middle'; o.textAlign='left'; o.fillText(document.getElementById('plan-title').value.trim(),16*SCALE2X,titleH*SCALE2X/2); y=titleH*SCALE2X; }
+  o.drawImage(baseImg,0,y,W,H);
+  o.drawImage(canvas,0,y);
+  if(legendH){ const ly=y+H; o.fillStyle='#f4f6f8'; o.fillRect(0,ly,out.width,legendH*SCALE2X); o.fillStyle='#1a1f2a'; o.textBaseline='middle';
+    let lx=16*SCALE2X; o.font=`bold ${13*SCALE2X}px Segoe UI,Arial`;
+    legendItems.forEach(li=>{ const cy=ly+legendH*SCALE2X/2;
+      o.fillStyle=li.color; if(li.line){ o.fillRect(lx,cy-2*SCALE2X,26*SCALE2X,4*SCALE2X);} else { o.beginPath(); if(li.shape==='circle')o.arc(lx+9*SCALE2X,cy,9*SCALE2X,0,7); else o.rect(lx,cy-9*SCALE2X,18*SCALE2X,18*SCALE2X); o.fill(); }
+      o.fillStyle='#1a1f2a'; o.fillText(li.text, lx+34*SCALE2X, cy); lx+= (40+li.text.length*8.5)*SCALE2X; });
+  }
+  const a=document.createElement('a');
+  const fn=(addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_');
+  a.download=`GreenKey_SitePlan_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
+};
+function buildLegendForExport(){
+  const used=new Map(); const arr=[];
+  for(const it of items){ if(it.type==='symbol'&&!used.has('s'+it.kind)){used.set('s'+it.kind,1);const d=SYMBOLS[it.kind];arr.push({text:d.label,color:cssVar(d.color),shape:d.shape});} }
+  for(const it of items){ if(it.type==='line'&&!used.has('l'+it.kind)){used.set('l'+it.kind,1);const d=LINES[it.kind];arr.push({text:d.label,color:cssVar(d.color),line:true});} }
+  return arr;
+}
+</script>
+</body>
+</html>

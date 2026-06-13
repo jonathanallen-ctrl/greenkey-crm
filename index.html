@@ -1530,6 +1530,16 @@ const CK = 'gk_customers', LK = 'gk_leads';
 // guard throws "Cannot access before initialization" if the declaration
 // hasn't run yet — declaring it here keeps it ahead of every reference.
 const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
+
+// ── MAPBOX (2026-06-12) ──
+// Replaces Nominatim for geocoding + address autocomplete. Free tier covers
+// 100k requests/month; the token is URL-restricted to the CRM's GitHub Pages
+// origin so it's safe in public source. Used by the Scheduler (geocodeOne)
+// and the address autocomplete (_fetchAddrSuggestions); the future commercial
+// Proposal Studio will reuse it for satellite imagery.
+const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9uYXRoYW4zMjk5IiwiYSI6ImNtcWJuNThtdzBnbmQycm9xM3RlNjUxODYifQ.ZCA5uC-Ws56-7vnmEMrjPA';
+// Bias results toward central Virginia (lon, lat ≈ Richmond/Glen Allen).
+const MAPBOX_PROXIMITY = '-77.55,37.62';
 // Clean up legacy biometric enrollment data from previous builds.
 try { localStorage.removeItem('gk_biometric'); } catch(_){}
 
@@ -1676,19 +1686,25 @@ function setupAddrAutocomplete(streetId, cityId, stateId, zipId) {
 
 async function _fetchAddrSuggestions(q, drop, streetId, cityId, stateId, zipId) {
   try {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=us&limit=6&q=${encodeURIComponent(q + ', Virginia')}`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'en-US' } });
-    const data = await res.json();
+    // Mapbox Geocoding (2026-06-12, was Nominatim): real autocomplete, far
+    // better rural-VA coverage, no 1 req/sec limit.
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&types=address&proximity=${MAPBOX_PROXIMITY}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    const data = (json && json.features) || [];
     drop.innerHTML = '';
     if (!data.length) { drop.style.display = 'none'; return; }
     data.forEach(r => {
-      const a = r.address || {};
-      const streetNum = a.house_number || '';
-      const road = a.road || '';
+      // Mapbox shape: r.address = house number, r.text = street name,
+      // r.context[] = postcode / place (city) / region (state).
+      const ctx = {};
+      for (const c of (r.context || [])) ctx[(c.id || '').split('.')[0]] = c;
+      const streetNum = r.address || '';
+      const road = r.text || '';
       const street = [streetNum, road].filter(Boolean).join(' ');
-      const city = a.city || a.town || a.village || a.hamlet || a.suburb || '';
-      const state = a.ISO3166_2_lvl4 ? a.ISO3166_2_lvl4.replace('US-','') : (a.state || 'VA');
-      const zip = (a.postcode || '').split('-')[0];
+      const city = ctx.place?.text || ctx.locality?.text || '';
+      const state = (ctx.region?.short_code || 'US-VA').replace('US-','');
+      const zip = ctx.postcode?.text || '';
       if (!road) return; // skip results without a street
       const item = document.createElement('div');
       item.className = 'addr-item';
@@ -2249,6 +2265,9 @@ const NAV_DEF = [
     {page:'customers',label:'Customers',roles:['admin','sales'],icon:'user'},
     {page:'quotes',label:'Quotes',roles:['admin','tech','sales'],icon:'file'},
     {page:'tech',label:'Tech Mode',roles:['admin','tech'],icon:'brief'},
+    // External module: Commercial Site Plan Studio (separate file for perf
+    // isolation). Opens in a new tab; not an SPA page.
+    {url:'./proposal.html',label:'Commercial',roles:['admin','sales'],icon:'chart',ext:true},
   ]},
   { sec:'Manage', items:[
     {page:'tasks',label:'Tasks',roles:['admin','tech'],icon:'check',badge:'0'},
@@ -2273,6 +2292,15 @@ function buildApp(user) {
     if (!vis.length) continue;
     nav.innerHTML += `<div class="nsec">${sec.sec}</div>`;
     for (const item of vis) {
+      if (item.ext) {
+        // External module link — opens in a new tab, doesn't touch SPA routing.
+        nav.innerHTML += `<div class="ni" onclick="window.open('${item.url}','_blank')" title="Opens the Commercial Site Plan Studio in a new tab">
+          <svg class="nico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">${ICONS[item.icon]}</svg>
+          ${item.label}
+          <span class="nbadge" style="background:var(--green-dim,#e8f5e9);color:var(--green,#2e7d32)">↗</span>
+        </div>`;
+        continue;
+      }
       nav.innerHTML += `<div class="ni${item.page==='dashboard'?' active':''}" data-page="${item.page}" onclick="navEl(this)">
         <svg class="nico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">${ICONS[item.icon]}</svg>
         ${item.label}
@@ -14093,6 +14121,26 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// Banner for jobs that didn't make the day plan — distinguishes the two very
+// different causes (2026-06-12). "Didn't fit the hours" is a budget problem
+// (more jobs than day, OT off); "couldn't be mapped" is a geocode failure —
+// the job was never even considered, regardless of the OT toggle. Conflating
+// these was why "Allow overtime" appeared not to work.
+function _unschedBannerHtml(arr) {
+  if (!arr || !arr.length) return '';
+  const geo    = arr.filter(l => l._unschedReason === 'geocode');
+  const budget = arr.filter(l => l._unschedReason !== 'geocode');
+  let html = '';
+  if (budget.length) {
+    html += `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${budget.length} job(s) didn't fit the day's hours — they remain in the pool for another day (or enable Allow Overtime and rebuild).</div>`;
+  }
+  if (geo.length) {
+    const items = geo.map(l => `<strong>${escHtml(l.id)}</strong> (${escHtml([l.siteStreet, l.siteCity].filter(Boolean).join(', ') || 'no address on lead')})`).join(' · ');
+    html += `<div style="margin-top:8px;font-size:12.5px;color:var(--red)">📍 ${geo.length} job(s) couldn't be mapped — the address failed to geocode, so they were never considered for the day: ${items}. Fix or complete the address on the lead, then rebuild the day.</div>`;
+  }
+  return html;
+}
+
 function driveTimeHrs(lat1, lon1, lat2, lon2) {
   const prefs = getPrefs();
   const speedKph = (prefs.roadSpeedMph || 45) * 1.60934;
@@ -14106,27 +14154,24 @@ async function geocodeOne(address, cacheKey) {
   if (cache[cacheKey]) return cache[cacheKey];
   if (!address || !address.trim()) return null;
   try {
-    await new Promise(r => setTimeout(r, 1100)); // Nominatim 1 req/sec limit
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-    // Hard 8-second timeout per request so a slow / unresponsive geocoder
-    // can't hang the whole Scheduler. Without this, fetch() has no default
-    // timeout and a stuck network can freeze "Building…" indefinitely.
+    // Mapbox Geocoding (2026-06-12, was Nominatim) — no rate-limit delay
+    // needed, much better rural-VA hit rate. Keep the hard 8-second timeout
+    // so a stuck network can't freeze "Building…" indefinitely.
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=1&proximity=${MAPBOX_PROXIMITY}`;
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 8000);
     let res;
     try {
-      res = await fetch(url, {
-        signal: ctrl.signal,
-        headers: { 'Accept-Language': 'en-US,en', 'User-Agent': 'GreenKeyCRM/1.0' }
-      });
+      res = await fetch(url, { signal: ctrl.signal });
     } finally { clearTimeout(tid); }
     if (!res.ok) {
       console.warn('[GK] Geocode HTTP', res.status, 'for', address);
       return null;
     }
-    const data = await res.json();
-    if (data && data[0]) {
-      const coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    const json = await res.json();
+    const f = json && json.features && json.features[0];
+    if (f && Array.isArray(f.center)) {
+      const coords = { lat: f.center[1], lon: f.center[0] };
       cache[cacheKey] = coords;
       saveGeoCache(cache);
       return coords;
@@ -15711,7 +15756,7 @@ function renderSchedulerPage() {
         <button class="btn btn-g" onclick="openCustomStopDialog()" title="Add a custom stop — meeting, errand, lunch, supplier visit, etc. — without creating a formal job">+ Add custom stop</button>
         <button class="btn btn-g" style="margin-left:auto;color:var(--text-muted);font-size:11px" onclick="clearSchedDayPlan()" title="Wipe this day's saved plan and start over">Clear plan</button>
       </div>
-      ${_sched.unscheduled.length ? `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${_sched.unscheduled.length} job(s) didn't fit today — they remain in the pool for another day.</div>` : ''}`;
+      ${_unschedBannerHtml(_sched.unscheduled)}`;
   }
 
   const nextWorkday = getNextWorkday(_sched.date);
@@ -15964,7 +16009,7 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
     for (let i = 0; i < available.length; i++) {
       const l = available[i];
       const c = coords[l.id];
-      if (!c) { unscheduled.push(l); available.splice(i,1); i--; continue; }
+      if (!c) { l._unschedReason = 'geocode'; unscheduled.push(l); available.splice(i,1); i--; continue; }
       const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
       const jobH  = durationsMap[l.id] || estimateJobDuration(l);
       const arrival = clockHrs + drive;
@@ -16009,7 +16054,7 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
   }
 
   const returnDriveHrs = homeCoords ? driveTimeHrs(curLat, curLon, homeCoords.lat, homeCoords.lon) : 0;
-  available.forEach(l => unscheduled.push(l));
+  available.forEach(l => { l._unschedReason = 'budget'; unscheduled.push(l); });
 
   // Insert the gas/restroom break as a visible slot in the timeline. The time
   // was already reserved at the top of this function (subtracted from
@@ -16449,7 +16494,7 @@ function _renderSchedulerMultiDay(jobs, custs, fieldUsers, poolHtml) {
               <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="_hydrateSchedConfirmStatuses(true)" title="Re-fetch confirmation statuses from the worker">↻</button>
             </div>`;
         })()}
-        ${plan.unscheduled.length ? `<div style="margin-top:8px;font-size:11.5px;color:var(--amber)">⚠ ${plan.unscheduled.length} job(s) didn't fit — they'll roll into the next day's pool when you build it.</div>` : ''}`;
+        ${_unschedBannerHtml(plan.unscheduled)}`;
     }
 
     const dayLabel = formatSchedDate(date);
