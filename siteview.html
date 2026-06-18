@@ -47,7 +47,7 @@
   <div id="stage">
     <img id="base" alt="">
     <canvas id="draw"></canvas>
-    <div class="hint" id="hint">Search an address (or it loads from the job) to show the property.</div>
+    <div class="hint" id="hint">Loading the property… then pan/scroll to frame the right spot and pick 📏 Distance or ⬛ Area to measure.</div>
     <div id="readout" style="display:none"></div>
     <div class="scale-badge" id="scale-badge"></div>
   </div>
@@ -59,7 +59,7 @@ const MAPBOX_PROXIMITY='-77.55,37.62', MAP_W=820, MAP_H=560, S2=2;
 const params=new URLSearchParams(location.search);
 const JOB=params.get('job')||''; const LABEL=params.get('label')||'';
 const stage=document.getElementById('stage'), baseImg=document.getElementById('base'), canvas=document.getElementById('draw'), ctx=canvas.getContext('2d');
-let center=null, zoom=19, metersPerPx=0, tool='dist';
+let center=null, zoom=18, metersPerPx=0, tool='pan';
 let measures=[], draft=null, panning=false, panStart=null, panDelta={x:0,y:0};
 
 function setSize(){ canvas.width=MAP_W*S2;canvas.height=MAP_H*S2;canvas.style.width=stage.style.width=baseImg.style.width=MAP_W+'px';canvas.style.height=stage.style.height=baseImg.style.height=MAP_H+'px'; }
@@ -112,16 +112,16 @@ document.addEventListener('keydown',e=>{ if(e.key==='Enter'&&draft)finish(); if(
 document.getElementById('btn-undo').onclick=()=>{ if(draft){draft=null;} else measures.pop(); redraw(); };
 document.getElementById('btn-clear').onclick=()=>{ if(measures.length||draft){ measures=[];draft=null;redraw(); } };
 function setTool(t){ finish(); tool=t; ['pan','dist','area'].forEach(x=>document.getElementById('t-'+x).classList.toggle('on',x===t)); canvas.style.cursor=t==='pan'?'grab':'crosshair'; }
-document.getElementById('t-pan').onclick=()=>setTool('pan'); document.getElementById('t-dist').onclick=()=>setTool('dist'); document.getElementById('t-area').onclick=()=>setTool('area'); setTool('dist');
+document.getElementById('t-pan').onclick=()=>setTool('pan'); document.getElementById('t-dist').onclick=()=>setTool('dist'); document.getElementById('t-area').onclick=()=>setTool('area'); setTool('pan');
 document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} }; document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
-canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault(); const nz=zoom+(e.deltaY<0?1:-1); if(nz<15||nz>20)return; zoom=nz; loadBase(); },{passive:false});
+canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault(); const nz=zoom+(e.deltaY<0?1:-1); if(nz<15||nz>20)return; const p=evtPt(e); const g=unproject(p.x,p.y); center={lon:g.lon,lat:g.lat}; /* zoom toward the cursor */ zoom=nz; loadBase(); },{passive:false});
 
 // address search
 const addr=document.getElementById('addr'), drop=document.getElementById('addr-drop'); let gt=null;
 addr.addEventListener('input',()=>{ clearTimeout(gt); const q=addr.value.trim(); if(q.length<4){drop.style.display='none';return;} gt=setTimeout(()=>geocode(q,false),350); });
 async function geocode(q,auto){ try{ const u=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&proximity=${MAPBOX_PROXIMITY}`; const r=await fetch(u); const j=await r.json(); const fs=j.features||[]; if(!fs.length){drop.style.display='none';return;}
-  if(auto){ center={lon:fs[0].center[0],lat:fs[0].center[1]}; addr.value=fs[0].place_name; zoom=19; loadBase(); return; }
-  drop.innerHTML=''; fs.forEach(f=>{ const d=document.createElement('div'); d.className='addr-item'; d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`; d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=19; loadBase(); }; drop.appendChild(d); }); drop.style.display='block';
+  if(auto){ center={lon:fs[0].center[0],lat:fs[0].center[1]}; addr.value=fs[0].place_name; zoom=18; loadBase(); return; }
+  drop.innerHTML=''; fs.forEach(f=>{ const d=document.createElement('div'); d.className='addr-item'; d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`; d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=18; loadBase(); }; drop.appendChild(d); }); drop.style.display='block';
 }catch(e){ drop.style.display='none'; } }
 document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target))drop.style.display='none'; });
 
