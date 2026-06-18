@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GreenKey — Site View</title>
+<style>
+  :root{ --green:#2e7d32; --bg:#f4f6f8; --surface:#fff; --border:#d7dde3; --text:#1a1f2a; --muted:#5e6a78; --shadow:0 1px 3px rgba(0,0,0,.12); --dist:#f5b301; --area:#0ea5e9; }
+  *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);display:flex;flex-direction:column;overflow:hidden}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:7px 10px;display:flex;align-items:center;gap:7px;flex-shrink:0;box-shadow:var(--shadow);flex-wrap:wrap}
+  .addr-wrap{position:relative;flex:1;min-width:160px;max-width:380px}
+  #addr{width:100%;padding:6px 9px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;outline:none}
+  #addr:focus{border-color:var(--green)}
+  #addr-drop{position:absolute;top:32px;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.14);z-index:20;display:none;max-height:230px;overflow:auto}
+  .addr-item{padding:7px 10px;cursor:pointer;font-size:12.5px;border-bottom:1px solid #eef1f4}
+  .addr-item:hover{background:#e8f5e9}
+  .addr-item .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:6px 10px;border:1px solid var(--border);background:var(--surface);border-radius:6px;font-size:12.5px;cursor:pointer;color:var(--text);white-space:nowrap;font-weight:500}
+  .btn:hover{background:#f0f3f6}
+  .btn.on{border-color:var(--green);background:#e8f5e9;font-weight:700}
+  .btn.primary{background:var(--green);color:#fff;border-color:var(--green)}
+  .wrap{flex:1;position:relative;overflow:hidden;background:#dfe4e8;display:flex;align-items:center;justify-content:center}
+  #stage{position:relative;box-shadow:0 2px 16px rgba(0,0,0,.25);background:#c9d1d8;overflow:hidden}
+  #base{display:block;position:absolute;top:0;left:0;user-select:none;-webkit-user-drag:none}
+  #draw{position:absolute;top:0;left:0;cursor:crosshair}
+  .hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px;text-align:center;padding:24px}
+  #readout{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.94);border:1px solid var(--border);border-radius:7px;padding:7px 11px;font-size:13px;box-shadow:var(--shadow);max-width:240px;line-height:1.5}
+  #readout b{font-variant-numeric:tabular-nums}
+  #zoomctl{position:absolute;bottom:12px;right:12px;display:flex;flex-direction:column;gap:5px}
+  #zoomctl button{width:32px;height:32px;border-radius:6px;border:1px solid var(--border);background:var(--surface);font-size:17px;cursor:pointer;box-shadow:var(--shadow)}
+  .scale-badge{position:absolute;bottom:12px;left:12px;background:rgba(255,255,255,.92);border:1px solid var(--border);border-radius:6px;padding:4px 9px;font-size:11px;color:var(--muted);display:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="addr-wrap"><input id="addr" placeholder="Search property address…" autocomplete="off"><div id="addr-drop"></div></div>
+  <button class="btn" data-tool="pan" id="t-pan">✋ Pan</button>
+  <button class="btn" data-tool="dist" id="t-dist">📏 Distance</button>
+  <button class="btn" data-tool="area" id="t-area">⬛ Area</button>
+  <button class="btn" id="btn-undo">↶ Undo</button>
+  <button class="btn" id="btn-clear">Clear</button>
+  <button class="btn primary" id="btn-shot">⤓ Screenshot</button>
+</header>
+<div class="wrap">
+  <div id="stage">
+    <img id="base" alt="">
+    <canvas id="draw"></canvas>
+    <div class="hint" id="hint">Search an address (or it loads from the job) to show the property.</div>
+    <div id="readout" style="display:none"></div>
+    <div class="scale-badge" id="scale-badge"></div>
+  </div>
+  <div id="zoomctl"><button id="zin">+</button><button id="zout">−</button></div>
+</div>
+<script>
+const MAPBOX_TOKEN='pk.eyJ1Ijoiam9uYXRoYW4zMjk5IiwiYSI6ImNtcWJuNThtdzBnbmQycm9xM3RlNjUxODYifQ.ZCA5uC-Ws56-7vnmEMrjPA';
+const MAPBOX_PROXIMITY='-77.55,37.62', MAP_W=820, MAP_H=560, S2=2;
+const params=new URLSearchParams(location.search);
+const JOB=params.get('job')||''; const LABEL=params.get('label')||'';
+const stage=document.getElementById('stage'), baseImg=document.getElementById('base'), canvas=document.getElementById('draw'), ctx=canvas.getContext('2d');
+let center=null, zoom=19, metersPerPx=0, tool='dist';
+let measures=[], draft=null, panning=false, panStart=null, panDelta={x:0,y:0};
+
+function setSize(){ canvas.width=MAP_W*S2;canvas.height=MAP_H*S2;canvas.style.width=stage.style.width=baseImg.style.width=MAP_W+'px';canvas.style.height=stage.style.height=baseImg.style.height=MAP_H+'px'; }
+setSize();
+function worldSize(){ return 256*Math.pow(2,zoom); }
+function toW(lon,lat){ const wp=worldSize(); const s=Math.min(Math.max(Math.sin(lat*Math.PI/180),-0.9999),0.9999); return {x:(lon+180)/360*wp, y:(0.5-Math.log((1+s)/(1-s))/(4*Math.PI))*wp}; }
+function frW(x,y){ const wp=worldSize(); return {lon:x/wp*360-180, lat:180/Math.PI*Math.atan(Math.sinh(Math.PI-2*Math.PI*y/wp))}; }
+function project(ll){ const w=toW(ll.lon,ll.lat),c=toW(center.lon,center.lat); return {x:canvas.width/2+(w.x-c.x)*S2, y:canvas.height/2+(w.y-c.y)*S2}; }
+function unproject(px,py){ const c=toW(center.lon,center.lat); return frW(c.x+(px-canvas.width/2)/S2, c.y+(py-canvas.height/2)/S2); }
+function computeScale(){ if(!center)return; metersPerPx=156543.03392*Math.cos(center.lat*Math.PI/180)/Math.pow(2,zoom)/S2; drawScaleBadge(); }
+function haversineFt(a,b){ const R=6371000,t=Math.PI/180; const dLa=(b.lat-a.lat)*t,dLo=(b.lon-a.lon)*t,la1=a.lat*t,la2=b.lat*t; const h=Math.sin(dLa/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(h))*3.28084; }
+function lineFt(pts){ let t=0; for(let i=1;i<pts.length;i++)t+=haversineFt(pts[i-1],pts[i]); return t; }
+function polyAreaSqft(pts){ if(pts.length<3)return 0; const lat0=pts.reduce((a,p)=>a+p.lat,0)/pts.length*Math.PI/180, R=6371000; const xy=pts.map(p=>({x:p.lon*Math.PI/180*Math.cos(lat0)*R, y:p.lat*Math.PI/180*R})); let a=0; for(let i=0;i<xy.length;i++){ const j=(i+1)%xy.length; a+=xy[i].x*xy[j].y-xy[j].x*xy[i].y; } return Math.abs(a/2)*10.7639; }
+
+function loadBase(){ if(!center)return; computeScale();
+  const url=`https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${center.lon},${center.lat},${zoom},0/${MAP_W}x${MAP_H}@2x?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
+  baseImg.onload=()=>{ document.getElementById('hint').style.display='none'; document.getElementById('scale-badge').style.display='block'; redraw(); };
+  baseImg.onerror=()=>{ document.getElementById('hint').textContent='Could not load satellite imagery — check the address or connection.'; document.getElementById('hint').style.display='flex'; };
+  baseImg.crossOrigin='anonymous'; baseImg.src=url; redraw();
+}
+function drawScaleBadge(){ const b=document.getElementById('scale-badge'); if(!metersPerPx){b.style.display='none';return;} const raw=metersPerPx*110*3.28084; const nice=[10,20,25,50,75,100,150,200,300,500].reduce((a,c)=>Math.abs(c-raw)<Math.abs(a-raw)?c:a); const px=(nice/3.28084)/metersPerPx/S2; b.innerHTML=`<span style="display:inline-block;width:${px.toFixed(0)}px;height:4px;background:#1a1f2a;border-radius:2px;vertical-align:middle"></span> ${nice} ft`; }
+function evtPt(e){ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height)}; }
+function rr(x,y,w,h,r){ ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath(); }
+function chip(txt,x,y,col){ ctx.save();ctx.font='bold 15px Segoe UI,Arial';ctx.textAlign='center';ctx.textBaseline='middle';const w=ctx.measureText(txt).width;ctx.fillStyle='rgba(255,255,255,.93)';rr(x-w/2-7,y-12,w+14,24,6);ctx.fill();ctx.fillStyle=col;ctx.fillText(txt,x,y);ctx.restore(); }
+function drawMeasure(m,isDraft){ const col=m.type==='area'?'#0ea5e9':'#f5b301'; const sp=m.pts.map(project); ctx.save();ctx.lineJoin='round';ctx.lineCap='round';
+  ctx.beginPath();sp.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); if(m.type==='area'&&sp.length>2&&!isDraft)ctx.closePath();
+  ctx.lineWidth=9;ctx.strokeStyle='rgba(0,0,0,.5)';ctx.stroke(); ctx.lineWidth=5;ctx.strokeStyle=col;ctx.stroke();
+  if(m.type==='area'&&sp.length>2){ ctx.fillStyle='rgba(14,165,233,.18)';ctx.fill(); }
+  ctx.fillStyle=col;ctx.strokeStyle='#fff';ctx.lineWidth=2; sp.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();ctx.stroke();});
+  if(!isDraft&&m.pts.length>=2){ const c={x:sp.reduce((a,p)=>a+p.x,0)/sp.length,y:sp.reduce((a,p)=>a+p.y,0)/sp.length};
+    if(m.type==='area'){ const sf=polyAreaSqft(m.pts); chip(sf>8000?(sf/43560).toFixed(2)+' ac':Math.round(sf)+' ft²', c.x, c.y, '#0a6'); }
+    else { const ft=Math.round(lineFt(m.pts)); const mid=sp[Math.floor(sp.length/2)]; chip(ft+' ft', mid.x, mid.y-14, '#a6750a'); } }
+  ctx.restore(); }
+function redraw(){ ctx.clearRect(0,0,canvas.width,canvas.height); if(!center)return; measures.forEach(m=>drawMeasure(m)); if(draft)drawMeasure(draft,true); updateReadout(); persist(); }
+function updateReadout(){ const r=document.getElementById('readout'); const dists=measures.filter(m=>m.type==='dist'), areas=measures.filter(m=>m.type==='area');
+  if(!measures.length&&!draft){ r.style.display='none'; return; } r.style.display='block';
+  let h=''; if(dists.length){ const tot=Math.round(dists.reduce((a,m)=>a+lineFt(m.pts),0)); h+=`<div>📏 ${dists.length} run${dists.length>1?'s':''} · <b>${tot} ft</b> total</div>`; }
+  areas.forEach((m,i)=>{ const sf=polyAreaSqft(m.pts); h+=`<div>⬛ Area ${i+1}: <b>${sf>8000?(sf/43560).toFixed(2)+' ac':Math.round(sf)+' ft²'}</b></div>`; });
+  r.innerHTML=h||'Measuring…'; }
+
+canvas.addEventListener('mousedown',e=>{ if(!center)return; const p=evtPt(e);
+  if(tool==='pan'){ panning=true;panStart={cx:e.clientX,cy:e.clientY};panDelta={x:0,y:0};canvas.style.cursor='grabbing';return; }
+  const g=unproject(p.x,p.y); if(!draft){ draft={type:tool,pts:[g]}; } else { draft.pts.push(g); } redraw(); });
+canvas.addEventListener('mousemove',e=>{ if(panning){ panDelta={x:e.clientX-panStart.cx,y:e.clientY-panStart.cy}; baseImg.style.transform=canvas.style.transform=`translate(${panDelta.x}px,${panDelta.y}px)`; return; }
+  if(draft){ const p=evtPt(e),g=unproject(p.x,p.y); const tmp={type:draft.type,pts:[...draft.pts,g]}; ctx.clearRect(0,0,canvas.width,canvas.height); measures.forEach(m=>drawMeasure(m)); drawMeasure(tmp,true); } });
+window.addEventListener('mouseup',()=>{ if(panning){ panning=false; canvas.style.cursor=tool==='pan'?'grab':'crosshair'; if(panDelta.x||panDelta.y){ const g=unproject(canvas.width/2-panDelta.x*S2, canvas.height/2-panDelta.y*S2); center={lon:g.lon,lat:g.lat}; } baseImg.style.transform=canvas.style.transform='';panDelta={x:0,y:0}; loadBase(); } });
+canvas.addEventListener('dblclick',finish);
+function finish(){ if(draft && draft.pts.length>=2){ measures.push(draft); } draft=null; redraw(); }
+document.addEventListener('keydown',e=>{ if(e.key==='Enter'&&draft)finish(); if(e.key==='Escape'){draft=null;redraw();} });
+document.getElementById('btn-undo').onclick=()=>{ if(draft){draft=null;} else measures.pop(); redraw(); };
+document.getElementById('btn-clear').onclick=()=>{ if(measures.length||draft){ measures=[];draft=null;redraw(); } };
+function setTool(t){ finish(); tool=t; ['pan','dist','area'].forEach(x=>document.getElementById('t-'+x).classList.toggle('on',x===t)); canvas.style.cursor=t==='pan'?'grab':'crosshair'; }
+document.getElementById('t-pan').onclick=()=>setTool('pan'); document.getElementById('t-dist').onclick=()=>setTool('dist'); document.getElementById('t-area').onclick=()=>setTool('area'); setTool('dist');
+document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} }; document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
+canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault(); const nz=zoom+(e.deltaY<0?1:-1); if(nz<15||nz>20)return; zoom=nz; loadBase(); },{passive:false});
+
+// address search
+const addr=document.getElementById('addr'), drop=document.getElementById('addr-drop'); let gt=null;
+addr.addEventListener('input',()=>{ clearTimeout(gt); const q=addr.value.trim(); if(q.length<4){drop.style.display='none';return;} gt=setTimeout(()=>geocode(q,false),350); });
+async function geocode(q,auto){ try{ const u=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&proximity=${MAPBOX_PROXIMITY}`; const r=await fetch(u); const j=await r.json(); const fs=j.features||[]; if(!fs.length){drop.style.display='none';return;}
+  if(auto){ center={lon:fs[0].center[0],lat:fs[0].center[1]}; addr.value=fs[0].place_name; zoom=19; loadBase(); return; }
+  drop.innerHTML=''; fs.forEach(f=>{ const d=document.createElement('div'); d.className='addr-item'; d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`; d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=19; loadBase(); }; drop.appendChild(d); }); drop.style.display='block';
+}catch(e){ drop.style.display='none'; } }
+document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target))drop.style.display='none'; });
+
+// screenshot
+document.getElementById('btn-shot').onclick=()=>{ if(!center){alert('Load a property first.');return;} finish();
+  const W=canvas.width,H=canvas.height,cap=42*S2; const out=document.createElement('canvas'); out.width=W; out.height=H+cap; const o=out.getContext('2d');
+  o.fillStyle='#fff';o.fillRect(0,0,out.width,out.height); try{ o.drawImage(baseImg,0,0,W,H);}catch(e){} o.drawImage(canvas,0,0);
+  // caption bar
+  o.fillStyle='#2e7d32';o.fillRect(0,H,W,cap); o.fillStyle='#fff';o.font=`bold ${15*S2}px Segoe UI,Arial`;o.textBaseline='middle';o.textAlign='left';
+  const dists=measures.filter(m=>m.type==='dist'),areas=measures.filter(m=>m.type==='area'); let sum=[]; if(dists.length)sum.push(Math.round(dists.reduce((a,m)=>a+lineFt(m.pts),0))+' ft'); areas.forEach(m=>{const sf=polyAreaSqft(m.pts);sum.push(sf>8000?(sf/43560).toFixed(2)+' ac':Math.round(sf)+' ft²');});
+  o.fillText('GreenKey — '+(LABEL||addr.value.split(',')[0]||'Site View'), 12*S2, H+cap/2);
+  if(sum.length){ o.textAlign='right'; o.fillText(sum.join('  ·  '), W-12*S2, H+cap/2); }
+  o.strokeStyle='#1a1f2a';o.lineWidth=2;o.strokeRect(1,1,W-2,H-2);
+  const dataUrl=out.toDataURL('image/png');
+  const a=document.createElement('a'); const fn=(LABEL||addr.value.split(',')[0]||'site').replace(/[^a-z0-9]+/gi,'_'); a.download='GreenKey_SiteView_'+fn+'.png'; a.href=dataUrl; a.click();
+  // downscaled JPEG thumbnail for the CRM estimate screen — small enough for localStorage, no SharePoint link to expire
+  const tw=Math.min(1000,out.width), th=Math.round(out.height*tw/out.width);
+  const tc=document.createElement('canvas'); tc.width=tw; tc.height=th; tc.getContext('2d').drawImage(out,0,0,tw,th);
+  let thumb=dataUrl; try{ thumb=tc.toDataURL('image/jpeg',0.8); }catch(e){}
+  const summary=sum.join(' · ');
+  try{ if(JOB) localStorage.setItem('gk_siteview_shot_'+JOB, JSON.stringify({dataUrl:thumb, summary, ts:Date.now()})); }catch(e){}
+  try{ if(window.parent!==window) window.parent.postMessage({type:'gk-siteview-shot', job:JOB, dataUrl:thumb, full:dataUrl, summary}, '*'); }catch(e){}
+};
+
+// persistence (localStorage keyed by job; also postMessage to parent CRM)
+function persist(){ if(!center)return; const data={center,zoom,measures,addr:addr.value}; try{ if(JOB) localStorage.setItem('gk_siteview_'+JOB, JSON.stringify(data)); }catch(e){}
+  try{ if(window.parent!==window) window.parent.postMessage({type:'gk-siteview-data', job:JOB, data}, '*'); }catch(e){} }
+function restore(){ if(!JOB)return false; try{ const s=localStorage.getItem('gk_siteview_'+JOB); if(s){ const d=JSON.parse(s); center=d.center; zoom=d.zoom||19; measures=d.measures||[]; if(d.addr)addr.value=d.addr; loadBase(); return true; } }catch(e){} return false; }
+
+// init: restore saved measurement, else geocode the address passed in
+(function(){ if(restore())return; const a=params.get('addr'); if(a){ addr.value=a; geocode(a,true); } })();
+</script>
+</body>
+</html>

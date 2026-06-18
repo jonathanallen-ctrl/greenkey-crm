@@ -5257,6 +5257,7 @@ function renderQuoteBuilder(qid){
         <div id="qb-form"></div>
       </div>
       <div id="qb-sidebar">
+        ${(typeof gkSiteViewThumbHTML==='function'?gkSiteViewThumbHTML(lead):'')}
         <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Job Type</div>
           <select id="qb-jobtype" onchange="changeQuoteJobType('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
@@ -10920,6 +10921,7 @@ function renderJobDetail(id) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 4v4l2.5 1.5"/></svg>
         Schedule Now
       </button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2e7d32;color:#2e7d32" onclick="openSiteViewModal('${id}')" title="Satellite site view — measure runs/areas and screenshot for the estimate">📍 Site View</button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
   </div>`;
@@ -21960,6 +21962,53 @@ async function init() {
 }
 
 init();
+</script>
+<script>
+/* ── Site View (Mapbox satellite measure) — load-on-demand modal launched from the job screen.
+   Heavy code lives in siteview.html (iframe); this is the thin CRM hook. Same-origin, so the
+   widget's screenshot thumbnail lands in localStorage and shows on the estimate screen. ── */
+(function(){
+  function leadAddr(l){ return [l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '); }
+  window.openSiteViewModal=function(leadId){
+    let lead=null; try{ lead=getLead(leadId); }catch(e){}
+    if(!lead){ alert('Job not found.'); return; }
+    let m=document.getElementById('gk-siteview-modal');
+    if(!m){
+      m=document.createElement('div'); m.id='gk-siteview-modal';
+      m.style.cssText='position:fixed;inset:0;background:rgba(15,20,30,.6);z-index:99999;display:flex;flex-direction:column';
+      m.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#fff;border-bottom:1px solid #d7dde3"><b style="color:#2e7d32;font-family:-apple-system,Segoe UI,Arial">📍 Site View &amp; Measure</b><button id="gk-sv-done" style="padding:6px 14px;border:1px solid #2e7d32;background:#2e7d32;color:#fff;border-radius:6px;cursor:pointer;font-size:13px">Done</button></div><iframe id="gk-sv-frame" style="flex:1;border:0;width:100%;background:#dfe4e8"></iframe>';
+      document.body.appendChild(m);
+      m.querySelector('#gk-sv-done').onclick=window.closeSiteViewModal;
+    }
+    let lastName=lead.customerLastName||''; if(!lastName){ try{ const c=getCustomer(lead.customerId); lastName=c?c.lastName||'':''; }catch(e){} }
+    const label=(lastName?lastName+' — ':'')+(lead.siteStreet||lead.siteCity||lead.id||'');
+    m.querySelector('#gk-sv-frame').src='siteview.html?job='+encodeURIComponent(leadId)+'&addr='+encodeURIComponent(leadAddr(lead))+'&label='+encodeURIComponent(label);
+    m.style.display='flex';
+  };
+  window.closeSiteViewModal=function(){ const m=document.getElementById('gk-siteview-modal'); if(m){ m.style.display='none'; const f=m.querySelector('#gk-sv-frame'); if(f) f.src='about:blank'; } try{ if(window.S&&S.jobDetailId&&typeof renderJobDetail==='function') renderJobDetail(S.jobDetailId); }catch(e){} };
+  window.gkSiteViewThumbHTML=function(lead){
+    if(!lead) return '';
+    let shot=null; try{ shot=JSON.parse(localStorage.getItem('gk_siteview_shot_'+lead.id)||'null'); }catch(e){}
+    if(!shot||!shot.dataUrl) return '<div class="card" style="padding:10px 12px;margin-bottom:8px"><div style="font-size:11px;font-weight:600;color:var(--text-muted,#888);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Site View</div><div style="font-size:12px;color:var(--text-muted,#888)">No site view yet — open the job and tap 📍 Site View to measure the run, then Screenshot.</div></div>';
+    return '<div class="card" style="padding:10px 12px;margin-bottom:8px"><div style="font-size:11px;font-weight:600;color:var(--text-muted,#888);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Site View'+(shot.summary?' · '+shot.summary:'')+'</div><a href="'+shot.dataUrl+'" target="_blank" title="Open full size"><img src="'+shot.dataUrl+'" style="width:100%;border-radius:6px;border:1px solid #d7dde3;display:block"></a></div>';
+  };
+  window.addEventListener('message',function(e){ const d=e.data; if(!d||d.type!=='gk-siteview-shot'||!d.job) return;
+    // 1) small thumbnail → localStorage, shown on the quote builder sidebar
+    if(d.dataUrl){ try{ localStorage.setItem('gk_siteview_shot_'+d.job, JSON.stringify({dataUrl:d.dataUrl, summary:d.summary||'', ts:Date.now()})); }catch(err){} }
+    // 2) full PNG → filed under the job's Documents (replacing any prior Site View doc so it doesn't pile up)
+    if(d.full && typeof addFileRecord==='function'){
+      try{
+        if(typeof getJobFiles==='function' && typeof deleteFileRecord==='function'){ getJobFiles(d.job).filter(f=>f.category==='documents' && /^Site View/i.test(f.name||'')).forEach(f=>{ try{ deleteFileRecord(f.id); }catch(_){}}); }
+        const b64=(d.full.split(',')[1]||''); const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); const blob=new Blob([arr],{type:'image/png'});
+        const file=new File([blob], 'Site View '+new Date().toISOString().slice(0,10)+'.png', {type:'image/png'});
+        addFileRecord(d.job,'documents',null,file,d.full);
+        try{ if(typeof renderFilesPage==='function' && document.getElementById('fm-grid')) renderFilesPage(); }catch(_){}
+        try{ if(window.S && S.jobDetailId===d.job && typeof renderJobDetail==='function') renderJobDetail(d.job); }catch(_){}
+        try{ if(typeof toast==='function') toast('Site View saved to job Documents','success'); }catch(_){}
+      }catch(err){ console.warn('[GK] Site View doc save failed:', err); }
+    }
+  });
+})();
 </script>
 </body>
 </html>
