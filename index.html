@@ -2520,7 +2520,7 @@ const SECS = {
     <div class="srow"><div><div class="srl">Garage — within 5 ft of panel (wire run)</div><div class="srd">Distance is measured as actual conduit / wire-run length, not tape-measure distance.</div></div><input class="sinput" value="$500"></div>
     <div class="srow"><div><div class="srl">Interior / Basement — within 5 ft of panel (wire run)</div><div class="srd">Distance is measured as actual conduit / wire-run length, not tape-measure distance.</div></div><input class="sinput" value="$750"></div>
     <div class="srow"><div><div class="srl">Additional distance — per 10 ft of wire run (surface)</div><div class="srd">Beyond the included 5 ft. Charged in 10-ft increments of conduit run.</div></div><input class="sinput" value="$150"></div>
-    <div class="srow"><div><div class="srl">Trenching — hand dig per 10 ft of trench</div></div><input class="sinput" value="$200"></div>
+    <div class="srow"><div><div class="srl">Trenching — hand dig per 10 ft of trench</div></div><input class="sinput" value="$250"></div>
     <div class="srow"><div><div class="srl">Trenching — machine base fee (50+ ft)</div></div><input class="sinput" value="$650"></div>
     <div class="srow"><div><div class="srl">Trenching — machine per additional 10 ft of trench</div></div><input class="sinput" value="$150"></div>
     <div class="srow"><div><div class="srl">Tandem breaker (per breaker)</div></div><input class="sinput" value="$40"></div>
@@ -3367,6 +3367,12 @@ function custInitials(c) {
   return ((c.firstName||'')[0]+(c.lastName||'')[0]).toUpperCase()||'?';
 }
 function custFullName(c) { return c ? `${c.firstName||''} ${c.lastName||''}`.trim()||'Unnamed' : 'Unknown'; }
+// Normalized name key for search matching: lowercases and strips spaces +
+// punctuation, so "Justin  Smith" (stray/double space), "Justin Smith", and
+// "justin-smith" all collapse to "justinsmith" and match. Mirrors the
+// normalization in findDuplicateCustomers so the search bars find anyone the
+// duplicate-check flags (root cause of "shows up when entering, not in search").
+function _nameKey(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 
 // ── PIPELINE ──
 function setPipeMode(mode) {
@@ -3920,7 +3926,8 @@ function onCityInput(val) {
 function custSearchInput(val) {
   const drop = document.getElementById('csd');
   if (!val.trim()) { drop.classList.remove('show'); return; }
-  const custs = getCustomers().filter(c=>custFullName(c).toLowerCase().includes(val.toLowerCase())).slice(0,6);
+  const vKey = _nameKey(val);
+  const custs = getCustomers().filter(c=>custFullName(c).toLowerCase().includes(val.toLowerCase())||(vKey&&_nameKey(custFullName(c)).includes(vKey))).slice(0,6);
   drop.innerHTML = custs.map(c=>
     `<div class="csd-item" onclick="selectExistingCust('${c.id}','${custFullName(c).replace(/'/g,"\\'")}')">
        ${custFullName(c)} — <span style="color:var(--text-muted)">${c.phone||c.email||'No contact'}</span>
@@ -4193,8 +4200,11 @@ function doGlobalSearch(q) {
     if (!qDigits || qDigits.length < 4) return false;
     return _digitsOnly(rawPhone).includes(qDigits);
   };
+  const qKey = _nameKey(q);
   const custs = getCustomers().filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
+    (qKey && _nameKey(custFullName(c)).includes(qKey))||
+    (qKey && _nameKey(c.businessName).includes(qKey))||
     (c.businessName||'').toLowerCase().includes(ql)||
     (c.email||'').toLowerCase().includes(ql)||
     (c.phone||'').toLowerCase().includes(ql)||
@@ -4210,7 +4220,9 @@ function doGlobalSearch(q) {
       (l.siteStreet||'').toLowerCase().includes(ql)||
       (l.siteCity||'').toLowerCase().includes(ql)||
       (l.customerName||'').toLowerCase().includes(ql)||
+      (qKey && _nameKey(l.customerName).includes(qKey))||
       lcName.includes(ql)||
+      (qKey && _nameKey(lcName).includes(qKey))||
       bn.toLowerCase().includes(ql)||
       (l.description||'').toLowerCase().includes(ql)||
       phoneMatch((lc?.phone||'') + ' ' + (lc?.altPhone||'') + ' ' + (l.customerPhone||''))
@@ -4333,7 +4345,7 @@ function getQQPricing(){
     // Base install (covers labor, conduit, sundries, and 5 ft of any-gauge wire)
     garage:500, interior:750,
     // EV Charger / NEMA 14-50 — all-in per-10-ft rates (wire baked in, assumed 6/3)
-    addl10Surface:150, handDig10:200, machineTrenchBase:650, machineTrench10:150,
+    addl10Surface:150, handDig10:250, machineTrenchBase:650, machineTrench10:150,
     // HVAC Circuit — decomposed labor-only rates (wire is a separate line item)
     hvacAddl10Surface:115, hvacHandDig10:170, hvacMachineTrenchBase:620, hvacMachineTrench10:115,
     // HVAC disconnect at the unit
@@ -4965,10 +4977,11 @@ function filterLeadSelect(term){
   const sel=document.getElementById('qt-lead-sel');
   if(!sel) return;
   const q=(term||'').toLowerCase();
+  const qKey=_nameKey(term||'');
   const filtered=!q?leads:leads.filter(l=>{
     const c=custs.find(x=>x.id===l.customerId);
     const name=c?custFullName(c):(l.customerName||'');
-    return l.id.toLowerCase().includes(q)||name.toLowerCase().includes(q)||(l.siteCity||'').toLowerCase().includes(q);
+    return l.id.toLowerCase().includes(q)||name.toLowerCase().includes(q)||(qKey&&_nameKey(name).includes(qKey))||(l.siteCity||'').toLowerCase().includes(q);
   });
   sel.innerHTML=filtered.map(l=>{
     const c=custs.find(x=>x.id===l.customerId);
@@ -6636,26 +6649,42 @@ function _onQQChange_PanelReplacement(qid) {
 }
 
 // ── QQ RUN SEGMENTS ──
-function qqSegCost(seg,p){
+// HVAC quotes itemize wire on a separate line and use their own (lower) run-
+// labor rates; EV/NEMA bake wire into the run rate. Return the rate set that
+// matches the quote's job type so the run-row labels + per-row cost shown in
+// the form match what the L&M total actually charges. (Fixes a display glitch
+// where the HVAC form reused the shared rows and showed the EV/NEMA rates.)
+function qqRunRates(q,p){
+  const hv = !!(q && q.jobType === 'hvac-circuit');
+  return {
+    surface:     hv ? p.hvacAddl10Surface    : p.addl10Surface,
+    handDig:     hv ? p.hvacHandDig10         : p.handDig10,
+    machineBase: hv ? p.hvacMachineTrenchBase : p.machineTrenchBase,
+    machine10:   hv ? p.hvacMachineTrench10   : p.machineTrench10
+  };
+}
+function qqSegCost(seg,p,rates){
+  rates = rates || qqRunRates(null,p);
   const ft=Math.max(parseInt(seg.ft)||0,0);
-  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') return (ft/10)*p.addl10Surface;
-  if(seg.type==='hand-trench') return (ft/10)*p.handDig10;
-  if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10;}
+  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') return (ft/10)*rates.surface;
+  if(seg.type==='hand-trench') return (ft/10)*rates.handDig;
+  if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return rates.machineBase+Math.max(0,Math.ceil((mft-50)/10))*rates.machine10;}
   return 0;
 }
 function renderQQRunSegs(segs,qid){
   const p=getQQPricing();
+  const rates=qqRunRates(getQuote(qid),p);
   if(!segs.length) return `<div style="color:var(--text-muted);font-size:12.5px;padding:6px 0">No run segments added — click "+ Add Segment" below.</div>`;
   return segs.map((seg,i)=>{
     const isMachine=seg.type==='machine-trench';
-    const cost=qqSegCost(seg,p);
+    const cost=qqSegCost(seg,p,rates);
     return `<div class="qq-row" style="gap:8px;flex-wrap:wrap">
       <select class="fsel" style="flex:1;min-width:200px" onchange="updateQQRunSegType('${qid}',${i},this.value)">
-        <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — concealed cable — $150 per 10 ft</option>
-        <option value="attic"${seg.type==='attic'?' selected':''}>Attic — concealed cable — $150 per 10 ft</option>
-        <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $150 per 10 ft</option>
-        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $200 per 10 ft of trench</option>
-        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $650 base (first 50 ft)</option>
+        <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — concealed cable — $${rates.surface} per 10 ft</option>
+        <option value="attic"${seg.type==='attic'?' selected':''}>Attic — concealed cable — $${rates.surface} per 10 ft</option>
+        <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $${rates.surface} per 10 ft</option>
+        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $${rates.handDig} per 10 ft of trench</option>
+        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $${rates.machineBase} base (first 50 ft)</option>
       </select>
       <div style="display:flex;align-items:center;gap:6px">
         <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${(seg.type==='hand-trench'||seg.type==='machine-trench')?'(trench)':'(wire run)'}</span>
@@ -6691,7 +6720,7 @@ function updateQQRunSegFt(qid,idx,val){
   upsertQuote({...q,qq:{...(q.qq||{}),runSegs:segs}});
   // update cost display inline without full re-render
   const p=getQQPricing();
-  const cost=qqSegCost(segs[idx],p);
+  const cost=qqSegCost(segs[idx],p,qqRunRates(q,p));
   const rows=document.querySelectorAll('#qq-runs-list .qq-row');
   if(rows[idx]){const cd=rows[idx].querySelector('[style*="mono"]');if(cd)cd.textContent=fmt$(cost);}
   onQQChange(qid);
@@ -6958,6 +6987,109 @@ function autoExclusions(q){
 }
 
 // ── DETAILED QUOTE FORM ──
+// ── MULTI-SCOPE DETAILED QUOTES ──
+// A "scope" is a labeled section in the Materials line list: a header row
+// ({header:true,label}) followed by its seeded, fully-editable line items.
+// Stack as many as the job needs (EV + Service Upgrade + …). Headers contribute
+// $0 to every total (calcLine returns 0 for them), so this is backward-
+// compatible — legacy quotes with no headers render and price exactly as before.
+// Seed costs are starting points; pick each line from the catalog to pull
+// verified pricing. Scope narrative is appended to the editable Scope textarea.
+const SCOPE_TEMPLATES = {
+  'ev-charger': { label:'EV Charger — Level 2',
+    scope:'Furnish and install a dedicated 240-volt, 60-amp branch circuit for a Level 2 EV charger, including mounting, connection, and setup of the charger. All work is performed to NEC and local code.',
+    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:30,unit:'per foot',unitCost:1.10,markup:30},
+            {desc:'2" PVC conduit — per ft',qty:30,unit:'per foot',unitCost:0.91,markup:30},
+            {desc:'60A 2-pole breaker',qty:1,unit:'each',unitCost:18,markup:40},
+            {desc:'EV charger install labor allowance',qty:1,unit:'per job',unitCost:0,markup:0} ] },
+  'nema-1450': { label:'NEMA 14-50 Outlet',
+    scope:'Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker, terminating at a NEMA 14-50 outlet. All work is performed to NEC and local code.',
+    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:25,unit:'per foot',unitCost:1.10,markup:30},
+            {desc:'NEMA 14-50 receptacle + box',qty:1,unit:'each',unitCost:25,markup:40},
+            {desc:'50A GFCI breaker',qty:1,unit:'each',unitCost:100,markup:40} ] },
+  'service-upgrade': { label:'Service Upgrade',
+    scope:'Upgrade the existing electrical service to a higher amperage, including new meter base, service-entrance conductors, main panel, grounding, and utility coordination. All work is performed to NEC and local code.',
+    lines:[ {desc:'200A meter base / main panel',qty:1,unit:'each',unitCost:300,markup:30},
+            {desc:'Service-entrance conductors (set)',qty:1,unit:'per job',unitCost:150,markup:30},
+            {desc:'Grounding electrode system',qty:1,unit:'per job',unitCost:75,markup:30} ] },
+  'panel-replacement': { label:'Panel Replacement',
+    scope:'Remove and replace the existing main electrical panel with a new load center, re-terminating all branch circuits like-for-like, including panel hardware, main breaker, ground bar kit, and a whole-home Type 2 surge protector. All work is performed to NEC and local code.',
+    lines:[ {desc:'Load center (panel) + main breaker',qty:1,unit:'each',unitCost:280,markup:30},
+            {desc:'Type 2 whole-home surge protector',qty:1,unit:'each',unitCost:120,markup:40},
+            {desc:'Breaker re-termination labor allowance',qty:1,unit:'per job',unitCost:0,markup:0} ] },
+  'new-service': { label:'New Service Install',
+    scope:'Install a new utility service entrance and meter, including service mast/lateral, meter base, main panel, and grounding, coordinated with the utility. All work is performed to NEC and local code.',
+    lines:[ {desc:'Meter base + main panel',qty:1,unit:'each',unitCost:300,markup:30},
+            {desc:'Service mast / lateral materials',qty:1,unit:'per job',unitCost:200,markup:30},
+            {desc:'Grounding electrode system',qty:1,unit:'per job',unitCost:75,markup:30} ] },
+  'battery': { label:'Battery Storage',
+    scope:'Furnish and install a battery storage system with associated disconnect, conductors, and interconnection. All work is performed to NEC and local code.',
+    lines:[ {desc:'Battery system equipment',qty:1,unit:'each',unitCost:0,markup:15},
+            {desc:'Disconnect + interconnection materials',qty:1,unit:'per job',unitCost:150,markup:30} ] },
+  'generator': { label:'Generator Install',
+    scope:'Furnish and install a standby/portable generator connection, including transfer switch or interlock, inlet, conductors, and connection. All work is performed to NEC and local code.',
+    lines:[ {desc:'Transfer switch / interlock kit',qty:1,unit:'each',unitCost:200,markup:30},
+            {desc:'Generator inlet + conductors',qty:1,unit:'per job',unitCost:120,markup:30} ] },
+  'custom': { label:'Custom Scope', scope:'',
+    lines:[ {desc:'',qty:1,unit:'each',unitCost:0,markup:30} ] }
+};
+function addScopeToQuote(qid,key){
+  const q=getQuote(qid); if(!q) return;
+  const t=SCOPE_TEMPLATES[key]; if(!t) return;
+  const lines=[...(q.lines||[])];
+  const stamp=Date.now();
+  lines.push({id:'ln-'+stamp+'-h',header:true,label:t.label});
+  (t.lines||[]).forEach((tl,k)=>{
+    const seed={id:'ln-'+stamp+'-'+k,desc:tl.desc||'',qty:(tl.qty!=null?tl.qty:1),unit:tl.unit||'each',unitCost:tl.unitCost||0,markup:(tl.markup!=null?tl.markup:30)};
+    // Prefer verified catalog cost when the seed description matches a material.
+    const mat=(typeof getMaterials==='function')?getMaterials().find(m=>(m.name||'').toLowerCase()===seed.desc.toLowerCase()):null;
+    if(mat){ seed.unitCost=mat.unitCost; seed.markup=mat.markup; seed.unit=mat.unit; }
+    lines.push(seed);
+  });
+  let scope=(q.scope||'').trim();
+  if(t.scope) scope = scope ? (scope+'\n\n'+t.scope) : t.scope;
+  upsertQuote({...q,lines,scope});
+  onDQChange(qid);
+  renderDetailedQuoteForm(getQuote(qid));
+}
+// Build the Materials tbody: header rows render as editable section titles,
+// each scope gets a subtotal row, plain lines render as normal editable rows.
+function _detailedLineRowsHTML(q){
+  const lines=q.lines||[]; let html=''; let hi=-1; let sum=0;
+  const subRow=(hidx,val)=>`<tr class="scope-sub-row"><td colspan="5" style="text-align:right;font-size:11.5px;color:var(--text-muted);padding:2px 6px">Scope subtotal</td><td id="scope-sub-${hidx}" style="font-family:var(--mono);text-align:right;font-size:12px;color:var(--text-muted)">${fmt$(val)}</td><td></td></tr>`;
+  lines.forEach((ln,i)=>{
+    if(ln.header){
+      if(hi>=0) html+=subRow(hi,sum);
+      hi=i; sum=0;
+      html+=`<tr class="scope-header-row" style="background:var(--green-dim)">
+        <td colspan="6" style="padding:5px 8px"><input class="li-inp" value="${(ln.label||'').replace(/"/g,'&quot;')}" placeholder="Scope name" style="font-weight:600;border:none;background:transparent;width:100%" onchange="updateLine('${q.id}',${i},'label',this.value)"></td>
+        <td><button class="li-del" onclick="removeLine('${q.id}',${i})" title="Remove this scope heading (its line items stay)">×</button></td>
+      </tr>`;
+    } else {
+      if(hi>=0) sum+=calcLine(ln);
+      html+=`<tr>
+        <td><input class="li-inp mat-ac-input" data-qid="${q.id}" data-idx="${i}" value="${(ln.desc||'').replace(/"/g,'&quot;')}" placeholder="Type to search materials..." style="min-width:140px" autocomplete="off" oninput="matAcOpen(this)" onfocus="matAcOpen(this)" onkeydown="matAcKey(event,this)" onblur="setTimeout(matAcClose,180)" onchange="updateLine('${q.id}',${i},'desc',this.value)"></td>
+        <td><input class="li-inp num" type="number" value="${ln.qty||1}" min="0" step="0.5" oninput="updateLine('${q.id}',${i},'qty',this.value)"></td>
+        <td><select class="li-inp" style="width:82px" onchange="updateLine('${q.id}',${i},'unit',this.value)">${['each','per foot','per box','per job'].map(u=>`<option${u===ln.unit?' selected':''}>${u}</option>`).join('')}</select></td>
+        <td><input class="li-inp num" type="number" value="${ln.unitCost||0}" min="0" step="0.01" oninput="updateLine('${q.id}',${i},'unitCost',this.value)"></td>
+        <td><input class="li-inp num" type="number" value="${ln.markup||30}" min="0" max="200" step="5" oninput="updateLine('${q.id}',${i},'markup',this.value)"></td>
+        <td style="font-family:var(--mono);text-align:right;font-size:12px;color:var(--green)" id="li-ext-${i}">${fmt$(calcLine(ln))}</td>
+        <td><button class="li-del" onclick="removeLine('${q.id}',${i})">×</button></td>
+      </tr>`;
+    }
+  });
+  if(hi>=0) html+=subRow(hi,sum);
+  return html;
+}
+// Inline-refresh the per-scope subtotal cells (called from updateLine on edits).
+function _refreshScopeSubtotals(lines){
+  lines=lines||[]; let hi=-1,sum=0;
+  for(let i=0;i<lines.length;i++){
+    if(lines[i].header){ if(hi>=0){const el=document.getElementById('scope-sub-'+hi); if(el)el.textContent=fmt$(sum);} hi=i; sum=0; }
+    else if(hi>=0){ sum+=calcLine(lines[i]); }
+  }
+  if(hi>=0){const el=document.getElementById('scope-sub-'+hi); if(el)el.textContent=fmt$(sum);}
+}
 function renderDetailedQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
   const isQmerit=q.source==='Qmerit';
@@ -6965,15 +7097,6 @@ function renderDetailedQuoteForm(q){
   const mats=getMaterials();
   const lines=q.lines||[];
   const rentals=q.rentals||[];
-  const matRows=lines.map((ln,i)=>`<tr>
-    <td><input class="li-inp mat-ac-input" data-qid="${q.id}" data-idx="${i}" value="${(ln.desc||'').replace(/"/g,'&quot;')}" placeholder="Type to search materials..." style="min-width:140px" autocomplete="off" oninput="matAcOpen(this)" onfocus="matAcOpen(this)" onkeydown="matAcKey(event,this)" onblur="setTimeout(matAcClose,180)" onchange="updateLine('${q.id}',${i},'desc',this.value)"></td>
-    <td><input class="li-inp num" type="number" value="${ln.qty||1}" min="0" step="0.5" oninput="updateLine('${q.id}',${i},'qty',this.value)"></td>
-    <td><select class="li-inp" style="width:82px" onchange="updateLine('${q.id}',${i},'unit',this.value)">${['each','per foot','per box','per job'].map(u=>`<option${u===ln.unit?' selected':''}>${u}</option>`).join('')}</select></td>
-    <td><input class="li-inp num" type="number" value="${ln.unitCost||0}" min="0" step="0.01" oninput="updateLine('${q.id}',${i},'unitCost',this.value)"></td>
-    <td><input class="li-inp num" type="number" value="${ln.markup||30}" min="0" max="200" step="5" oninput="updateLine('${q.id}',${i},'markup',this.value)"></td>
-    <td style="font-family:var(--mono);text-align:right;font-size:12px;color:var(--green)" id="li-ext-${i}">${fmt$(calcLine(ln))}</td>
-    <td><button class="li-del" onclick="removeLine('${q.id}',${i})">×</button></td>
-  </tr>`).join('');
   const rentalRows=rentals.map((r,i)=>`<div class="qq-row" style="gap:10px">
     <input class="li-inp" style="flex:1" value="${(r.desc||'').replace(/"/g,'&quot;')}" placeholder="Rental item description" onchange="updateRental('${q.id}',${i},'desc',this.value)">
     <input class="li-inp num" type="number" value="${r.cost||0}" min="0" step="25" oninput="updateRental('${q.id}',${i},'cost',this.value)" style="width:90px">
@@ -7000,10 +7123,20 @@ function renderDetailedQuoteForm(q){
     </div>
     <div class="qq-section">
       <div class="qq-title">Materials</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600">Stack a scope:</span>
+        <select class="fsel" id="dq-scope-pick" style="max-width:220px;flex:0 1 auto">
+          ${Object.keys(SCOPE_TEMPLATES).map(k=>`<option value="${k}">${SCOPE_TEMPLATES[k].label}</option>`).join('')}
+        </select>
+        <button class="li-add" onclick="addScopeToQuote('${q.id}',document.getElementById('dq-scope-pick').value)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add scope
+        </button>
+        <span style="font-size:11px;color:var(--text-muted)">Drops a labeled section with starter line items + scope text — all editable.</span>
+      </div>
       <div style="overflow-x:auto">
         <table class="li-table" style="min-width:540px">
           <thead><tr><th style="min-width:140px">Description</th><th>Qty</th><th>Unit</th><th>Unit Cost</th><th>Markup%</th><th style="text-align:right">Extended</th><th></th></tr></thead>
-          <tbody id="lines-tbody">${matRows}</tbody>
+          <tbody id="lines-tbody">${_detailedLineRowsHTML(q)}</tbody>
         </table>
       </div>
       <button class="li-add" style="margin-top:10px" onclick="addLine('${q.id}')">
@@ -7067,7 +7200,6 @@ function renderDetailedQuoteForm(q){
         </div>
       </div>
     </div>`:''}
-    ${_renderAdditionalTasksSection(q)}
     <div class="qq-section">
       <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         Scope of Work
@@ -7132,16 +7264,17 @@ function _onDQSpecialMaterialsChange(qid, value) {
 }
 
 // ── LINE ITEM CRUD ──
-function calcLine(ln){return(parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0)*(1+(parseFloat(ln.markup)||0)/100);}
+function calcLine(ln){if(ln&&ln.header)return 0;return(parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0)*(1+(parseFloat(ln.markup)||0)/100);}
 function addLine(qid){const q=getQuote(qid);if(!q)return;const lines=[...(q.lines||[]),{id:'ln-'+Date.now(),desc:'',qty:1,unit:'each',unitCost:0,markup:30}];upsertQuote({...q,lines});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function removeLine(qid,idx){const q=getQuote(qid);if(!q)return;const lines=[...(q.lines||[])];lines.splice(idx,1);upsertQuote({...q,lines});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function updateLine(qid,idx,field,val){
   const q=getQuote(qid);if(!q)return;
   const lines=[...(q.lines||[])];
-  lines[idx]={...lines[idx],[field]:(field==='desc'||field==='unit')?val:(parseFloat(val)||0)};
+  lines[idx]={...lines[idx],[field]:(field==='desc'||field==='unit'||field==='label')?val:(parseFloat(val)||0)};
   if(field==='desc'){const mat=getMaterials().find(m=>m.name.toLowerCase()===val.toLowerCase());if(mat){lines[idx].unitCost=mat.unitCost;lines[idx].markup=mat.markup;lines[idx].unit=mat.unit;}}
   upsertQuote({...q,lines});
   const ext=document.getElementById('li-ext-'+idx);if(ext)ext.textContent=fmt$(calcLine(lines[idx]));
+  _refreshScopeSubtotals(lines);
   onDQChange(qid);
 }
 
