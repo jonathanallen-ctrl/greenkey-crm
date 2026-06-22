@@ -10106,9 +10106,10 @@ function _renderPreInstallStrip(lead) {
   const states = [];
 
   // Quote Approved (read-only, derived).
-  states.push(latestApproved
-    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: (latestApproved.customerActionAt||latestApproved.updatedAt||'').slice(0,10), tip: 'Auto-set when customer clicks Accept on the email or status is set to Approved.' }
-    : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', tip: 'Customer hasn\'t accepted yet. Auto-flips when they click Accept.' });
+  const _quoteApproved = latestApproved || ms.quoteApproved?.done;
+  states.push(_quoteApproved
+    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: (latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||'')).slice(0,10), click: `clickQuoteChip('${lead.id}')`, tip: 'Approved — from a CRM quote, or marked manually. Click to change.' }
+    : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', click: `clickQuoteChip('${lead.id}')`, tip: 'No approved CRM quote. Click to mark approved manually — for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).' });
 
   // Charger Confirmed (EV-only, derived from chargerInfo).
   if (!isEV) {
@@ -10145,6 +10146,17 @@ function _renderPreInstallStrip(lead) {
       : { state: 'pending', icon: '·', label: 'Order Materials',   meta: '', click: `clickMaterialsChip('${lead.id}')`, tip: 'Click to open the Materials task. Created automatically on quote approval.' });
   }
 
+  // Install Scheduled — install date + time. Visible here; settable here (click)
+  // or directly on the "Install scheduled" milestone in the Advanced checklist.
+  const _schedDate = ms.installScheduled?.date;
+  if (_schedDate) {
+    const _t = ms.installScheduled.time;
+    const _tt = _t ? (()=>{const p=_t.split(':');let h=parseInt(p[0]);const ap=h>=12?'PM':'AM';h=h%12||12;return ' '+h+':'+p[1]+' '+ap;})() : '';
+    states.push({ state:'done', icon:'📅', label:'Scheduled', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
+  } else {
+    states.push({ state:'pending', icon:'📅', label:'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip:'No install date set. Click to set the day & time.' });
+  }
+
   // Final Inspection — manual upload-or-toggle.
   states.push(ms.finalInspPassed?.done
     ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: (ms.finalInspPassed.date||'').slice(0,10), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
@@ -10170,6 +10182,33 @@ function _renderPreInstallStrip(lead) {
 // upload the supporting document (preferred) or mark the item as done with a
 // follow-up task to upload it later. Done chips offer to undo.
 
+// Schedule chip → open the Advanced checklist and jump to the install date/time row.
+function clickScheduleChip(leadId){
+  const det=document.getElementById('jd-advanced-ms'); if(det) det.open=true;
+  const row=document.getElementById('ms-item-installScheduled');
+  if(row){
+    setTimeout(()=>{ row.scrollIntoView({behavior:'smooth',block:'center'}); },30);
+    const d=row.querySelector('input[type="date"]');
+    const orig=row.style.background; row.style.transition='background .4s'; row.style.background='rgba(243,156,18,0.18)';
+    setTimeout(()=>{ if(d) d.focus(); },380);
+    setTimeout(()=>{ row.style.background=orig||''; },1900);
+  }
+}
+// Quote chip → auto from an approved CRM quote; otherwise lets the user mark it
+// approved manually (jobs quoted outside the CRM: Treehouse, Qmerit, Excel).
+function clickQuoteChip(leadId){
+  const lead=getLead(leadId); if(!lead) return;
+  const quotes=(typeof getQuotes==='function'?getQuotes():[]).filter(q=>q.leadId===leadId);
+  if(quotes.some(q=>q.status==='approved'||q.status==='contingent-approved')){ toast('This is auto-set from the approved quote in the CRM — no manual change needed.','info'); return; }
+  const done=!!lead.milestones?.quoteApproved?.done;
+  if(done){
+    if(confirm('Quote is marked approved (manually). Undo and set back to pending?')){ _setMilestone(leadId,'quoteApproved',false); renderJobDetail(leadId); }
+    return;
+  }
+  if(confirm('Mark the quote approved for this job?\n\nUse this for jobs quoted outside the CRM (Treehouse, Qmerit, or an Excel quote) where there is no CRM quote to auto-detect.')){
+    _setMilestone(leadId,'quoteApproved',true); renderJobDetail(leadId);
+  }
+}
 function clickPermitChip(leadId) {
   const lead = getLead(leadId);
   if (!lead) return;
@@ -11631,6 +11670,7 @@ function renderJobDetail(id) {
     const done = !!m.done;
     let metaHtml = '';
     if (opts.date) metaHtml += `<span class="ms-ml">Date:</span><input type="date" class="ms-di d" value="${m.date||''}" onchange="saveMsField('${id}','${key}','date',this.value)">`;
+    if (opts.time) metaHtml += `<span class="ms-ml">Time:</span><input type="time" class="ms-di d" value="${m.time||''}" onchange="saveMsField('${id}','${key}','time',this.value)">`;
     if (opts.date2) metaHtml += `<span class="ms-ml">${opts.date2Label||'End'}:</span><input type="date" class="ms-di d" value="${m[opts.date2Key]||''}" onchange="saveMsField('${id}','${key}','${opts.date2Key}',this.value)">`;
     if (opts.text) metaHtml += `<input type="text" class="ms-di t" placeholder="${opts.textPlaceholder||'Note'}" value="${m[opts.textKey||'text']||''}" onchange="saveMsField('${id}','${key}','${opts.textKey||'text'}',this.value)">`;
     if (opts.num)  metaHtml += `<span class="ms-ml">${opts.numLabel||''}</span><input type="number" class="ms-di n" placeholder="0" value="${m[opts.numKey||'num']||''}" onchange="saveMsField('${id}','${key}','${opts.numKey||'num'}',this.value)">`;
@@ -11693,7 +11733,7 @@ function renderJobDetail(id) {
       </div>`;
     }
   }
-  msHtml += msRow('installScheduled','Install scheduled',{date:true});
+  msHtml += msRow('installScheduled','Install scheduled',{date:true,time:true});
 
   msHtml += msGrp('Installation');
   msHtml += msRow('intInspScheduled','Intermediate inspection scheduled (if needed)',{date:true,text:true,textKey:'type',textPlaceholder:'Type e.g. Trench'});
@@ -11738,7 +11778,7 @@ function renderJobDetail(id) {
     </div>
     <div style="padding:10px 12px">
       ${preInstallStripHtml}
-      <details style="margin-top:14px">
+      <details id="jd-advanced-ms" style="margin-top:14px">
         <summary style="cursor:pointer;font-size:11.5px;color:var(--text-muted);user-select:none;padding:4px 0">Advanced — full milestone checklist</summary>
         <div style="max-height:calc(100vh - 320px);overflow-y:auto;padding:8px 0;margin-top:6px;border-top:1px solid var(--border)">
           ${msHtml}
@@ -15258,7 +15298,7 @@ function renderTechPage(leadId) {
   const hdrBlock = `<div style="margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${typeChip(lead.jobType)}${sourceChip(lead.source)}
-      ${installDate?`<span class="chip" style="background:var(--blue-dim);color:var(--blue);font-size:11px">Install ${escHtml(installDate)}</span>`:''}
+      ${installDate?`<span class="chip" style="background:var(--blue-dim);color:var(--blue);font-size:11px">Install ${escHtml(installDate)}${(()=>{const t=lead.milestones?.installScheduled?.time; if(!t)return''; let [h,m]=t.split(':'); h=parseInt(h); const ap=h>=12?'PM':'AM'; h=h%12||12; return ' · '+h+':'+m+' '+ap;})()}</span>`:''}
     </div>
     <div style="font-size:22px;font-weight:600;color:var(--text-primary);margin-top:8px;line-height:1.2">${escHtml(custName)}</div>
     ${addrLine?`<div style="font-size:13px;color:var(--text-secondary);margin-top:4px;line-height:1.4">${escHtml(addrLine)}</div>`:''}
