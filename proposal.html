@@ -382,6 +382,9 @@ function drawPin(t,label){ const p=project(t), r=11, hy=p.y-30; ctx.save();
   if(label){ ctx.font='600 12px system-ui,sans-serif'; const w=ctx.measureText(label).width+14, bx=p.x-w/2, by=hy-r-26; ctx.fillStyle='rgba(178,59,28,.95)'; ctx.fillRect(bx,by,w,18); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(label,p.x,by+9); ctx.textAlign='left'; ctx.textBaseline='alphabetic'; }
   ctx.restore();
 }
+// Recenter on the property pin at default zoom — escape hatch for when you
+// zoom/pan off into nowhere and lose the site.
+function resetView(){ if(propertyPin){ center={lon:propertyPin.lon,lat:propertyPin.lat}; } zoom=18; if(center) loadBase(); }
 function redraw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!center) return;

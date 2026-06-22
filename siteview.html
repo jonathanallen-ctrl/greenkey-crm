@@ -41,6 +41,7 @@
   <button class="btn" data-tool="area" id="t-area">⬛ Area</button>
   <button class="btn" id="btn-undo">↶ Undo</button>
   <button class="btn" id="btn-clear">Clear</button>
+  <button class="btn" id="btn-reset" title="Lost the property? Recenter on it at default zoom">⟲ Reset view</button>
   <button class="btn" id="btn-base" title="Switch imagery: Mapbox (global) vs Virginia hi-res (VBMP, 1ft / 6–3in in towns)">🛰 VA Hi-Res</button>
   <button class="btn primary" id="btn-shot">⤓ Screenshot</button>
 </header>
@@ -136,6 +137,7 @@ function finish(){ if(draft && draft.pts.length>=2){ measures.push(draft); } dra
 document.addEventListener('keydown',e=>{ if(e.key==='Enter'&&draft)finish(); if(e.key==='Escape'){draft=null;redraw();} });
 document.getElementById('btn-undo').onclick=()=>{ if(draft){draft=null;} else measures.pop(); redraw(); };
 document.getElementById('btn-clear').onclick=()=>{ if(measures.length||draft){ measures=[];draft=null;redraw(); } };
+document.getElementById('btn-reset').onclick=()=>{ if(target){ center={lon:target.lon,lat:target.lat}; zoom=18; loadBase(); } else if(addr.value){ geocode(addr.value,true); } };
 function setTool(t){ finish(); tool=t; ['pan','dist','area'].forEach(x=>document.getElementById('t-'+x).classList.toggle('on',x===t)); canvas.style.cursor=t==='pan'?'grab':'crosshair'; }
 document.getElementById('t-pan').onclick=()=>setTool('pan'); document.getElementById('t-dist').onclick=()=>setTool('dist'); document.getElementById('t-area').onclick=()=>setTool('area'); setTool('pan');
 document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} }; document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
