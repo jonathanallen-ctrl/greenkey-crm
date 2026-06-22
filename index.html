@@ -1087,7 +1087,7 @@
       </div>
       <div class="frow2" style="margin-bottom:14px">
         <div class="fg"><div class="fl">Round-trip drive time (min, optional)</div>
-          <div style="display:flex;align-items:center;gap:6px"><input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 90 — first 60 min is free" min="0" step="5" style="flex:1"><button class="btn btn-g" style="padding:5px 10px;font-size:11px;white-space:nowrap" id="ai-drive-auto" onclick="autoCalcTravelAI()" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button></div>
+          <div style="display:flex;align-items:center;gap:6px"><input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 90 — first 60 min is free" min="0" step="5" style="flex:1"><button class="btn btn-g" style="padding:5px 10px;font-size:11px;white-space:nowrap" id="ai-drive-auto" onclick="autoCalcTravelAI()" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button></div>
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4">Adds travel labor at $160/hr beyond the first 60 min. Leave blank for local jobs (under 1 hr round trip).</div>
         </div>
         <div class="fg"><div class="fl">Routing difficulty (optional)</div>
@@ -1684,6 +1684,34 @@ function setupAddrAutocomplete(streetId, cityId, stateId, zipId) {
   }, true);
 }
 
+// Single-field Mapbox address autocomplete for the Settings → Home Base field,
+// so the saved address is a real, geocodable place (accurate drive-time origin).
+let _hbAcTimer=null;
+function homeBaseAcInput(inp){
+  const drop=document.getElementById('set-homebase-drop'); if(!drop) return;
+  clearTimeout(_hbAcTimer);
+  const q=inp.value.trim();
+  if(q.length<4){ drop.style.display='none'; drop.innerHTML=''; return; }
+  _hbAcTimer=setTimeout(()=>_hbAcFetch(q,drop,inp),420);
+}
+async function _hbAcFetch(q,drop,inp){
+  try{
+    const url=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=6&autocomplete=true&types=address&proximity=${MAPBOX_PROXIMITY}`;
+    const res=await fetch(url); const json=await res.json(); const data=(json&&json.features)||[];
+    drop.innerHTML='';
+    if(!data.length){ drop.style.display='none'; return; }
+    data.forEach(f=>{
+      const item=document.createElement('div');
+      item.style.cssText='padding:7px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border)';
+      item.textContent=f.place_name||'';
+      item.addEventListener('mousedown',e=>{ e.preventDefault(); inp.value=f.place_name||''; drop.style.display='none'; });
+      item.addEventListener('mouseenter',()=>{ item.style.background='var(--green-dim,#e8f5e9)'; });
+      item.addEventListener('mouseleave',()=>{ item.style.background=''; });
+      drop.appendChild(item);
+    });
+    drop.style.display='block';
+  }catch(e){ drop.style.display='none'; }
+}
 async function _fetchAddrSuggestions(q, drop, streetId, cityId, stateId, zipId) {
   try {
     // Mapbox Geocoding (2026-06-12, was Nominatim): real autocomplete, far
@@ -2601,8 +2629,11 @@ function renderSchedulingSettings() {
 
   return `<div class="stitle">Scheduling</div>
     <div class="sdesc">Settings used by the Scheduler to calculate drive times, build optimal day routes, and place calendar events on the right calendar.</div>
-    <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Starting and ending location for each work day. Used to calculate drive times.</div></div>
-      <input class="sinput" id="set-homebase" style="width:260px" placeholder="123 Main St, City, VA 00000" value="${escHtml(getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139')}">
+    <div class="srow"><div><div class="srl">Home Base Address</div><div class="srd">Start typing and pick from the suggestions so it geocodes accurately. Starting/ending point for drive-time calculations.</div></div>
+      <div style="position:relative;width:280px">
+        <input class="sinput" id="set-homebase" style="width:280px" placeholder="Start typing an address…" autocomplete="off" oninput="homeBaseAcInput(this)" onblur="setTimeout(()=>{const d=document.getElementById('set-homebase-drop');if(d)d.style.display='none';},200)" value="${escHtml(getPrefs().homeBase||'3299 Colston Court, Powhatan, VA 23139')}">
+        <div id="set-homebase-drop" style="display:none;position:absolute;z-index:60;left:0;right:0;top:100%;background:#fff;border:1px solid var(--border);border-radius:6px;max-height:220px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.12)"></div>
+      </div>
     </div>
     <div class="srow"><div><div class="srl">Average Road Speed (mph)</div><div class="srd">Used to estimate drive time from distances. Default 45 mph works well for central VA.</div></div>
       <input class="sinput" id="set-roadspeed" style="width:80px" type="number" value="${getPrefs().roadSpeedMph||45}">
@@ -5212,6 +5243,8 @@ function openQuoteBuilder(qid){
   document.getElementById('quotes-builder-view').style.display='block';
   S.quoteId=qid;
   renderQuoteBuilder(qid);
+  // Auto-fill round-trip travel once, in the background, if it's empty + we have an address.
+  setTimeout(()=>{ try{ autoCalcTravelIfNeeded(qid); }catch(e){} }, 120);
 }
 function closeQuoteBuilder(){
   document.getElementById('quotes-list-view').style.display='';
@@ -5512,7 +5545,7 @@ function renderQuickQuoteForm(q){
           <div class="qq-lbl">Round-trip drive time (min)</div>
           <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
       ${isQmerit?`<div class="qq-row">
         <div><div class="qq-lbl">Travel Fee</div><div class="qq-sub">Optional — Qmerit jobs only</div></div>
@@ -5679,7 +5712,7 @@ function _renderQQ_HVAC(q) {
           <div class="qq-lbl">Round-trip drive time (min)</div>
           <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section">
@@ -5790,7 +5823,7 @@ function _renderQQ_CircuitReplacement(q) {
       </div>
       <div class="qq-row">
         <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
-        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section" style="background:var(--bg-elevated);border-left:3px solid var(--green);padding-left:14px">
@@ -5932,7 +5965,7 @@ function _renderQQ_PanelReplacement(q) {
       </div>
       <div class="qq-row">
         <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
-        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section">
@@ -14367,12 +14400,14 @@ function driveTimeHrs(lat1, lon1, lat2, lon2) {
 
 // ── TRAVEL DRIVE-TIME AUTO-CALC ──
 // GreenKey home base — origin for quote travel-time auto-calc.
-const GK_HOME_BASE_ADDR = '3299 Colston Court, Powhatan, VA 23139';
+const GK_HOME_BASE_ADDR = '3299 Colston Court, Powhatan, VA 23139';   // fallback default only — the editable source is Settings → Scheduling → Home Base Address (getPrefs().homeBase)
 // One-way road drive time (minutes) from the home base to a job address, via
-// Mapbox Directions (real roads). Falls back to the straight-line estimate
-// (driveTimeHrs) if Directions is unavailable. Endpoints geocoded + cached.
+// Mapbox Directions (real roads). Origin = the configured Home Base Address
+// (Settings → Scheduling), so it updates automatically if GreenKey moves.
+// Falls back to the straight-line estimate (driveTimeHrs) if Directions fails.
 async function homeToJobDriveMinOneWay(jobAddress){
-  const home = await geocodeOne(GK_HOME_BASE_ADDR, 'gk-home-base');
+  const homeAddr = ((typeof getPrefs==='function' && getPrefs().homeBase) || GK_HOME_BASE_ADDR);
+  const home = await geocodeOne(homeAddr, '__home__');   // shared geocode-cache key with the scheduler (cleared when the home base changes)
   const to   = jobAddress ? await geocodeOne(jobAddress, 'job:'+jobAddress) : null;
   if(!home || !to) return null;
   try{
@@ -14397,7 +14432,7 @@ async function autoCalcTravel(qid){
     const roundTrip=Math.round(oneWay*2/5)*5;
     const inp=document.getElementById('qq-travel-min'); if(inp) inp.value=roundTrip;
     onQQChange(qid);
-    toast('Round trip from Powhatan ≈ '+roundTrip+' min ('+Math.round(oneWay)+' each way)','success');
+    toast('Round trip ≈ '+roundTrip+' min ('+Math.round(oneWay)+' each way)','success');
   } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
 }
 // AI estimator: fill its round-trip drive-time field the same way.
@@ -14414,6 +14449,27 @@ async function autoCalcTravelAI(){
     const inp=document.getElementById('ai-drive-time'); if(inp) inp.value=roundTrip;
     toast('Round trip ≈ '+roundTrip+' min','success');
   } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
+}
+// Auto-fill travel once per quote when the Quick Quote opens — only if the field
+// is empty and we have a job address. Never overwrites a value you've set, and
+// the 📍 Auto button stays for manual re-calc. Stamps _travelAutoTried so it
+// won't re-fire on every re-render or reopen.
+async function autoCalcTravelIfNeeded(qid){
+  if(!document.getElementById('qq-travel-min')) return;   // QQ travel field not on screen (e.g. detailed quote)
+  const q=getQuote(qid); if(!q) return;
+  const qq=q.qq||{};
+  if(qq._travelAutoTried) return;                          // already auto-tried for this quote
+  if(parseInt(qq.travelMinutes)>0) return;                 // a value already exists — leave it
+  const jobAddr=_jobAddrForQuote(q);
+  if(!jobAddr) return;                                     // no address yet — manual 📍 Auto still available
+  upsertQuote({...q, qq:{...qq, _travelAutoTried:true}});  // stamp first so re-renders don't re-fire
+  const oneWay=await homeToJobDriveMinOneWay(jobAddr);
+  if(oneWay==null) return;
+  const roundTrip=Math.round(oneWay*2/5)*5;
+  const cur=getQuote(qid); if(!cur || parseInt(cur.qq?.travelMinutes)>0) return;   // user typed something meanwhile
+  const inp=document.getElementById('qq-travel-min'); if(inp) inp.value=roundTrip;
+  onQQChange(qid);
+  toast('Travel auto-set: round trip ≈ '+roundTrip+' min (edit if needed)','success');
 }
 
 async function geocodeOne(address, cacheKey) {
