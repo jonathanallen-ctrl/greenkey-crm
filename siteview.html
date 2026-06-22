@@ -173,9 +173,18 @@ document.getElementById('btn-shot').onclick=()=>{ if(!center){alert('Load a prop
 };
 
 // persistence (localStorage keyed by job; also postMessage to parent CRM)
+// Resolve the address pin without moving the user's saved view. Used when an
+// older saved state restored with no `target` (the pin was added later) — so
+// the pin still appears for jobs that were measured before this feature.
+async function geocodeTargetOnly(q){
+  try{ const u=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us&limit=1&proximity=${MAPBOX_PROXIMITY}`;
+    const r=await fetch(u); const j=await r.json(); const f=(j.features||[])[0]; if(!f)return;
+    target={lon:f.center[0],lat:f.center[1]}; targetLabel=(f.place_name||'').split(',')[0]; redraw(); persist();
+  }catch(e){}
+}
 function persist(){ if(!center)return; const data={center,zoom,measures,addr:addr.value,target,targetLabel}; try{ if(JOB) localStorage.setItem('gk_siteview_'+JOB, JSON.stringify(data)); }catch(e){}
   try{ if(window.parent!==window) window.parent.postMessage({type:'gk-siteview-data', job:JOB, data}, '*'); }catch(e){} }
-function restore(){ if(!JOB)return false; try{ const s=localStorage.getItem('gk_siteview_'+JOB); if(s){ const d=JSON.parse(s); center=d.center; zoom=d.zoom||18; measures=d.measures||[]; target=d.target||null; targetLabel=d.targetLabel||''; if(d.addr)addr.value=d.addr; loadBase(); return true; } }catch(e){} return false; }
+function restore(){ if(!JOB)return false; try{ const s=localStorage.getItem('gk_siteview_'+JOB); if(s){ const d=JSON.parse(s); center=d.center; zoom=d.zoom||18; measures=d.measures||[]; target=d.target||null; targetLabel=d.targetLabel||''; if(d.addr)addr.value=d.addr; loadBase(); if(!target && addr.value){ geocodeTargetOnly(addr.value); } return true; } }catch(e){} return false; }
 
 // init: restore saved measurement, else geocode the address passed in
 (function(){ if(restore())return; const a=params.get('addr'); if(a){ addr.value=a; geocode(a,true); } })();
