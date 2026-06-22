@@ -67,6 +67,23 @@
   .meas-tot-row{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;padding:3px 0}
   #sel-props{border:1px solid var(--ada);border-radius:8px;padding:10px;margin-top:10px;display:none;background:#f7faff}
   #sel-props .sp-title{font-size:12px;font-weight:700;color:var(--ada);margin-bottom:6px}
+  #pricing-modal{position:fixed;inset:0;background:rgba(20,25,35,.5);z-index:50;display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:24px}
+  #pricing-modal.open{display:flex}
+  .pm-card{background:var(--surface);border-radius:12px;width:min(980px,96vw);box-shadow:0 10px 40px rgba(0,0,0,.3);margin:auto}
+  .pm-head{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);border-radius:12px 12px 0 0;z-index:2}
+  .pm-head h2{font-size:16px;color:var(--green)}
+  .pm-body{padding:16px 20px}
+  .pm-sec{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:18px 0 9px}
+  .pm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:10px}
+  .pm-fld label{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;font-weight:600}
+  .pm-fld input{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none}
+  table.pm-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.pm-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding:6px;border-bottom:1px solid var(--border)}
+  table.pm-tbl td{padding:4px 6px;border-bottom:1px solid #eef1f4}
+  table.pm-tbl input,table.pm-tbl select{width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px;outline:none;background:var(--surface)}
+  .pm-x{cursor:pointer;color:var(--muted);font-weight:700}
+  .pm-x:hover{color:var(--sel)}
+  .pm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 20px;border-top:1px solid var(--border);position:sticky;bottom:0;background:var(--surface);border-radius:0 0 12px 12px}
 </style>
 </head>
 <body>
@@ -85,6 +102,9 @@
     <option value="5">5 · Service upgrade</option>
     <option value="6">6 · New service</option>
   </select>
+  <button class="btn" id="btn-scope" title="Project info, charger count, and the scope the AI estimator reads">📋 Scope</button>
+  <button class="btn" id="btn-estimate" title="Design &amp; price this job from the drawing, scenario and catalog">$ Estimate</button>
+  <button class="btn" id="btn-pricing" title="Edit the commercial price catalog (rates, markups, materials)">⚙ Pricing</button>
   <select id="view-sel" class="txt" style="max-width:210px" title="Which exhibit you're working on / exporting">
     <option value="detail">Detailed Site Plan</option>
     <option value="overall">Overall Site Plan (locator)</option>
@@ -94,9 +114,15 @@
 </header>
 <main>
   <div id="toolbar">
+    <div class="tb-sec">Proposal</div>
+    <button class="btn" style="width:100%;margin-bottom:6px;text-align:left" onclick="saveProposal()">💾 Save proposal</button>
+    <button class="btn" style="width:100%;margin-bottom:6px;text-align:left" onclick="openProposal()">📂 Open proposal</button>
+    <button class="btn" style="width:100%;text-align:left" onclick="newProposal()">🗋 New proposal</button>
+    <input type="file" id="open-file" accept=".json,application/json" style="display:none">
     <div class="tb-sec">Navigate</div>
     <button class="tool" data-tool="pan"><span style="font-size:15px">✋</span> Pan / move view</button>
     <button class="tool" data-tool="select"><span style="font-size:15px">⤭</span> Select / move item</button>
+    <button class="btn" style="width:100%;margin-top:6px;text-align:left" onclick="resetView()" title="Lost the property? Recenter on the address pin at default zoom">⟲ Reset view to property</button>
     <div class="tb-sec">Draw runs</div>
     <button class="tool" data-tool="lateral"><span class="swatch line" style="background:var(--lateral)"></span> Service lateral</button>
     <button class="tool" data-tool="branch"><span class="swatch line" style="background:var(--branch)"></span> Branch circuit</button>
@@ -127,6 +153,11 @@
       <div class="empty-hint" id="empty-hint">Search a property address above to load satellite imagery,<br>then pan/zoom to frame the site and draw the install on top.</div>
       <div class="scale-badge" id="scale-badge" style="display:none"></div>
     </div>
+    <div id="restore-banner" style="display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;background:var(--surface);border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.18);border-radius:8px;padding:8px 12px;align-items:center;gap:10px;font-size:13px">
+      <span></span>
+      <button class="btn primary rb-yes" style="padding:5px 11px">Restore</button>
+      <button class="btn rb-no" style="padding:5px 11px">Dismiss</button>
+    </div>
     <div id="zoomctl">
       <button id="zin" title="Zoom in (closer)">+</button>
       <button id="zout" title="Zoom out (wider)">−</button>
@@ -141,6 +172,7 @@
     <label class="fld">Prepared by</label>
     <input id="prepared-by" class="txt" value="Jonathan Allen, GreenKey">
     <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-top:10px;cursor:pointer"><input type="checkbox" id="dim-img"> Dim satellite (make linework pop)</label>
+    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-top:8px;cursor:pointer"><input type="checkbox" id="show-pin" checked> 📍 Show property pin</label>
     <div id="sel-props"></div>
     <div class="tb-sec" style="margin-top:18px">Measured runs</div>
     <div id="meas-list"><div class="hint">No runs drawn yet.</div></div>
@@ -151,6 +183,40 @@
     </div>
   </div>
 </main>
+
+<div id="pricing-modal"><div class="pm-card">
+  <div class="pm-head"><h2>⚙ Pricing Settings — Commercial Catalog</h2>
+    <div style="display:flex;gap:12px;align-items:center"><span id="pm-stamp" style="font-size:11.5px;color:var(--muted)"></span><span class="pm-x" style="font-size:22px" onclick="closePricing(true)">×</span></div></div>
+  <div class="pm-body" id="pm-body"></div>
+  <div class="pm-foot"><button class="btn" onclick="resetPricing()">Reset to GreenKey defaults</button>
+    <div style="display:flex;gap:8px"><button class="btn" onclick="closePricing(true)">Cancel</button><button class="btn primary" onclick="savePricing(true)">Save catalog</button></div></div>
+</div></div>
+
+<div id="scope-modal"><div class="pm-card" style="width:min(720px,96vw)">
+  <div class="pm-head"><h2>📋 Project Scope &amp; Details</h2><span class="pm-x" style="font-size:22px" onclick="closeScope(true)">×</span></div>
+  <div class="pm-body">
+    <div class="pm-grid">
+      <div class="pm-fld"><label># EV chargers (UWCs)</label><input id="charger-count" type="number" min="1" value="2"></div>
+      <div class="pm-fld"><label>Power scenario (header dropdown)</label><input id="scenario-mirror" readonly style="background:#f4f6f8"></div>
+    </div>
+    <label class="pm-fld" style="display:block;margin-top:12px"><span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-weight:600">Scope description — the AI designer/estimator reads this</span>
+      <textarea id="scope-text" style="width:100%;min-height:120px;margin-top:4px;padding:9px;border:1px solid var(--border);border-radius:7px;font-size:13px;resize:vertical" placeholder="e.g. New 200A 240V service from the pole, ~80 ft directional bore to a freestanding 2-post RMC stand with meter + 200A panel. Two Tesla UWCs on one pedestal. 277/480 not available. Hanover County AHJ, in-house drawings. One van-accessible ADA space off the SE corner."></textarea></label>
+    <label class="pm-fld" style="display:block;margin-top:12px"><span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-weight:600">Walkdown notes — existing power, utility/Dominion, AHJ, obstacles, meter/transformer location</span>
+      <textarea id="walkdown-notes" style="width:100%;min-height:90px;margin-top:4px;padding:9px;border:1px solid var(--border);border-radius:7px;font-size:13px;resize:vertical" placeholder="Existing service, panel make/space, transformer/meter location, soil/paving, obstacles, AHJ contacts…"></textarea></label>
+    <div class="hint" style="margin-top:10px">Photo attachments arrive with the Commercial-module integration (the walkdown repository). This scope + notes feed the design/estimate and the proposal narrative.</div>
+  </div>
+  <div class="pm-foot"><button class="btn" onclick="aiDesignFromScope()">✨ AI design from scope</button><div style="display:flex;gap:8px"><button class="btn" onclick="closeScope(true)">Cancel</button><button class="btn primary" onclick="closeScope(false)">Done</button></div></div>
+</div></div>
+
+<div id="estimate-modal"><div class="pm-card">
+  <div class="pm-head"><h2>$ Commercial Estimate</h2>
+    <div style="display:flex;gap:12px;align-items:center"><span id="est-mode" style="font-size:12px;color:var(--muted)"></span><span class="pm-x" style="font-size:22px" onclick="closeEstimate()">×</span></div></div>
+  <div class="pm-body" id="est-body"></div>
+  <div class="pm-foot">
+    <div style="display:flex;gap:8px"><button class="btn" onclick="rebuildEstimate()" title="Regenerate auto lines from the current drawing + scenario (keeps your manual lines)">↻ Rebuild from drawing</button><button class="btn" onclick="toggleEstMode()">Mode: Catalog / RFQ</button><button class="btn" onclick="addEstLine()">+ Add line</button></div>
+    <div style="display:flex;gap:8px"><button class="btn" onclick="exportRFQ()">⤓ RFQ list</button><button class="btn" onclick="exportEstimateCSV()">⤓ Estimate CSV</button><button class="btn primary" onclick="generateProposal()">📄 Generate proposal</button></div>
+  </div>
+</div></div>
 
 <script>
 const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9uYXRoYW4zMjk5IiwiYSI6ImNtcWJuNThtdzBnbmQycm9xM3RlNjUxODYifQ.ZCA5uC-Ws56-7vnmEMrjPA';
@@ -187,9 +253,9 @@ const RUN_DEFAULTS={
 // Trench / raceway method. PVC in an 18"+ trench is required under parking & roads;
 // IMC in a shallow 6" trench is allowed in some spots and can be cheaper when it benefits the job.
 const TRENCH={
-  pvc18:{label:'PVC · 18″ (under paving)', material:'PVC', depth:18},
-  imc6 :{label:'IMC · 6″ (shallow)',       material:'IMC', depth:6},
-  pvc24:{label:'PVC · 24″ (road/bore)',    material:'PVC', depth:24}
+  pvc18:{label:'PVC · 18″ trench', material:'PVC', depth:18},
+  imc6 :{label:'IMC · 6″ trench',  material:'IMC', depth:6},
+  pvc24:{label:'PVC · 24″ trench', material:'PVC', depth:24}
 };
 // ADA accessible space + access aisle (real-world feet). Van-accessible per ADA/IBC.
 // Van-accessible per ADA/IBC: 11' space + 5' aisle (the wide space is the tell).
@@ -219,6 +285,8 @@ let rotating=null;          // ADA item being rotated via its handle
 let resizing=null;          // ADA item being resized via its corner grip
 let selIdx=-1;              // index of the selected item (ADA shows a properties panel)
 let dimImg=false;          // dim the satellite so coloured linework pops
+let propertyPin=null;      // {lon,lat,label} — geocoded property address marker
+let showPin=true;          // toggle the property pin on/off
 let panning=false, panStart=null, panDelta={x:0,y:0};
 let history=[];
 let calloutRects=[];        // placed callout boxes this frame, for overlap avoidance
@@ -283,6 +351,7 @@ function loadBase(redrawAfter=true){
   const url=`https://api.mapbox.com/styles/v1/mapbox/${STYLE}/static/${center.lon},${center.lat},${zoom},0/${MAP_W}x${MAP_H}@2x?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
   baseImg.onload=()=>{ document.getElementById('empty-hint').style.display='none'; document.getElementById('scale-badge').style.display='block'; redraw(); };
   baseImg.onerror=()=>{ alert('Could not load satellite imagery — check the address or your connection.'); };
+  baseImg.crossOrigin='anonymous';   // request with CORS so the exported canvas isn't tainted (toDataURL works)
   baseImg.src=url;
   if(redrawAfter) redraw();
 }
@@ -302,12 +371,24 @@ function evtPt(e){
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 
 // ---- render ----
+// Property pin — a red address marker at the geocoded property so you always
+// know which site you're drawing on. Geo-anchored (stays on the address as you
+// pan/zoom). Toggle via the "Show property pin" checkbox.
+function drawPin(t,label){ const p=project(t), r=11, hy=p.y-30; ctx.save();
+  ctx.fillStyle='#e6552e'; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(p.x-r*0.8,hy+r*0.35); ctx.lineTo(p.x,p.y); ctx.lineTo(p.x+r*0.8,hy+r*0.35); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(p.x,hy,r,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(p.x,hy,r*0.42,0,7); ctx.fill();
+  if(label){ ctx.font='600 12px system-ui,sans-serif'; const w=ctx.measureText(label).width+14, bx=p.x-w/2, by=hy-r-26; ctx.fillStyle='rgba(178,59,28,.95)'; ctx.fillRect(bx,by,w,18); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(label,p.x,by+9); ctx.textAlign='left'; ctx.textBaseline='alphabetic'; }
+  ctx.restore();
+}
 function redraw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!center) return;
   if(view==='overall'){   // locator exhibit: show only the charging-area box(es), hide all detail
     for(let i=0;i<items.length;i++){ if(items[i].type==='area') drawArea(items[i], i===selIdx); }
     if(draftArea) drawArea(draftArea, false, true);
+    if(showPin && propertyPin) drawPin(propertyPin, propertyPin.label);
     updatePanels(); return;
   }
   if(dimImg){ ctx.save(); ctx.fillStyle='rgba(255,255,255,.22)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.restore(); }
@@ -321,6 +402,7 @@ function redraw(){
   // run callouts last so the labels sit on top of everything
   calloutRects=[];
   for(const it of items){ if(it.type==='line' && it.pts.length>=2) drawRunCallout(it); }
+  if(showPin && propertyPin) drawPin(propertyPin, propertyPin.label);
   updatePanels();
 }
 // px-per-foot for an ADA group — always true to real-world scale, so it renders correctly at any zoom
@@ -558,7 +640,7 @@ function deleteItem(i){ if(!items[i])return; pushHistory(); items.splice(i,1); i
 function updateAreaLabel(v){ const it=items[selIdx]; if(it&&it.type==='area'){ it.label=v; redraw(); } }
 window.updateRun=updateRun; window.updateAda=updateAda; window.deleteItem=deleteItem; window.updateAreaLabel=updateAreaLabel;
 
-function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>60)history.shift(); }
+function pushHistory(){ history.push(JSON.stringify(items)); if(history.length>60)history.shift(); scheduleAutosave(); }
 function symbolCount(kind){ return items.filter(i=>i.type==='symbol'&&i.kind===kind).length; }
 function hitTest(p){
   for(let i=items.length-1;i>=0;i--){ const it=items[i];
@@ -687,13 +769,14 @@ async function geocode(q){
     if(!fs.length){drop.style.display='none';return;}
     drop.innerHTML=''; fs.forEach(f=>{ const d=document.createElement('div'); d.className='addr-item';
       d.innerHTML=`<div>${f.text||''}</div><div class="sub">${f.place_name||''}</div>`;
-      d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; addr.value=f.place_name; drop.style.display='none'; zoom=18; loadBase(); };
+      d.onclick=()=>{ center={lon:f.center[0],lat:f.center[1]}; propertyPin={lon:f.center[0],lat:f.center[1],label:(f.text||'')}; addr.value=f.place_name; drop.style.display='none'; zoom=18; loadBase(); };
       drop.appendChild(d); });
     drop.style.display='block';
   }catch(e){ drop.style.display='none'; }
 }
 document.addEventListener('click',e=>{ if(!addr.parentNode.contains(e.target)) drop.style.display='none'; });
 document.getElementById('dim-img').onchange=function(){ dimImg=this.checked; redraw(); };
+document.getElementById('show-pin').onchange=function(){ showPin=this.checked; redraw(); };
 
 // ---- export ----
 document.getElementById('btn-export').onclick=()=>{
@@ -728,6 +811,93 @@ document.getElementById('btn-export').onclick=()=>{
   a.download=`GreenKey_${isOverall?'OverallPlan':'SitePlan'}_${fn}.png`; a.href=out.toDataURL('image/png'); a.click();
   selIdx=savedSel; redraw();
 };
+// ===== Pricing Settings — editable commercial catalog (COMMERCIAL_SPEC §2a/§3/§6) =====
+const PRICING_DEFAULTS={
+  labor:{crew:160, solo:100},
+  markup:{tesla:0, gear:10, panel:15, standard:30, subs:10, engineering:10},
+  rules:{materialsAllowancePct:5, vaTaxPct:6, tripOverhead:150, portfolioDiscountPct:6, drawingsInHouse:500, drawingsStamped:1650},
+  materials:[
+    {name:'Tesla Universal Wall Connector (UWC)',category:'EV Equipment',unit:'ea',cost:605,tier:'tesla'},
+    {name:'Charger pedestal (2-UWC)',category:'EV Equipment',unit:'ea',cost:425,tier:'tesla'},
+    {name:'4/0 Al XHHW-2',category:'Conductors',unit:'ft',cost:1.31,tier:'standard'},
+    {name:'#6 Cu THHN',category:'Conductors',unit:'ft',cost:0.95,tier:'standard'},
+    {name:'#8 Cu THHN',category:'Conductors',unit:'ft',cost:0.62,tier:'standard'},
+    {name:'#6 bare Cu (GEC)',category:'Conductors',unit:'ft',cost:0.76,tier:'standard'},
+    {name:'2" PVC Sch40',category:'Conduit',unit:'ft',cost:0.91,tier:'standard'},
+    {name:'2-1/2" PVC Sch40',category:'Conduit',unit:'ft',cost:1.45,tier:'standard'},
+    {name:'1" PVC Sch40',category:'Conduit',unit:'ft',cost:0.48,tier:'standard'},
+    {name:'1-1/2" PVC Sch40',category:'Conduit',unit:'ft',cost:0.73,tier:'standard'},
+    {name:'200A 240V MB panelboard NEMA 3R',category:'Service Equipment',unit:'ea',cost:450,tier:'panel'},
+    {name:'200A 3P 240V breaker (PowerPact)',category:'Service Equipment',unit:'ea',cost:1800,tier:'gear'},
+    {name:'Branch breaker (existing panel)',category:'Service Equipment',unit:'ea',cost:285,tier:'gear'},
+    {name:'75 kVA transformer 480→208 NEMA 3R',category:'Service Equipment',unit:'ea',cost:4500,tier:'gear'},
+    {name:'200A 480V service disconnect',category:'Service Equipment',unit:'ea',cost:1200,tier:'gear'},
+    {name:'200A 240V service disconnect',category:'Service Equipment',unit:'ea',cost:950,tier:'gear'},
+    {name:'2P 60A breaker (UWC circuit)',category:'Service Equipment',unit:'ea',cost:75,tier:'gear'},
+    {name:'5/8" x 8\' ground rod',category:'Grounding',unit:'ea',cost:22,tier:'standard'},
+    {name:'Acorn ground clamp',category:'Grounding',unit:'ea',cost:6,tier:'standard'},
+    {name:'Unistrut P1000T 10ft',category:'Stand Hardware',unit:'ea',cost:50,tier:'standard'},
+    {name:'Cellular router bundle (router+enclosure+SIM)',category:'Network',unit:'ea',cost:850,tier:'standard'},
+    {name:'Bollard (4" pipe, filled)',category:'Bollards & Concrete',unit:'ea',cost:100,tier:'standard'},
+    {name:'ADA van-accessible + penalty sign',category:'Signage',unit:'ea',cost:45,tier:'standard'},
+    {name:'EV / R7-12 sign',category:'Signage',unit:'ea',cost:30,tier:'standard'},
+    {name:'8ft perforated sign post',category:'Signage',unit:'ea',cost:28,tier:'standard'}
+  ]
+};
+const PRICING_KEY='gk_commercial_pricing';
+let pricing=loadPricing(), pricingBackup=null;
+function loadPricing(){ try{ const s=JSON.parse(localStorage.getItem(PRICING_KEY)); if(s&&s.materials&&s.markup&&s.rules&&s.labor) return s; }catch(e){} return JSON.parse(JSON.stringify(PRICING_DEFAULTS)); }
+function savePricing(close){ pricing.updated=new Date().toISOString(); try{ localStorage.setItem(PRICING_KEY, JSON.stringify(pricing)); }catch(e){ alert('Could not save catalog: '+e.message); return; } if(close){ document.getElementById('pricing-modal').classList.remove('open'); } else { renderPricing(); } }
+function resetPricing(){ if(confirm('Reset the whole catalog to GreenKey defaults? Your edits will be lost.')){ pricing=JSON.parse(JSON.stringify(PRICING_DEFAULTS)); savePricing(false); } }
+function openPricing(){ pricingBackup=JSON.stringify(pricing); renderPricing(); document.getElementById('pricing-modal').classList.add('open'); }
+function closePricing(discard){ if(discard&&pricingBackup){ pricing=JSON.parse(pricingBackup); } document.getElementById('pricing-modal').classList.remove('open'); }
+const TIER_NAMES={tesla:'Tesla / at cost',gear:'Transformer/disc/breaker',panel:'Panelboard',standard:'Standard'};
+function tierLabel(t){ return TIER_NAMES[t]+' ('+(pricing.markup[t]||0)+'%)'; }
+function renderPricing(){
+  document.getElementById('pm-stamp').textContent = pricing.updated? 'Last saved '+new Date(pricing.updated).toLocaleString() : 'Using defaults (unsaved)';
+  const r=pricing.rules, m=pricing.markup, l=pricing.labor;
+  const fld=(lab,val,on)=>`<div class="pm-fld"><label>${lab}</label><input type="number" step="any" value="${val}" onchange="${on}"></div>`;
+  let html=`<div class="pm-sec">Labor &amp; markup tiers</div><div class="pm-grid">
+    ${fld('2-tech crew $/hr',l.crew,"setP('labor','crew',this.value)")}
+    ${fld('Solo $/hr',l.solo,"setP('labor','solo',this.value)")}
+    ${fld('Tesla / at-cost %',m.tesla,"setP('markup','tesla',this.value)")}
+    ${fld('Transformer/disc/breaker %',m.gear,"setP('markup','gear',this.value)")}
+    ${fld('Panelboard %',m.panel,"setP('markup','panel',this.value)")}
+    ${fld('Standard materials %',m.standard,"setP('markup','standard',this.value)")}
+    ${fld('Subcontractors %',m.subs,"setP('markup','subs',this.value)")}
+    ${fld('Engineering %',m.engineering,"setP('markup','engineering',this.value)")}</div>
+  <div class="pm-sec">Rules</div><div class="pm-grid">
+    ${fld('Materials allowance %',r.materialsAllowancePct,"setP('rules','materialsAllowancePct',this.value)")}
+    ${fld('VA sales tax %',r.vaTaxPct,"setP('rules','vaTaxPct',this.value)")}
+    ${fld('Trip overhead $',r.tripOverhead,"setP('rules','tripOverhead',this.value)")}
+    ${fld('Portfolio discount %',r.portfolioDiscountPct,"setP('rules','portfolioDiscountPct',this.value)")}
+    ${fld('In-house drawings $',r.drawingsInHouse,"setP('rules','drawingsInHouse',this.value)")}
+    ${fld('Stamped drawings $',r.drawingsStamped,"setP('rules','drawingsStamped',this.value)")}</div>
+  <div class="pm-sec">Materials catalog <span class="pill" style="margin-left:6px">${pricing.materials.length} items</span></div>
+  <table class="pm-tbl"><thead><tr><th style="width:28%">Item</th><th>Category</th><th style="width:46px">Unit</th><th style="width:86px">Cost $</th><th style="width:210px">Markup tier</th><th style="width:78px">Sell $</th><th style="width:24px"></th></tr></thead><tbody>`;
+  pricing.materials.forEach((it,i)=>{
+    const sell=it.cost*(1+(pricing.markup[it.tier]||0)/100);
+    const topt=['tesla','gear','panel','standard'].map(t=>`<option value="${t}" ${t===it.tier?'selected':''}>${tierLabel(t)}</option>`).join('');
+    html+=`<tr>
+      <td><input value="${(it.name||'').replace(/"/g,'&quot;')}" onchange="setMat(${i},'name',this.value)"></td>
+      <td><input value="${(it.category||'').replace(/"/g,'&quot;')}" onchange="setMat(${i},'category',this.value)"></td>
+      <td><input value="${(it.unit||'').replace(/"/g,'&quot;')}" onchange="setMat(${i},'unit',this.value)"></td>
+      <td><input type="number" step="any" value="${it.cost}" onchange="setMat(${i},'cost',this.value)"></td>
+      <td><select onchange="setMat(${i},'tier',this.value)">${topt}</select></td>
+      <td style="font-variant-numeric:tabular-nums;color:var(--muted)">$${sell.toFixed(2)}</td>
+      <td><span class="pm-x" title="Remove" onclick="removeMat(${i})">✕</span></td></tr>`;
+  });
+  html+=`</tbody></table><button class="btn" style="margin-top:10px" onclick="addMat()">+ Add material</button>
+  <div class="hint" style="margin-top:14px;line-height:1.5">Saved to this browser; it will sync to SharePoint with the Commercial-module integration (so it follows devices and Sherri). <b>“Sell $”</b> = cost × (1 + tier markup) — the customer-facing figure; raw cost stays internal. Edits apply to new proposals; per-quote line overrides come with the pricing engine.</div>`;
+  document.getElementById('pm-body').innerHTML=html;
+}
+function setP(group,key,val){ pricing[group][key]=+val||0; if(group==='markup') renderPricing(); }
+function setMat(i,field,val){ if(!pricing.materials[i])return; pricing.materials[i][field]= field==='cost'?(+val||0):val; if(field==='tier'||field==='cost') renderPricing(); }
+function addMat(){ pricing.materials.push({name:'New item',category:'Misc',unit:'ea',cost:0,tier:'standard'}); renderPricing(); }
+function removeMat(i){ pricing.materials.splice(i,1); renderPricing(); }
+window.openPricing=openPricing; window.closePricing=closePricing; window.savePricing=savePricing; window.resetPricing=resetPricing; window.setP=setP; window.setMat=setMat; window.addMat=addMat; window.removeMat=removeMat;
+document.getElementById('btn-pricing').onclick=openPricing;
+
 function buildLegendForExport(){
   const arr=[];
   Object.keys(LINES).forEach(k=>{
@@ -795,6 +965,152 @@ function drawTitleBlockExport(o,x,y,w,h,sheetName){
     o.fillText(v, fx, yy+14*S);
   });
 }
+// ===== Scope modal =====
+function scenarioLabel(){ const s=document.getElementById('proj-scenario'); return s.options[s.selectedIndex]? s.options[s.selectedIndex].textContent : '—'; }
+function openScope(){ document.getElementById('scenario-mirror').value=scenarioLabel(); document.getElementById('scope-modal').classList.add('open'); }
+function closeScope(){ document.getElementById('scope-modal').classList.remove('open'); scheduleAutosave&&scheduleAutosave(); }
+function aiDesignFromScope(){ alert('Live AI design needs the commercial route on your Cloudflare worker (deploy with:  cd cloudflare-worker && npx wrangler deploy ). Until then: use “$ Estimate → Rebuild from drawing” for the rule-based design, then edit freely — your scope text is saved and will feed the AI once the route is live.'); }
+
+// ===== Design + pricing (estimate) engine =====
+let estimate={lines:[], labor:[], mode:'catalog', built:false, other:null};
+const WIRE_MAP={'#4/0 Al':'4/0 Al XHHW-2','#6 Cu':'#6 Cu THHN','#8 Cu':'#8 Cu THHN','#6 Cu bare (gnd)':'#6 bare Cu (GEC)'};
+function catFind(name){ if(!name)return null; const n=String(name).toLowerCase(); return pricing.materials.find(m=>m.name.toLowerCase()===n) || pricing.materials.find(m=>{const a=m.name.toLowerCase();return a.includes(n)||n.includes(a);}); }
+function bomLine(desc,qty,unit,src,catName){ const c=catFind(catName||desc); return {desc,qty:Math.round((qty||0)*100)/100,unit,cost:c?c.cost:0,tier:c?c.tier:'standard',src,manual:false,matched:!!c}; }
+function drawnQty(){ const q={lines:[],sym:{},ada:0,trenchByM:{}}; for(const it of items){ if(it.type==='line'){ q.lines.push({kind:it.kind,ft:Math.round(lineFt(it.pts)),vert:+it.vert||0,wire:it.wire,conduit:it.conduit,inTrench:it.inTrench,trench:it.trench}); if(it.kind==='trench'||(LINES[it.kind].spec&&it.inTrench)){ const m=it.trench||'pvc18'; q.trenchByM[m]=(q.trenchByM[m]||0)+Math.round(lineFt(it.pts)); } } else if(it.type==='symbol'){ q.sym[it.kind]=(q.sym[it.kind]||0)+1; } else if(it.type==='ada'){ q.ada++; } } return q; }
+function buildEstimate(keep){
+  const q=drawnQty(), n=Math.max(1,+document.getElementById('charger-count').value||1);
+  const L=[], A=[];
+  function lab(task,crew,hrs){ A.push({task,crew,hrs:Math.round(hrs*10)/10,manual:false}); }
+  q.lines.forEach(r=>{ const def=LINES[r.kind]; if(!def||!def.spec) return; const len=r.ft+(r.vert||0);
+    if(r.wire) L.push(bomLine(def.label+' — '+r.wire+' ×3', len*3,'ft','drawn',WIRE_MAP[r.wire]||r.wire));
+    L.push(bomLine(def.label+' — #8 Cu EGC', len,'ft','drawn','#8 Cu THHN'));
+    if(r.conduit){ const mat=(r.inTrench&&TRENCH[r.trench])?TRENCH[r.trench].material:'PVC'; L.push(bomLine(def.label+' conduit — '+r.conduit+' '+mat, r.ft,'ft','drawn', r.conduit+' '+mat+' Sch40')); }
+  });
+  const symMap={stand:'Unistrut P1000T 10ft',panel:'200A 240V MB panelboard NEMA 3R',transformer:'75 kVA transformer 480→208 NEMA 3R',disconnect:'200A 240V service disconnect',pedestal:'Charger pedestal (2-UWC)',bollard:'Bollard (4" pipe, filled)'};
+  Object.keys(symMap).forEach(k=>{ if(q.sym[k]) L.push(bomLine(SYMBOLS[k].label, q.sym[k],'ea','drawn',symMap[k])); });
+  L.push(bomLine('Tesla Universal Wall Connector (UWC)', n,'ea','scenario','Tesla Universal Wall Connector (UWC)'));
+  L.push(bomLine('2P 60A breaker (UWC circuit)', n,'ea','scenario','2P 60A breaker (UWC circuit)'));
+  L.push(bomLine('Branch breaker', n,'ea','scenario','Branch breaker (existing panel)'));
+  L.push(bomLine('5/8" x 8\' ground rod', 2,'ea','scenario','5/8" x 8\' ground rod'));
+  L.push(bomLine('#6 bare Cu (GEC)', 40,'ft','scenario','#6 bare Cu (GEC)'));
+  if(q.ada){ L.push(bomLine('ADA van-accessible + penalty sign', q.ada,'ea','drawn','ADA van-accessible + penalty sign')); L.push(bomLine('8ft perforated sign post', q.ada,'ea','drawn','8ft perforated sign post')); }
+  L.push(bomLine('EV / R7-12 sign', n,'ea','scenario','EV / R7-12 sign'));
+  L.push(bomLine('Cellular router bundle', 1,'ea','scenario','Cellular router bundle'));
+  const sc=document.getElementById('proj-scenario').value;
+  if(sc==='3'&&!q.sym.transformer) L.push(bomLine('75 kVA transformer 480→208 NEMA 3R',1,'ea','scenario','75 kVA transformer 480→208 NEMA 3R'));
+  const trenchFt=Object.values(q.trenchByM).reduce((a,b)=>a+b,0);
+  lab('Mobilization & daily start-up','crew',2); lab('VA811 locate verify + layout','crew',1);
+  if(q.sym.stand) lab('Set RMC posts + build service stand','crew',3.5);
+  if(trenchFt) lab('Excavate / lay conduit / backfill trench','crew',Math.max(2,trenchFt/24*2.5));
+  lab('Pull & terminate service / branch conductors','crew',2+n*0.5);
+  lab('Mount meter / panel / disconnect / network','crew',2);
+  lab('Ground rods + GEC + bonding','crew',1);
+  lab('Install pedestals + connect UWCs','crew',(q.sym.pedestal||1)*0.5+n*1);
+  if(q.sym.bollard) lab('Install bollards','crew',1.5);
+  lab('Energization / inspection / commissioning / turnover','solo',4);
+  estimate.lines = (keep?estimate.lines.filter(l=>l.manual):[]).concat(L);
+  estimate.labor = (keep?estimate.labor.filter(l=>l.manual):[]).concat(A);
+  estimate.built=true;
+}
+function estTotals(){
+  const o=estimate.other||{allowancePct:5,taxPct:6,tripCount:0,tripCost:150,subsCost:0,drawings:500,portfolioDiscount:false};
+  let materials=0,taxable=0,unpriced=0;
+  estimate.lines.forEach(l=>{ const mk=pricing.markup[l.tier]||0; const sell=(+l.qty||0)*(+l.cost||0)*(1+mk/100); l._sell=sell; materials+=sell; if(l.tier!=='tesla') taxable+=sell; if((+l.cost||0)<=0) unpriced++; });
+  let labor=0; estimate.labor.forEach(t=>{ const rate=t.crew==='solo'?pricing.labor.solo:pricing.labor.crew; t._ext=(+t.hrs||0)*rate; labor+=t._ext; });
+  const allowance=materials*((o.allowancePct||0)/100), tax=taxable*((o.taxPct||0)/100), trips=(o.tripCount||0)*(o.tripCost||0), subs=(o.subsCost||0)*(1+(pricing.markup.subs||0)/100), drawings=(o.drawings||0);
+  const subtotal=materials+labor+subs+allowance+tax+trips+drawings;
+  const discount=o.portfolioDiscount? subtotal*((pricing.rules.portfolioDiscountPct||0)/100):0;
+  return {materials,labor,subs,allowance,tax,trips,drawings,subtotal,discount,total:subtotal-discount,unpriced};
+}
+function renderEstimate(){
+  const t=estTotals(), o=estimate.other, rfq=estimate.mode==='rfq', fmt=v=>'$'+Math.round(v).toLocaleString();
+  document.getElementById('est-mode').textContent=(rfq?'Distributor RFQ — no prices':'Catalog estimate')+(t.unpriced?(' · '+t.unpriced+' need quote'):'');
+  const tieropt=sel=>['tesla','gear','panel','standard'].map(x=>`<option value="${x}" ${x===sel?'selected':''}>${TIER_NAMES[x]}</option>`).join('');
+  let mat=`<table class="pm-tbl"><thead><tr><th style="width:33%">Item</th><th style="width:58px">Qty</th><th style="width:44px">Unit</th>${rfq?'':`<th style="width:78px">Unit $</th><th style="width:150px">Tier</th><th style="width:78px">Ext</th>`}<th style="width:20px"></th></tr></thead><tbody>`;
+  estimate.lines.forEach((l,i)=>{ const unp=(+l.cost||0)<=0;
+    mat+=`<tr style="${unp&&!rfq?'background:#fff5f0':''}"><td><input value="${(l.desc||'').replace(/"/g,'&quot;')}" onchange="setLine(${i},'desc',this.value)"></td>
+      <td><input type="number" step="any" value="${l.qty}" onchange="setLine(${i},'qty',this.value)"></td>
+      <td><input value="${(l.unit||'').replace(/"/g,'&quot;')}" onchange="setLine(${i},'unit',this.value)"></td>
+      ${rfq?'':`<td><input type="number" step="any" value="${l.cost}" onchange="setLine(${i},'cost',this.value)"></td><td><select onchange="setLine(${i},'tier',this.value)">${tieropt(l.tier)}</select></td><td style="font-variant-numeric:tabular-nums">${unp?'<span style="color:#b00">quote</span>':'$'+(l._sell||0).toFixed(0)}</td>`}
+      <td><span class="pm-x" onclick="removeEstLine(${i})">✕</span></td></tr>`; });
+  mat+='</tbody></table>';
+  let lab=`<table class="pm-tbl"><thead><tr><th>Task</th><th style="width:88px">Crew</th><th style="width:64px">Hrs</th><th style="width:70px">Ext</th><th style="width:20px"></th></tr></thead><tbody>`;
+  estimate.labor.forEach((x,i)=>{ lab+=`<tr><td><input value="${(x.task||'').replace(/"/g,'&quot;')}" onchange="setLabor(${i},'task',this.value)"></td>
+    <td><select onchange="setLabor(${i},'crew',this.value)"><option value="crew" ${x.crew!=='solo'?'selected':''}>2-tech</option><option value="solo" ${x.crew==='solo'?'selected':''}>Solo</option></select></td>
+    <td><input type="number" step="any" value="${x.hrs}" onchange="setLabor(${i},'hrs',this.value)"></td>
+    <td style="font-variant-numeric:tabular-nums">$${(x._ext||0).toFixed(0)}</td><td><span class="pm-x" onclick="removeLabor(${i})">✕</span></td></tr>`; });
+  lab+='</tbody></table><button class="btn" style="margin-top:6px" onclick="addLabor()">+ Add task</button>';
+  let totals = rfq? '<div class="hint">RFQ mode hides pricing. Export the RFQ list to send to a distributor; enter returned prices as Unit $ here, then switch back to Catalog.</div>' :
+    `<div class="pm-grid" style="grid-template-columns:1fr 1fr">
+      <div class="pm-fld"><label>Trips (count × $${o.tripCost})</label><input type="number" value="${o.tripCount}" onchange="setOther('tripCount',this.value)"></div>
+      <div class="pm-fld"><label>Subcontractors $</label><input type="number" value="${o.subsCost}" onchange="setOther('subsCost',this.value)"></div>
+      <div class="pm-fld"><label>Drawings $</label><input type="number" value="${o.drawings}" onchange="setOther('drawings',this.value)"></div>
+      <div class="pm-fld"><label>Allowance %</label><input type="number" value="${o.allowancePct}" onchange="setOther('allowancePct',this.value)"></div>
+      <div class="pm-fld"><label>Sales tax %</label><input type="number" value="${o.taxPct}" onchange="setOther('taxPct',this.value)"></div>
+      <div class="pm-fld"><label style="text-transform:none;font-weight:500;font-size:12px"><input type="checkbox" ${o.portfolioDiscount?'checked':''} onchange="setOther('portfolioDiscount',this.checked)"> Apply ${pricing.rules.portfolioDiscountPct}% portfolio discount</label></div>
+    </div>
+    <table class="pm-tbl" style="margin-top:8px"><tbody>
+      <tr><td>Materials &amp; equipment</td><td style="text-align:right">${fmt(t.materials)}</td></tr>
+      <tr><td>Labor</td><td style="text-align:right">${fmt(t.labor)}</td></tr>
+      <tr><td>Subcontractors</td><td style="text-align:right">${fmt(t.subs)}</td></tr>
+      <tr><td>Allowance</td><td style="text-align:right">${fmt(t.allowance)}</td></tr>
+      <tr><td>Sales tax</td><td style="text-align:right">${fmt(t.tax)}</td></tr>
+      <tr><td>Trips</td><td style="text-align:right">${fmt(t.trips)}</td></tr>
+      <tr><td>Drawings</td><td style="text-align:right">${fmt(t.drawings)}</td></tr>
+      ${t.discount?`<tr><td>Portfolio discount</td><td style="text-align:right">-${fmt(t.discount)}</td></tr>`:''}
+      <tr style="font-weight:700;color:var(--green)"><td>PROJECT TOTAL</td><td style="text-align:right">${fmt(t.total)}</td></tr>
+    </tbody></table>${t.unpriced?`<div class="hint" style="color:#b00">${t.unpriced} line(s) have no catalog price — flagged above (pink) and exported to the RFQ list. Enter a Unit $ or get a vendor quote.</div>`:''}`;
+  document.getElementById('est-body').innerHTML=`<div class="pm-sec">Materials &amp; equipment <span class="pill" style="margin-left:6px">${estimate.lines.length}</span></div>${mat}<button class="btn" style="margin-top:6px" onclick="addEstLine()">+ Add material</button><div class="pm-sec">Labor</div>${lab}<div class="pm-sec">Other &amp; totals</div>${totals}`;
+}
+function setLine(i,f,v){ const l=estimate.lines[i]; if(!l)return; if(f==='qty'||f==='cost'){ l[f]=+v||0; if(f==='cost'&&l[f]>0) l.matched=true; } else l[f]=v; renderEstimate(); }
+function setLabor(i,f,v){ const x=estimate.labor[i]; if(!x)return; x[f]= f==='hrs'?(+v||0):v; renderEstimate(); }
+function setOther(f,v){ if(!estimate.other)return; estimate.other[f]= (f==='portfolioDiscount')?v:(+v||0); renderEstimate(); }
+function addEstLine(){ estimate.lines.push({desc:'New item',qty:1,unit:'ea',cost:0,tier:'standard',src:'manual',manual:true,matched:false}); renderEstimate(); }
+function removeEstLine(i){ estimate.lines.splice(i,1); renderEstimate(); }
+function addLabor(){ estimate.labor.push({task:'New task',crew:'crew',hrs:1,manual:true}); renderEstimate(); }
+function removeLabor(i){ estimate.labor.splice(i,1); renderEstimate(); }
+function toggleEstMode(){ estimate.mode = estimate.mode==='rfq'?'catalog':'rfq'; renderEstimate(); }
+function rebuildEstimate(){ if(confirm('Rebuild the auto lines from the current drawing + scenario? Manually-added lines are kept; auto-line edits refresh.')){ buildEstimate(true); renderEstimate(); } }
+function openEstimate(){ if(!estimate.built) buildEstimate(false); if(!estimate.other) estimate.other={tripCount:3,subsCost:0,drawings:pricing.rules.drawingsInHouse,allowancePct:pricing.rules.materialsAllowancePct,taxPct:pricing.rules.vaTaxPct,tripCost:pricing.rules.tripOverhead,portfolioDiscount:false}; renderEstimate(); document.getElementById('estimate-modal').classList.add('open'); }
+function closeEstimate(){ document.getElementById('estimate-modal').classList.remove('open'); scheduleAutosave&&scheduleAutosave(); }
+function dlFile(name,text,type){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:type||'text/csv'})); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),3000); }
+function exportEstimateCSV(){ estTotals(); let c='Item,Qty,Unit,Unit cost,Markup %,Extended sell\n'; estimate.lines.forEach(l=>{ const mk=pricing.markup[l.tier]||0; c+=`"${(l.desc||'').replace(/"/g,'""')}",${l.qty},${l.unit},${l.cost},${mk},${(l._sell||0).toFixed(2)}\n`; }); dlFile('GreenKey_Estimate.csv',c); }
+function exportRFQ(){ let c='Item,Qty,Unit,Notes\n'; estimate.lines.forEach(l=>{ c+=`"${(l.desc||'').replace(/"/g,'""')}",${l.qty},${l.unit},"${(+l.cost||0)<=0?'NEEDS QUOTE':''}"\n`; }); dlFile('GreenKey_RFQ_MaterialsList.csv',c); }
+function generateProposal(){
+  const t=estTotals(); const name=document.getElementById('proj-name').value||'Commercial EV Charging', prop=addr.value||'', prep=document.getElementById('prepared-by').value||'Jonathan Allen, GreenKey';
+  const scope=(document.getElementById('scope-text').value||'').replace(/[<&]/g,c=>({'<':'&lt;','&':'&amp;'}[c])); const n=document.getElementById('charger-count').value||'';
+  const fmt=v=>'$'+Math.round(v).toLocaleString();
+  const rows=[['Materials & Equipment',t.materials],['Labor & Installation',t.labor],['Subcontractors',t.subs],['Site visits / trips',t.trips],['Project allowance',t.allowance],['Sales tax',t.tax],['Engineering / drawings',t.drawings]];
+  const w=window.open('','_blank'); if(!w){ alert('Allow pop-ups to generate the proposal.'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${name} — Proposal</title><style>body{font-family:Georgia,'Times New Roman',serif;color:#1a1f2a;max-width:780px;margin:30px auto;padding:0 24px;line-height:1.55}h1{color:#2e7d32}h2{border-bottom:2px solid #2e7d32;padding-bottom:4px;margin-top:26px;font-size:18px}table{width:100%;border-collapse:collapse;margin:10px 0}td{padding:7px 8px;border-bottom:1px solid #ddd}.r{text-align:right;font-variant-numeric:tabular-nums}.tot{font-weight:700;font-size:18px;color:#2e7d32}.muted{color:#5e6a78;font-size:13px}@media print{body{margin:0}}</style></head><body>
+  <h1>GreenKey — EV Charging Installation Proposal</h1><p class="muted">${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}</p>
+  <table><tr><td><b>Project / Client</b></td><td>${name}</td></tr><tr><td><b>Property</b></td><td>${prop}</td></tr><tr><td><b>EV stations</b></td><td>${n}</td></tr><tr><td><b>Prepared by</b></td><td>${prep}</td></tr></table>
+  <h2>Scope of Work</h2><p>${scope||'(add scope in the Scope panel)'}</p>
+  <h2>Project Pricing</h2><table>${rows.map(r=>`<tr><td>${r[0]}</td><td class="r">${fmt(r[1])}</td></tr>`).join('')}${t.discount?`<tr><td>Portfolio discount</td><td class="r">-${fmt(t.discount)}</td></tr>`:''}<tr><td class="tot">PROJECT TOTAL</td><td class="r tot">${fmt(t.total)}</td></tr></table>
+  <p class="muted">Customer-facing roll-up; unit pricing is internal.${t.unpriced?` <b style="color:#b00">${t.unpriced} line(s) still need a vendor quote — figure not final.</b>`:''}</p>
+  <h2>Site Plan Exhibits</h2><p class="muted">Attach the Overall (Exhibit A) and Detailed (Exhibit B) site-plan PNGs exported from the Site Plan Studio.</p>
+  <h2>Terms</h2><p class="muted">Validity 60 days. Payment: 25% at signing / 35% at utility coordination + engineering / 30% at install complete / 10% at final inspection &amp; energization. Warranty: 1-yr GreenKey workmanship; Tesla UWC 4-yr. Excludes Dominion fees/timelines &amp; owner-marked private utilities.</p>
+  <h2>Acceptance</h2><table><tr><td style="height:46px;width:50%">______________________________<br>Customer</td><td style="height:46px">______________________________<br>Jonathan Allen, GreenKey</td></tr></table><p class="muted">Use your browser's Print → Save as PDF.</p>
+  </body></html>`); w.document.close();
+}
+document.getElementById('btn-scope').onclick=openScope;
+document.getElementById('btn-estimate').onclick=openEstimate;
+window.openScope=openScope;window.closeScope=closeScope;window.aiDesignFromScope=aiDesignFromScope;window.openEstimate=openEstimate;window.closeEstimate=closeEstimate;window.rebuildEstimate=rebuildEstimate;window.toggleEstMode=toggleEstMode;window.addEstLine=addEstLine;window.removeEstLine=removeEstLine;window.setLine=setLine;window.setLabor=setLabor;window.addLabor=addLabor;window.removeLabor=removeLabor;window.setOther=setOther;window.exportEstimateCSV=exportEstimateCSV;window.exportRFQ=exportRFQ;window.generateProposal=generateProposal;
+
+// ===== Proposal save / open / autosave =====
+function serializeProposal(){ return { v:1, savedAt:new Date().toISOString(),
+  project:{ address:addr.value||'', projName:(document.getElementById('proj-name').value||''), preparedBy:(document.getElementById('prepared-by').value||''), planTitle:(document.getElementById('plan-title').value||''), scenario:(document.getElementById('proj-scenario').value||''), chargers:(document.getElementById('charger-count')?document.getElementById('charger-count').value:''), scope:(document.getElementById('scope-text')?document.getElementById('scope-text').value:''), notes:(document.getElementById('walkdown-notes')?document.getElementById('walkdown-notes').value:'') },
+  map:{ center, zoom, view, views, propertyPin }, items, estimate }; }
+function saveProposal(){ const data=serializeProposal(); const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}); const a=document.createElement('a'); const fn=(data.project.projName||(data.project.address.split(',')[0])||'commercial_proposal').replace(/[^a-z0-9]+/gi,'_'); a.download=fn+'_proposal.json'; a.href=URL.createObjectURL(blob); a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),3000); }
+function restoreProposal(d){ if(!d||!d.map){ alert('Not a valid proposal file.'); return false; } try{ const p=d.project||{}; addr.value=p.address||''; document.getElementById('proj-name').value=p.projName||''; document.getElementById('prepared-by').value=p.preparedBy||'Jonathan Allen, GreenKey'; document.getElementById('plan-title').value=p.planTitle||''; if(p.scenario!=null) document.getElementById('proj-scenario').value=p.scenario; if(document.getElementById('charger-count'))document.getElementById('charger-count').value=p.chargers||'2'; if(document.getElementById('scope-text'))document.getElementById('scope-text').value=p.scope||''; if(document.getElementById('walkdown-notes'))document.getElementById('walkdown-notes').value=p.notes||''; estimate=(d.estimate&&Array.isArray(d.estimate.lines))?d.estimate:{lines:[],labor:[],mode:'catalog',built:false,other:null}; items=Array.isArray(d.items)?d.items:[]; views=d.map.views||{detail:null,overall:null}; view=d.map.view||'detail'; document.getElementById('view-sel').value=view; center=d.map.center||null; zoom=d.map.zoom||18; propertyPin=d.map.propertyPin||null; selIdx=-1; draft=null; if(center) loadBase(); else redraw(); return true; }catch(e){ alert('Could not open proposal: '+e.message); return false; } }
+function newProposal(){ if(items.length && !confirm('Start a new proposal? Unsaved drawing will be cleared.')) return; items=[]; draft=null; selIdx=-1; views={detail:null,overall:null}; view='detail'; document.getElementById('view-sel').value='detail'; document.getElementById('proj-name').value=''; document.getElementById('plan-title').value=''; redraw(); }
+function openProposal(){ document.getElementById('open-file').click(); }
+document.getElementById('open-file').addEventListener('change',function(e){ const f=e.target.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ try{ restoreProposal(JSON.parse(rd.result)); }catch(err){ alert('Not a valid proposal file.'); } }; rd.readAsText(f); e.target.value=''; });
+let autosaveT=null;
+function scheduleAutosave(){ clearTimeout(autosaveT); autosaveT=setTimeout(()=>{ try{ localStorage.setItem('gk_commercial_autosave', JSON.stringify(serializeProposal())); }catch(e){} },1500); }
+function showRestoreBanner(d){ const b=document.getElementById('restore-banner'); if(!b)return; b.querySelector('span').textContent='Restore your last proposal ('+d.items.length+' item'+(d.items.length===1?'':'s')+(d.project&&d.project.projName?' · '+d.project.projName:'')+')?'; b.style.display='flex'; b.querySelector('.rb-yes').onclick=()=>{ restoreProposal(d); b.style.display='none'; }; b.querySelector('.rb-no').onclick=()=>{ b.style.display='none'; }; }
+window.saveProposal=saveProposal; window.openProposal=openProposal; window.newProposal=newProposal;
+try{ const s=localStorage.getItem('gk_commercial_autosave'); if(s){ const d=JSON.parse(s); if(d&&Array.isArray(d.items)&&d.items.length) showRestoreBanner(d); } }catch(e){}
 </script>
 </body>
 </html>
