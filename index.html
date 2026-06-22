@@ -1087,7 +1087,7 @@
       </div>
       <div class="frow2" style="margin-bottom:14px">
         <div class="fg"><div class="fl">Round-trip drive time (min, optional)</div>
-          <input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 90 — first 60 min is free" min="0" step="5">
+          <div style="display:flex;align-items:center;gap:6px"><input class="fi" type="number" id="ai-drive-time" placeholder="e.g. 90 — first 60 min is free" min="0" step="5" style="flex:1"><button class="btn btn-g" style="padding:5px 10px;font-size:11px;white-space:nowrap" id="ai-drive-auto" onclick="autoCalcTravelAI()" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button></div>
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4">Adds travel labor at $160/hr beyond the first 60 min. Leave blank for local jobs (under 1 hr round trip).</div>
         </div>
         <div class="fg"><div class="fl">Routing difficulty (optional)</div>
@@ -5509,10 +5509,10 @@ function renderQuickQuoteForm(q){
       </div>
       <div class="qq-row">
         <div>
-          <div class="qq-lbl">Travel Time (minutes from office)</div>
-          <div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
+          <div class="qq-lbl">Round-trip drive time (min)</div>
+          <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
-        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
       ${isQmerit?`<div class="qq-row">
         <div><div class="qq-lbl">Travel Fee</div><div class="qq-sub">Optional — Qmerit jobs only</div></div>
@@ -5676,10 +5676,10 @@ function _renderQQ_HVAC(q) {
       </div>
       <div class="qq-row">
         <div>
-          <div class="qq-lbl">Travel Time (minutes from office)</div>
-          <div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
+          <div class="qq-lbl">Round-trip drive time (min)</div>
+          <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
-        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section">
@@ -5789,8 +5789,8 @@ function _renderQQ_CircuitReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
-        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section" style="background:var(--bg-elevated);border-left:3px solid var(--green);padding-left:14px">
@@ -5931,8 +5931,8 @@ function _renderQQ_PanelReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Travel Time (min)</div><div class="qq-sub">First 60 min free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
-        <input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px">
+        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from the Powhatan home base">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
     <div class="qq-section">
@@ -14363,6 +14363,57 @@ function driveTimeHrs(lat1, lon1, lat2, lon2) {
   const roadFactor = 1.35; // straight-line to road distance correction
   const distKm = haversineKm(lat1, lon1, lat2, lon2) * roadFactor;
   return distKm / speedKph;
+}
+
+// ── TRAVEL DRIVE-TIME AUTO-CALC ──
+// GreenKey home base — origin for quote travel-time auto-calc.
+const GK_HOME_BASE_ADDR = '3299 Colston Court, Powhatan, VA 23139';
+// One-way road drive time (minutes) from the home base to a job address, via
+// Mapbox Directions (real roads). Falls back to the straight-line estimate
+// (driveTimeHrs) if Directions is unavailable. Endpoints geocoded + cached.
+async function homeToJobDriveMinOneWay(jobAddress){
+  const home = await geocodeOne(GK_HOME_BASE_ADDR, 'gk-home-base');
+  const to   = jobAddress ? await geocodeOne(jobAddress, 'job:'+jobAddress) : null;
+  if(!home || !to) return null;
+  try{
+    const url=`https://api.mapbox.com/directions/v5/mapbox/driving/${home.lon},${home.lat};${to.lon},${to.lat}?access_token=${MAPBOX_TOKEN}&overview=false`;
+    const ctrl=new AbortController(); const tid=setTimeout(()=>ctrl.abort(),8000);
+    let res; try{ res=await fetch(url,{signal:ctrl.signal}); } finally{ clearTimeout(tid); }
+    if(res.ok){ const j=await res.json(); const r=j.routes&&j.routes[0]; if(r&&typeof r.duration==='number') return r.duration/60; }
+  }catch(e){ console.warn('[GK] Directions failed, using estimate:', e); }
+  return driveTimeHrs(home.lat,home.lon,to.lat,to.lon)*60;   // fallback: straight-line estimate
+}
+function _jobAddrForQuote(q){ const l=q&&q.leadId?getLead(q.leadId):null; return l?[l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '):''; }
+// Quick Quote: fill the round-trip travel field from the home base → job drive.
+async function autoCalcTravel(qid){
+  const q=getQuote(qid); if(!q) return;
+  const jobAddr=_jobAddrForQuote(q);
+  if(!jobAddr){ toast('Add the job site address first so I can route to it.','warning'); return; }
+  const btn=document.getElementById('qq-travel-auto'); const orig=btn?btn.innerHTML:'';
+  if(btn){ btn.disabled=true; btn.innerHTML='…'; }
+  try{
+    const oneWay=await homeToJobDriveMinOneWay(jobAddr);
+    if(oneWay==null){ toast('Could not calculate drive time — check the job address.','error'); return; }
+    const roundTrip=Math.round(oneWay*2/5)*5;
+    const inp=document.getElementById('qq-travel-min'); if(inp) inp.value=roundTrip;
+    onQQChange(qid);
+    toast('Round trip from Powhatan ≈ '+roundTrip+' min ('+Math.round(oneWay)+' each way)','success');
+  } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
+}
+// AI estimator: fill its round-trip drive-time field the same way.
+async function autoCalcTravelAI(){
+  const q=(typeof _aiDraftQuoteId!=='undefined'&&_aiDraftQuoteId)?getQuote(_aiDraftQuoteId):null;
+  const jobAddr=q?_jobAddrForQuote(q):'';
+  if(!jobAddr){ toast('No job address on this quote to route to.','warning'); return; }
+  const btn=document.getElementById('ai-drive-auto'); const orig=btn?btn.innerHTML:'';
+  if(btn){ btn.disabled=true; btn.innerHTML='…'; }
+  try{
+    const oneWay=await homeToJobDriveMinOneWay(jobAddr);
+    if(oneWay==null){ toast('Could not calculate drive time.','error'); return; }
+    const roundTrip=Math.round(oneWay*2/5)*5;
+    const inp=document.getElementById('ai-drive-time'); if(inp) inp.value=roundTrip;
+    toast('Round trip ≈ '+roundTrip+' min','success');
+  } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
 }
 
 async function geocodeOne(address, cacheKey) {
