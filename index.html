@@ -1598,7 +1598,7 @@ const JOB_TYPES = [
   {id:'ev-residential',      label:'EV Charger — Residential',     description:'Hardwired Level 2 EVSE',                qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'nema-1450',           label:'NEMA 14-50 Outlet',             description:'50A 240V outlet for plug-in EVSE',       qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'hvac-circuit',        label:'HVAC Dedicated Circuit',        description:'Branch circuit for HVAC equipment',      qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
-  {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:true,  permitDefault:0,   permitQmerit:0,   noPermit:true, category:'Branch Circuit'},
+  {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:false, permitDefault:0,   permitQmerit:0,   noPermit:true, category:'Branch Circuit'},
 
   // Panel & service work
   // Panel replacement permit is $500 (2026-06-12): covers the required
@@ -4947,7 +4947,7 @@ function openNewQuote(){
       <div style="display:flex;gap:12px;flex-direction:column">
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r);transition:border-color 0.15s" id="qt-opt-quick" onclick="selectQTType('quick')">
           <input type="radio" name="qt-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">Standard EV residential — uses pricing configurator</div></div>
+          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement — uses pricing configurator</div></div>
         </label>
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r);transition:border-color 0.15s" id="qt-opt-detailed" onclick="selectQTType('detailed')">
           <input type="radio" name="qt-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
@@ -5091,7 +5091,7 @@ function openRecoverQuoteDialog_DEPRECATED() {
       <div style="display:flex;gap:12px;flex-direction:column">
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=quick]').checked=true">
           <input type="radio" name="rq-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">Standard EV residential</div></div>
+          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement</div></div>
         </label>
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=detailed]').checked=true">
           <input type="radio" name="rq-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
@@ -5416,7 +5416,6 @@ function renderQBForm(q){
 function renderQuickQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
   if (q.jobType === 'hvac-circuit')         return _renderQQ_HVAC(q);
-  if (q.jobType === 'circuit-replacement')  return _renderQQ_CircuitReplacement(q);
   if (q.jobType === 'panel-replacement')    return _renderQQ_PanelReplacement(q);
   const t = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
   if (t && t.qqEnabled === false)            return _renderQQ_DetailedRedirect(q);
@@ -5446,6 +5445,12 @@ function renderQuickQuoteForm(q){
       <button class="li-add" style="margin-top:10px" onclick="addQQRunSeg('${q.id}')">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add Segment
       </button>
+      <div class="fg" style="margin-top:14px"><div class="fl">Wire Size</div>
+        <select class="fsel" id="qq-wire" onchange="onQQChange('${q.id}')">
+          ${EVNEMA_WIRE_OPTIONS.map(o=>`<option value="${o.id}"${(qq.evWireId||'6cu')===o.id?' selected':''}>${o.label}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">Names the conductor on the quote. #6 Cu is standard; upsize for long runs (voltage drop). Wire is included in the run rate, so this changes the wording, not the price.</div>
+      </div>
     </div>
     <div class="qq-section">
       <div class="qq-title">Mount & Hardware</div>
@@ -5498,7 +5503,7 @@ function renderQuickQuoteForm(q){
         <div class="scope-lbl" style="margin-bottom:8px">Additional Equipment</div>
         <div id="qq-extras-list">
           ${(qq.extras||[]).map((ex,i)=>`<div class="qq-row" style="gap:10px">
-            <div style="flex:1"><div class="qq-lbl">${ex.name}</div></div>
+            <div style="flex:1">${ex.custom?`<input class="li-inp" type="text" placeholder="Custom item — e.g. Concrete base + freestanding pedestal" value="${(ex.name||'').replace(/"/g,'&quot;')}" oninput="updateQQExtraName('${q.id}',${i},this.value)" style="width:100%">`:`<div class="qq-lbl">${ex.name}</div>`}</div>
             <input class="li-inp num" type="number" value="${ex.price}" style="width:90px" oninput="updateQQExtra('${q.id}',${i},this.value)">
             <button class="li-del" onclick="removeQQExtra('${q.id}',${i})">×</button>
           </div>`).join('')}
@@ -5509,6 +5514,9 @@ function renderQuickQuoteForm(q){
             .map(eq=>`<button class="li-add" onclick="addQQExtra('${q.id}','${eq.id}','${eq.name}',${eq.price})">
               <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>${eq.name}
             </button>`).join('')}
+          <button class="li-add" onclick="addQQCustomExtra('${q.id}')" title="Add any one-off item — concrete base, pedestal, bollard, sub-panel, etc.">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Custom item
+          </button>
         </div>
       </div>
     </div>
@@ -6017,13 +6025,14 @@ function onQQChange(qid){
   const lmOverride         = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
   const isVeteran          = !!document.getElementById('qq-veteran')?.checked;
   const runSegs=q.qq?.runSegs||[];
+  const evWireId=document.getElementById('qq-wire')?.value||q.qq?.evWireId||'6cu';
   const baseInstall = installOverride!=null && !isNaN(installOverride)
     ? installOverride
     : (panelLoc==='garage'?p.garage:p.interior);
   let lm = baseInstall;
   runSegs.forEach(seg=>{
     const ft=Math.max(parseInt(seg.ft)||0,0);
-    if(seg.type==='surface') lm+=(ft/10)*p.addl10Surface;
+    if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') lm+=(ft/10)*p.addl10Surface;
     else if(seg.type==='hand-trench') lm+=(ft/10)*p.handDig10;
     else if(seg.type==='machine-trench'){const mft=Math.max(ft,50);lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10;}
   });
@@ -6048,7 +6057,7 @@ function onQQChange(qid){
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
-    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
+    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
     permitFee,
     baseInstall,
     laborAndMaterials:lm,
@@ -6137,7 +6146,7 @@ function _calcAdditionalTask_HVAC(task) {
   const disconnect = task.disconnect || 'none';
   // Run labor (surface / hand-trench / machine-trench rates from HVAC pricing)
   let labor = 0;
-  if (runType === 'surface')           labor = (runFt / 10) * p.hvacAddl10Surface;
+  if (runType === 'surface' || runType === 'crawl' || runType === 'attic') labor = (runFt / 10) * p.hvacAddl10Surface;
   else if (runType === 'hand-trench')  labor = (runFt / 10) * p.hvacHandDig10;
   else if (runType === 'machine-trench') {
     const mft = Math.max(runFt, 50);
@@ -6179,8 +6188,15 @@ function _additionalTaskScope(task) {
                    : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
                    : '';
     const ft = task.runFt || 0;
+    const _runDescMap = {
+      'crawl': 'concealed through the crawl space',
+      'attic': 'concealed through the attic',
+      'hand-trench': 'in conduit within a trench',
+      'machine-trench': 'in conduit within a trench',
+      'surface': 'in surface-mounted conduit'
+    };
     const runDesc = ft > 0
-      ? `${ft} ft of ${task.runType === 'hand-trench' ? 'hand-dug trench' : task.runType === 'machine-trench' ? 'machine trench' : 'surface conduit'}`
+      ? `${ft} ft ${_runDescMap[task.runType] || _runDescMap['surface']}`
       : 'wire run';
     const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
     const brkDesc = ampLabel ? ` protected by a new ${ampLabel} breaker installed in the existing panel` : '';
@@ -6243,9 +6259,11 @@ function _renderAdditionalTaskCard(qid, task, idx) {
       </div>
       <div class="fg"><div class="fl">Run Type</div>
         <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runType', this.value)">
-          <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface / crawl / attic — $115/10 ft</option>
-          <option value="hand-trench"${task.runType === 'hand-trench' ? ' selected' : ''}>Hand-dig trench — $170/10 ft</option>
-          <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Machine trench — $620 base + $115/10 ft beyond 50</option>
+          <option value="crawl"${task.runType === 'crawl' ? ' selected' : ''}>Crawl space — concealed cable — $115/10 ft</option>
+          <option value="attic"${task.runType === 'attic' ? ' selected' : ''}>Attic — concealed cable — $115/10 ft</option>
+          <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface conduit on walls — $115/10 ft</option>
+          <option value="hand-trench"${task.runType === 'hand-trench' ? ' selected' : ''}>Trench — hand dig — $170/10 ft</option>
+          <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Trench — machine — $620 base + $115/10 ft beyond 50</option>
         </select>
       </div>
     </div>
@@ -6442,7 +6460,7 @@ function _onQQChange_HVAC(qid) {
   runSegs.forEach(seg => {
     const ft = Math.max(parseInt(seg.ft)||0, 0);
     totalRunFt += ft;
-    if (seg.type==='surface')        lm += (ft/10) * p.hvacAddl10Surface;
+    if (seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') lm += (ft/10) * p.hvacAddl10Surface;
     else if (seg.type==='hand-trench') lm += (ft/10) * p.hvacHandDig10;
     else if (seg.type==='machine-trench') {
       const mft = Math.max(ft, 50);
@@ -6620,7 +6638,7 @@ function _onQQChange_PanelReplacement(qid) {
 // ── QQ RUN SEGMENTS ──
 function qqSegCost(seg,p){
   const ft=Math.max(parseInt(seg.ft)||0,0);
-  if(seg.type==='surface') return (ft/10)*p.addl10Surface;
+  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') return (ft/10)*p.addl10Surface;
   if(seg.type==='hand-trench') return (ft/10)*p.handDig10;
   if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10;}
   return 0;
@@ -6633,12 +6651,14 @@ function renderQQRunSegs(segs,qid){
     const cost=qqSegCost(seg,p);
     return `<div class="qq-row" style="gap:8px;flex-wrap:wrap">
       <select class="fsel" style="flex:1;min-width:200px" onchange="updateQQRunSegType('${qid}',${i},this.value)">
-        <option value="surface"${seg.type==='surface'?' selected':''}>Surface Run / Crawl Space / Attic — $150 per 10 ft of wire run</option>
-        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Hand-dig Trenching — $200 per 10 ft of trench</option>
-        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Machine Trenching — $650 base (first 50 ft)</option>
+        <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — concealed cable — $150 per 10 ft</option>
+        <option value="attic"${seg.type==='attic'?' selected':''}>Attic — concealed cable — $150 per 10 ft</option>
+        <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $150 per 10 ft</option>
+        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $200 per 10 ft of trench</option>
+        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $650 base (first 50 ft)</option>
       </select>
       <div style="display:flex;align-items:center;gap:6px">
-        <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${isMachine?'(trench)':'(wire run)'}</span>
+        <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${(seg.type==='hand-trench'||seg.type==='machine-trench')?'(trench)':'(wire run)'}</span>
       </div>
       <div style="font-family:var(--mono);font-size:12.5px;color:var(--green);min-width:60px;text-align:right">${fmt$(cost)}</div>
       <button class="li-del" onclick="removeQQRunSeg('${qid}',${i})">×</button>
@@ -6679,6 +6699,9 @@ function updateQQRunSegFt(qid,idx,val){
 function addQQExtra(qid,eid,name,price){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];if(extras.find(e=>e.id===eid))return;extras.push({id:eid,name,price});upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function removeQQExtra(qid,idx){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras.splice(idx,1);upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
 function updateQQExtra(qid,idx,v){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];extras[idx]={...extras[idx],price:parseFloat(v)||0};upsertQuote({...q,qq:{...(q.qq||{}),extras}});onQQChange(qid);}
+function addQQCustomExtra(qid){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[]),{id:'custom-'+Date.now(),name:'',price:0,custom:true}];upsertQuote({...q,qq:{...(q.qq||{}),extras}});const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);}
+function updateQQExtraName(qid,idx,v){const q=getQuote(qid);if(!q)return;const extras=[...(q.qq?.extras||[])];if(!extras[idx])return;extras[idx]={...extras[idx],name:v};upsertQuote({...q,qq:{...(q.qq||{}),extras}});onQQChange(qid);}
+window.addQQCustomExtra=addQQCustomExtra; window.updateQQExtraName=updateQQExtraName;
 function onQQScopeChange(qid){
   const v=document.getElementById('qq-scope')?.value||'';
   const q=getQuote(qid);
@@ -6738,10 +6761,49 @@ function autoScope(q) {
   if (!subScopes.length) return primary;
   return primary + '\n\nADDITIONAL WORK INCLUDED IN THIS QUOTE:\n\n' + subScopes.join('\n\n');
 }
+// Conductor options for EV-charger & NEMA-14-50 Quick Quotes. Default #6 Cu
+// (standard 60 A EV / 50 A NEMA). #8 Cu is code-legal for a 50 A NEMA 14-50;
+// #4 Cu / #2 Al cover long runs. Wire is baked into the per-foot run rate, so
+// this drives the scope wording, not the price.
+const EVNEMA_WIRE_OPTIONS = [
+  {id:'8cu', gauge:'#8', metal:'Cu', label:'#8 Cu — 50 A (NEMA 14-50)'},
+  {id:'6cu', gauge:'#6', metal:'Cu', label:'#6 Cu — 60 A (standard)'},
+  {id:'4cu', gauge:'#4', metal:'Cu', label:'#4 Cu — long runs'},
+  {id:'2al', gauge:'#2', metal:'Al', label:'#2 Al — long runs (economical)'}
+];
+function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWireId))||EVNEMA_WIRE_OPTIONS[1]; }
+// Builds one plain-language sentence describing the wire route across all run
+// legs, in order — e.g. "The wire route is approximately 20 ft of #6 SEU (Cu)
+// wire through the crawl space, then approximately 40 ft of #6 THHN/THWN-2 (Cu)
+// wire in conduit through a trench." gauge '' (HVAC) omits the conductor spec
+// since the wire is named in the opener. Conductor type follows the method:
+// concealed runs (crawl/attic) use SEU cable, conduit runs use THHN/THWN-2.
+function _runRoutingSentence(segs, gauge, metal){
+  const m = metal || 'Cu';
+  const PHRASE = {
+    'crawl':'through the crawl space',
+    'attic':'through the attic',
+    'surface':'in surface-mounted conduit',
+    'hand-trench':'in conduit through a trench',
+    'machine-trench':'in conduit through a trench'
+  };
+  const INSUL = {
+    'crawl':'SEU','attic':'SEU',
+    'surface':'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2'
+  };
+  const parts = (segs||[]).map(seg => {
+    const ft = parseInt(seg.ft)||0;
+    if (!ft || !PHRASE[seg.type]) return '';
+    const spec = gauge ? `of ${gauge} ${INSUL[seg.type]} (${m}) wire ` : '';
+    return `approximately ${ft} ft ${spec}${PHRASE[seg.type]}`;
+  }).filter(Boolean);
+  return parts.length ? ` The wire route is ${parts.join(', then ')}.` : '';
+}
 function _autoScopePrimary(q){
   const qq = q.qq || {};
   const loc = qq.panelLocation==='garage' ? 'garage' : 'interior/basement';
   const segs = qq.runSegs || [];
+  const totalFt = 5 + segs.reduce((s,seg)=>s+(parseInt(seg.ft)||0),0);   // included 5 ft + any added run segments
   const runParts = segs.map(seg => {
     const ft = seg.ft || 0;
     if (seg.type==='surface')        return `${ft} ft of additional wire-run (surface conduit)`;
@@ -6760,7 +6822,8 @@ function _autoScopePrimary(q){
     const discDesc = disc === 'fused' ? ' with a fused disconnect at the unit'
                     : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
                     : '';
-    return `Supply and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel located in the ${loc} to the HVAC equipment disconnect${discDesc}${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
+    const routing = _runRoutingSentence(segs, '');
+    return `Furnish and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel in the ${loc} to the HVAC equipment disconnect${discDesc}, a total run of approximately ${totalFt} ft.${routing} All work is performed to NEC and local code.`;
   }
 
   // Circuit Replacement (no permit)
@@ -6801,7 +6864,7 @@ function _autoScopePrimary(q){
     } else {
       breakerSentence = `All ${breakers} existing branch circuits will be re-terminated to the new panel using equivalent breaker types (like-for-like replacement). The original protection level is preserved. AFCI / GFCI breaker upgrades are available as an add-on if desired.`;
     }
-    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}`;
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge} All work is performed to NEC and local code.`;
   }
 
   // Battery / V2H / Service / Generator / EMS / Custom — fallback (Detailed Quote drives the scope)
@@ -6816,12 +6879,16 @@ function _autoScopePrimary(q){
   // NEMA 14-50 Outlet
   if (q.jobType === 'nema-1450') {
     const outLoc = qq.nemaLocation==='outside' ? 'exterior' : 'interior';
-    return `Supply and install a dedicated 50-amp, 240-volt circuit protected by a 50-amp GFCI breaker from the main electrical panel located in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted)${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
+    const wireOpt = _evnemaWire(qq);
+    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal);
+    return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft.${routing} All work is performed to NEC and local code.`;
   }
 
   // Default: EV Charger
-  const mount = qq.mountType==='post' ? ' mounted on a 4×4 treated post with concrete footing' : '';
-  return `Supply and install a dedicated 60-amp, 240-volt circuit from the main electrical panel located in the ${loc} to a Level 2 EV charger installation${mount}${run}. All work performed to NEC standards and local code requirements.${wireRunNote}`;
+  const mount = qq.mountType==='post' ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.' : '';
+  const wireOpt = _evnemaWire(qq);
+  const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal);
+  return `Furnish and install a dedicated 240-volt, 60-amp branch circuit from the main electrical panel in the ${loc} to the Level 2 EV charger location, a total run of approximately ${totalFt} ft.${routing} Work includes mounting, connection, and setup of the charger.${mount} All work is performed to NEC and local code.`;
 }
 
 function autoInclusions(q){
@@ -6830,7 +6897,9 @@ function autoInclusions(q){
   const t = getJobType(q.jobType);
   if (!t || !t.noPermit) lines.splice(1, 0, '• Permit application and inspection coordination');
   if (q.source === 'Qmerit') lines.push('• Platform coordination and documentation');
+  if (q.jobType === 'ev-residential') lines.push('• Setup and product training');
   if ((q.qq?.extras||[]).find(e => e.id==='emporia')) lines.push('• Emporia Vue energy monitor installation');
+  (q.qq?.extras||[]).filter(e => e.custom && (e.name||'').trim()).forEach(e => lines.push('• ' + e.name.trim()));
   if (q.jobType === 'panel-replacement') {
     lines.push('• Re-termination of all existing branch circuits to the new panel');
     if (q.qq?.panelUpgradeAFCI && (q.qq?.panelAFCICount || 0) > 0) {
@@ -11535,7 +11604,7 @@ function openNewQuote_ForJob(leadId) {
         <div style="display:flex;gap:12px;flex-direction:column">
           <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" id="qt-opt-quick" onclick="selectQTType('quick')">
             <input type="radio" name="qt-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-            <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">Standard EV residential</div></div>
+            <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement</div></div>
           </label>
           <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" id="qt-opt-detailed" onclick="selectQTType('detailed')">
             <input type="radio" name="qt-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
