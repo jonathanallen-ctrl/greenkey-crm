@@ -4201,7 +4201,12 @@ function doGlobalSearch(q) {
     return _digitsOnly(rawPhone).includes(qDigits);
   };
   const qKey = _nameKey(q);
-  const custs = getCustomers().filter(c=>
+  // Show up to this many per section, sorted by name. Was a hard 4, which
+  // silently dropped real matches once a first name repeated (e.g. searching
+  // "justin" with 5 Justins hid "Justin Smith" off the bottom). Overflow beyond
+  // this is surfaced with a "+N more" hint so nothing looks missing.
+  const SEARCH_LIMIT = 8;
+  const custAll = getCustomers().filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
     (qKey && _nameKey(custFullName(c)).includes(qKey))||
     (qKey && _nameKey(c.businessName).includes(qKey))||
@@ -4209,9 +4214,12 @@ function doGlobalSearch(q) {
     (c.email||'').toLowerCase().includes(ql)||
     (c.phone||'').toLowerCase().includes(ql)||
     phoneMatch((c.phone||'') + ' ' + (c.altPhone||''))
-  ).slice(0,4);
+  ).sort((a,b)=>custFullName(a).toLowerCase().localeCompare(custFullName(b).toLowerCase()));
+  const custTotal = custAll.length;
+  const custs = custAll.slice(0,SEARCH_LIMIT);
   const leadCusts = getCustomers();
-  const leads = getLeads().filter(l=>{
+  const _leadName = l => { const lc=leadCusts.find(x=>x.id===l.customerId); return (lc?custFullName(lc):(l.customerName||'')).toLowerCase(); };
+  const leadAll = getLeads().filter(l=>{
     const lc = leadCusts.find(x=>x.id===l.customerId);
     const bn = lc && lc.propertyType==='commercial' ? (lc.businessName||'') : '';
     const lcName = lc ? custFullName(lc).toLowerCase() : '';
@@ -4227,7 +4235,9 @@ function doGlobalSearch(q) {
       (l.description||'').toLowerCase().includes(ql)||
       phoneMatch((lc?.phone||'') + ' ' + (lc?.altPhone||'') + ' ' + (l.customerPhone||''))
     );
-  }).slice(0,4);
+  }).sort((a,b)=>_leadName(a).localeCompare(_leadName(b)));
+  const leadTotal = leadAll.length;
+  const leads = leadAll.slice(0,SEARCH_LIMIT);
 
   let html = '';
   if (custs.length) {
@@ -4242,6 +4252,7 @@ function doGlobalSearch(q) {
         <div><div class="sdrop-lbl">${lbl}</div><div class="sdrop-sub">${sub}</div></div>
       </div>`;
     }).join('');
+    if (custTotal > custs.length) html += `<div style="padding:5px 14px;font-size:11px;color:var(--text-muted);font-style:italic">+${custTotal-custs.length} more customer${custTotal-custs.length>1?'s':''} — keep typing to narrow</div>`;
   }
   if (leads.length) {
     const lCusts = getCustomers();
@@ -4258,6 +4269,7 @@ function doGlobalSearch(q) {
         </div>
       </div>`;
     }).join('');
+    if (leadTotal > leads.length) html += `<div style="padding:5px 14px;font-size:11px;color:var(--text-muted);font-style:italic">+${leadTotal-leads.length} more job${leadTotal-leads.length>1?'s':''} — keep typing to narrow</div>`;
   }
   if (!html) html = `<div class="sdrop-none">No results for "${q}"</div>`;
   drop.innerHTML = html;
@@ -22184,7 +22196,11 @@ init();
     }
     let lastName=lead.customerLastName||''; if(!lastName){ try{ const c=getCustomer(lead.customerId); lastName=c?c.lastName||'':''; }catch(e){} }
     const label=(lastName?lastName+' — ':'')+(lead.siteStreet||lead.siteCity||lead.id||'');
-    m.querySelector('#gk-sv-frame').src='siteview.html?job='+encodeURIComponent(leadId)+'&addr='+encodeURIComponent(leadAddr(lead))+'&label='+encodeURIComponent(label);
+    // Cache-buster (_v): the Site View iframe URL is unique per job (job+addr), so the
+    // browser caches each job's siteview.html separately — meaning a job opened before a
+    // siteview.html update keeps serving the stale copy. A fresh _v each open forces the
+    // latest file every time (siteview.html is small + loaded on-demand, so cost is trivial).
+    m.querySelector('#gk-sv-frame').src='siteview.html?job='+encodeURIComponent(leadId)+'&addr='+encodeURIComponent(leadAddr(lead))+'&label='+encodeURIComponent(label)+'&_v='+Date.now();
     m.style.display='flex';
   };
   window.closeSiteViewModal=function(){ const m=document.getElementById('gk-siteview-modal'); if(m){ m.style.display='none'; const f=m.querySelector('#gk-sv-frame'); if(f) f.src='about:blank'; } try{ if(window.S&&S.jobDetailId&&typeof renderJobDetail==='function') renderJobDetail(S.jobDetailId); }catch(e){} };
