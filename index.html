@@ -1567,6 +1567,7 @@ const STAGES = [
   {id:'post-install-docs',label:'Post-Install Docs', col:'amber'},
   {id:'final-inspection', label:'Awaiting Inspection', col:'amber'},
   {id:'invoiced',         label:'Invoiced',          col:'green'},
+  {id:'not-won',          label:'Not Won',           col:'muted'},
   {id:'archived',         label:'Archived',          col:'muted'}
 ];
 const STAGE_MAP = Object.fromEntries(STAGES.map(s=>[s.id,s]));
@@ -2010,13 +2011,15 @@ function advanceStage(leadId) {
   const idx = arr.findIndex(l=>l.id===leadId);
   if (idx<0) return;
   const cur = STAGES.findIndex(s=>s.id===arr[idx].stage);
-  if (cur>=0 && cur<STAGES.length-1) {
-    arr[idx].stage = STAGES[cur+1].id;
+  const _next = STAGES[cur+1];
+  // Don't let "Next →" advance into the terminal stages (Not Won / Archived).
+  if (cur>=0 && _next && _next.id!=='not-won' && _next.id!=='archived') {
+    arr[idx].stage = _next.id;
     arr[idx].stageAt = new Date().toISOString();
     arr[idx].updatedAt = new Date().toISOString();
     saveLeads(arr);
     if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
-    toast(`Moved to: ${STAGES[cur+1].label}`,'success');
+    toast(`Moved to: ${_next.label}`,'success');
     if (S.page==='jobs') renderPipeline();
     else if (S.page==='leads') renderLeadsPage();
   }
@@ -2100,6 +2103,7 @@ function moveLeadToStage(leadId, stageId) {
   if (idx<0) return;
   if (arr[idx].stage===stageId) return;
   const stageName = STAGES.find(s=>s.id===stageId)?.label || stageId;
+  _applyNotWonTransition(arr[idx], arr[idx].stage, stageId);
   arr[idx].stage = stageId;
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
@@ -3433,7 +3437,7 @@ function renderPipeline() {
   const src  = (document.getElementById('pf-source')||{}).value||'';
   const type = (document.getElementById('pf-type')||{}).value||'';
   const tech = (document.getElementById('pf-tech')||{}).value||'';
-  let leads = getLeads().filter(l=>l.stage!=='archived');
+  let leads = getLeads().filter(l=>l.stage!=='archived' && l.stage!=='not-won');
   if (src)  leads = leads.filter(l=>l.source===src);
   if (type) leads = leads.filter(l=>l.jobType===type);
   if (tech) leads = leads.filter(l=>l.assignedTo===tech);
@@ -3447,7 +3451,7 @@ function renderKanban(leads) {
   const wrap = document.getElementById('pipe-kanban');
   if (!wrap) return;
   wrap.className = 'kanban';
-  wrap.innerHTML = STAGES.map(stage=>{
+  wrap.innerHTML = STAGES.filter(s=>s.id!=='archived' && s.id!=='not-won').map(stage=>{
     const cards = leads.filter(l=>l.stage===stage.id);
     const cardHtml = cards.length ? cards.map(l=>{
       const c = custs.find(x=>x.id===l.customerId);
@@ -3458,7 +3462,7 @@ function renderKanban(leads) {
       const panelChip = leadPanelInfoMissing(l) ? `<span class="chip chip-flag" title="Panel make / breaker size not recorded — fill in the Electrical Snapshot on the job detail page">⚠ Panel info</span>` : '';
       const _custAct = getLeadCustomerAction(l.id);
       const actChip  = customerActionChip(_custAct, { compact: true });
-      const isLast = STAGES.findIndex(s=>s.id===stage.id)===STAGES.length-1;
+      const _niK = STAGES.findIndex(s=>s.id===stage.id)+1; const isLast = !STAGES[_niK] || STAGES[_niK].id==='not-won' || STAGES[_niK].id==='archived';
       return `<div class="kcard" draggable="true" data-lead-id="${l.id}"
         ondragstart="kcardDragStart(event,'${l.id}')"
         ondragend="kcardDragEnd(event)"
@@ -10116,14 +10120,22 @@ function _renderPreInstallStrip(lead) {
     ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: (latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||'')).slice(0,10), click: `clickQuoteChip('${lead.id}')`, tip: 'Approved — from a CRM quote, or marked manually. Click to change.' }
     : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', click: `clickQuoteChip('${lead.id}')`, tip: 'No approved CRM quote. Click to mark approved manually — for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).' });
 
-  // Charger Confirmed (EV-only, derived from chargerInfo).
-  if (!isEV) {
-    states.push({ state: 'na', icon: '—', label: 'Charger N/A', meta: '', tip: 'Only relevant for EV residential jobs.' });
-  } else if (lead.chargerInfo?.make && lead.chargerInfo?.model) {
-    const desc = [lead.chargerInfo.make, lead.chargerInfo.model].filter(Boolean).join(' ');
-    states.push({ state: 'done', icon: '✓', label: 'Charger', meta: desc, tip: 'Auto-set when Charger Info has both make and model filled in.' });
-  } else {
-    states.push({ state: 'pending', icon: '·', label: 'Charger TBD', meta: '', tip: 'Fill in Charger Info make + model to mark this confirmed.' });
+  // Charger — shown only for jobs that involve a charger (EV jobs, or any job
+  // with charger make/model on file); hidden entirely otherwise. Green means the
+  // charger is confirmed ON SITE (an install-readiness check) — the inline editor
+  // toggles that and shows the model.
+  const _involvesCharger = isEV || !!(lead.chargerInfo && (lead.chargerInfo.make || lead.chargerInfo.model));
+  if (_involvesCharger) {
+    const _ci = lead.chargerInfo || {};
+    const _cdesc = [_ci.make, _ci.model].filter(Boolean).join(' ');
+    const _onSite = ms.chargerConfirmed?.done;
+    if (_onSite) {
+      states.push({ state:'done', icon:'✓', label:'Charger on site', meta:_cdesc, click:`openChipEditor('${lead.id}','charger')`, tip:'Charger confirmed on site. Click to view or undo.' });
+    } else if (_cdesc) {
+      states.push({ state:'pending', icon:'·', label:'Charger', meta:_cdesc, click:`openChipEditor('${lead.id}','charger')`, tip:'Model on file. Click to confirm it is on site.' });
+    } else {
+      states.push({ state:'pending', icon:'·', label:'Charger TBD', meta:'', click:`openChipEditor('${lead.id}','charger')`, tip:'Click to add charger details or confirm it is on site.' });
+    }
   }
 
   // Permit Received — manual upload-or-toggle.
@@ -10179,6 +10191,22 @@ function _renderPreInstallStrip(lead) {
     ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: (ms.finalInspPassed.date||'').slice(0,10), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
     : { state: 'pending', icon: '·', label: 'Inspection',  meta: '', click: `clickInspectionChip('${lead.id}')`, tip: 'Click to upload pass cert or mark passed without doc.' });
 
+  // Platform closeout — only for platform-pay sources (Qmerit/Electrum/Treehouse).
+  // This is what clears the "Awaiting Closeout" dashboard widget, so it must stay
+  // settable now that the full milestone checklist is gone.
+  if (typeof PLATFORM_PAY_SOURCES !== 'undefined' && PLATFORM_PAY_SOURCES.includes(lead.source)) {
+    states.push(ms.platformCloseout?.done
+      ? { state:'done',    icon:'✓', label:'Closeout', meta:(ms.platformCloseout.date||'').slice(0,10), click:`openChipEditor('${lead.id}','closeout')`, tip:'Platform closeout submitted. Click to view or undo.' }
+      : { state:'pending', icon:'·', label:'Closeout', meta:'', click:`openChipEditor('${lead.id}','closeout')`, tip:`Mark the ${lead.source} platform closeout done — clears the Awaiting Closeout list.` });
+  }
+
+  // Invoiced — the revenue trigger. Turns green when the job's value is counted.
+  const _invDone = isJobInvoiced(lead);
+  const _invAmt  = getJobValueAmount(lead);
+  states.push(_invDone
+    ? { state: 'done',    icon: '💰', label: 'Invoiced', meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Revenue counted — click to view or undo.' }
+    : { state: 'pending', icon: '·',  label: 'Invoice',  meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Mark invoiced to count this job value as revenue.' });
+
   const chipColor = (s) => ({
     done:       'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
     pending:    'background:rgba(243,156,18,0.10);color:#b9770e;border-color:#f39c12',
@@ -10193,113 +10221,321 @@ function _renderPreInstallStrip(lead) {
       <span style="font-size:12.5px">${c.icon}</span>
       ${escHtml(c.label)}
       ${c.meta ? `<span style="font-size:10.5px;opacity:0.75">· ${escHtml(c.meta)}</span>` : ''}
-    </div>`).join('')}</div>`;
+    </div>`).join('')}<div id="jd-chip-editor" style="display:none"></div></div>`;
 }
 
-// Click handlers for the strip's chips. Each pending chip offers two paths:
-// upload the supporting document (preferred) or mark the item as done with a
-// follow-up task to upload it later. Done chips offer to undo.
+// ── UNIFIED STATUS-CHIP INLINE EDITOR ──────────────────────────────────────
+// Every status chip opens the SAME editor panel inline, directly under the
+// Status strip (click the same chip again, or "Done", to close). This replaces
+// the old grab-bag of confirm() dialogs, task popups, and scroll-to-inline
+// behaviors so all chips behave identically.
+let _openChipKey = null;
+function openChipEditor(leadId, key){
+  const host = document.getElementById('jd-chip-editor');
+  if (!host) return;
+  if (_openChipKey === key && host.style.display !== 'none'){
+    closeChipEditor(); return;            // toggle closed when re-clicking the open chip
+  }
+  _openChipKey = key;
+  host.innerHTML = _chipEditorHTML(leadId, key);
+  host.style.display = 'block';
+  try { host.scrollIntoView({behavior:'smooth', block:'nearest'}); } catch(_){}
+}
+function closeChipEditor(){
+  const host = document.getElementById('jd-chip-editor');
+  if (host){ host.style.display='none'; host.innerHTML=''; }
+  _openChipKey = null;
+}
+function _chipEditorShell(title, inner){
+  return `<div style="margin-top:10px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:12.5px;font-weight:600;color:var(--text-primary)">${escHtml(title)}</div>
+      <button class="btn btn-g" style="padding:2px 10px;font-size:11px" onclick="closeChipEditor()">Done</button>
+    </div>${inner}</div>`;
+}
+// Edit the Job Value with a confirm-before-overwrite guard when a value already exists.
+function _editJobValue(leadId, val){
+  const lead = getLead(leadId); const cur = getJobValueAmount(lead);
+  const next = (val===''||val==null) ? null : Number(val);
+  if (cur && next !== cur){
+    const src = getJobValue(lead);
+    const prov = (src && src.source==='quote' && src.quoteId) ? ` (pulled from quote ${src.quoteId})` : '';
+    if (!confirm(`Change the recorded Job Value from $${cur.toLocaleString()}${prov} to $${(next||0).toLocaleString()}?`)){ renderJobDetail(leadId); return; }
+  }
+  setJobValue(leadId, val, {source:'manual'});
+  renderJobDetail(leadId);
+}
+function _chipEditorHTML(leadId, key){
+  const lead = getLead(leadId); if(!lead) return '';
+  const ms = lead.milestones || {};
+  const row  = (h)=>`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px">${h}</div>`;
+  const note = (t)=>`<div style="font-size:11px;color:var(--text-muted);line-height:1.4">${t}</div>`;
+  const btn  = (l,o)=>`<button class="btn btn-g" style="padding:4px 11px;font-size:12px" onclick="${o}">${l}</button>`;
+  const btnP = (l,o)=>`<button class="btn btn-p" style="padding:4px 11px;font-size:12px" onclick="${o}">${l}</button>`;
+  switch(key){
+    case 'quote': {
+      const quotes=getQuotes().filter(q=>q.leadId===leadId);
+      if(quotes.some(q=>q.status==='approved'||q.status==='contingent-approved'))
+        return _chipEditorShell('Quote', note('Approved automatically from a CRM quote — manage quotes in the Active Quotes panel.'));
+      const manual=!!ms.quoteApproved?.done;
+      return _chipEditorShell('Quote', row(manual
+        ? `<span style="font-size:12px;color:var(--text-secondary)">Marked approved manually.</span>`+btn('Set back to pending',`_setMilestone('${leadId}','quoteApproved',false);renderJobDetail('${leadId}')`)
+        : btnP('Mark approved (manual)',`_setMilestone('${leadId}','quoteApproved',true);renderJobDetail('${leadId}')`))
+        + note('Use manual approval for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).'));
+    }
+    case 'permit': {
+      const ap=ms.permitApplied||{}, rc=ms.permitReceived||{};
+      return _chipEditorShell('Permit',
+        row(`<span style="font-size:12px;width:96px">Permit #</span><input class="jd-fi" style="width:160px" value="${escHtml(ap.permitNo||'')}" onchange="saveMsField('${leadId}','permitApplied','permitNo',this.value)">`)+
+        row(`<span style="font-size:12px;width:96px">Applied date</span><input type="date" class="jd-fi" style="width:160px" value="${ap.date||''}" onchange="saveMsField('${leadId}','permitApplied','date',this.value)">`)+
+        row(`<span style="font-size:12px;width:96px">Received</span>`+(rc.done
+          ? `<span style="font-size:12px;color:var(--green)">✓ ${(rc.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','permitReceived',false);renderJobDetail('${leadId}')`)
+          : btnP('Upload permit doc',`_uploadJobDocument('${leadId}','permit')`)+btn('Mark received (no doc)',`_setMilestone('${leadId}','permitReceived',true);_createUploadFollowupTask('${leadId}','permit');renderJobDetail('${leadId}')`))));
+    }
+    case 'missutility': {
+      const mu=getTasks().find(t=>t.linkedId===leadId && t.id==='task-mu-'+leadId);
+      return _chipEditorShell('Miss Utility (811)', mu
+        ? row(btnP('Open 811 task',`closeChipEditor();openTaskDetail('${mu.id}')`)+`<span style="font-size:12px;color:var(--text-secondary)">Status: ${escHtml(mu.status)}</span>`)
+        : row(btnP('Create 811 task + email Sherri',`flagMissUtility('${leadId}')`))+note('Normally fires on quote approval — use this for jobs quoted outside the CRM.'));
+    }
+    case 'materials': {
+      const mat=getTasks().find(t=>t.linkedId===leadId && t.id==='task-mat-'+leadId);
+      return _chipEditorShell('Materials', mat
+        ? row(btnP('Open Materials task',`closeChipEditor();openTaskDetail('${mat.id}')`)+`<span style="font-size:12px;color:var(--text-secondary)">Status: ${escHtml(mat.status)}</span>`)
+        : note('No materials task — auto-created when a quote with special materials is approved.'));
+    }
+    case 'schedule': {
+      const im=ms.installScheduled||{};
+      return _chipEditorShell('Install date &amp; time',
+        row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
+            `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
+            (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
+        note('Set the day &amp; time here, or use the Outlook button to book it on the calendar.'));
+    }
+    case 'inspection': {
+      const fi=ms.finalInspPassed||{};
+      return _chipEditorShell('Final Inspection', row(fi.done
+        ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${(fi.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
+        : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`)));
+    }
+    case 'invoiced': {
+      const amt=getJobValueAmount(lead), inv=isJobInvoiced(lead);
+      return _chipEditorShell('Invoiced (revenue)',
+        row(`<span style="font-size:12px;width:96px">Job Value</span><input class="jd-fi" type="number" step="0.01" style="width:140px" value="${amt||''}" placeholder="0" onchange="_editJobValue('${leadId}',this.value)">`)+
+        row(inv
+          ? `<span style="font-size:12px;color:var(--green)">✓ Counted as revenue</span>`+btn('Undo invoiced',`markJobInvoiced('${leadId}',false);renderJobDetail('${leadId}')`)
+          : btnP('Mark invoiced — count as revenue',`if(markJobInvoiced('${leadId}',true))renderJobDetail('${leadId}')`))+
+        note('Marking invoiced counts this job\\'s value in revenue reports. QuickBooks handles collecting it.'));
+    }
+    case 'charger': {
+      const ci=lead.chargerInfo||{}; const desc=[ci.make,ci.model].filter(Boolean).join(' ');
+      const onSite=ms.chargerConfirmed?.done;
+      return _chipEditorShell('Charger',
+        row(desc
+          ? `<span style="font-size:12px;color:var(--text-secondary)">Model: <strong>${escHtml(desc)}</strong></span>`
+          : `<span style="font-size:12px;color:var(--text-muted)">No make/model yet — add it in the Charger Info section below.</span>`)+
+        row(onSite
+          ? `<span style="font-size:12px;color:var(--green)">✓ Confirmed on site</span>`+btn('Undo',`_setMilestone('${leadId}','chargerConfirmed',false);renderJobDetail('${leadId}')`)
+          : btnP('Confirm charger on site',`_setMilestone('${leadId}','chargerConfirmed',true);renderJobDetail('${leadId}')`))+
+        note('“On site” means the charger has physically arrived at the job — a key install-readiness check.'));
+    }
+    case 'closeout': {
+      const cl=ms.platformCloseout||{};
+      return _chipEditorShell((lead.source||'Platform')+' Closeout', row(cl.done
+        ? `<span style="font-size:12px;color:var(--green)">✓ Submitted ${(cl.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','platformCloseout',false);renderJobDetail('${leadId}')`)
+        : btnP('Mark closeout submitted',`_setMilestone('${leadId}','platformCloseout',true);renderJobDetail('${leadId}')`))
+        + note('Submitting the platform closeout clears this job from the "Awaiting Closeout" list on the dashboard.'));
+    }
+    default: return _chipEditorShell('—', note('Nothing to edit.'));
+  }
+}
+
+// Click handlers for the strip's chips — all now route to the unified inline
+// editor above so every chip behaves identically.
 
 // Schedule chip → open the Advanced checklist and jump to the install date/time row.
-function clickScheduleChip(leadId){
-  // Inline install date/time lives in the Status card now — focus it directly.
-  const d=document.getElementById('jd-install-date');
-  if(d){ d.scrollIntoView({behavior:'smooth',block:'center'}); setTimeout(()=>{ try{ d.focus(); if(d.showPicker) d.showPicker(); }catch(_){}},250); return; }
-  const det=document.getElementById('jd-advanced-ms'); if(det) det.open=true;
-  const row=document.getElementById('ms-item-installScheduled');
-  if(row){ setTimeout(()=>{ row.scrollIntoView({behavior:'smooth',block:'center'}); const dd=row.querySelector('input[type="date"]'); if(dd) dd.focus(); },60); }
+// ── JOB VALUE / REVENUE (backbone) ───────────────────────────────────────
+// One booked amount per job (`lead.jobValue`). Prefills from the accepted
+// quote, then floats free (editable, with a confirm before overwriting a
+// populated value). It counts as revenue ONLY when the job's Invoiced status
+// (`lead.invoiced`) is turned on — that's the single revenue trigger.
+// QuickBooks owns actual collection; the CRM tracks booked revenue.
+function getJobValue(lead){
+  return (lead && lead.jobValue && typeof lead.jobValue === 'object') ? lead.jobValue : null;
 }
-// Quote chip → auto from an approved CRM quote; otherwise lets the user mark it
-// approved manually (jobs quoted outside the CRM: Treehouse, Qmerit, Excel).
-function clickQuoteChip(leadId){
+function getJobValueAmount(lead){
+  const v = getJobValue(lead);
+  return (v && typeof v.amount === 'number' && isFinite(v.amount)) ? v.amount : 0;
+}
+function isJobInvoiced(lead){ return !!(lead && lead.invoiced && lead.invoiced.done); }
+// Set the job value. opts: {source:'quote'|'manual', quoteId}. Returns true on success.
+function setJobValue(leadId, amount, opts){
+  opts = opts || {};
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return false;
+  let amt = (amount === '' || amount == null) ? null : Number(amount);
+  if (amt != null && !isFinite(amt)) amt = null;
+  arr[i].jobValue = {
+    amount: amt,
+    source: opts.source || 'manual',
+    quoteId: opts.quoteId || null,
+    setAt: new Date().toISOString(),
+    setBy: (S.user && S.user.id) || ''
+  };
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  return true;
+}
+// Prefill the job value from a quote the user just accepted (source='quote').
+// If multiple quotes are accepted (additive scopes), pass the summed total.
+function setJobValueFromQuote(leadId, amount, quoteId){
+  return setJobValue(leadId, amount, { source: 'quote', quoteId: quoteId || null });
+}
+// Toggle the job's Invoiced (revenue-counted) flag. Refuses to turn on with a
+// blank job value so we never count $0. Returns true if the state changed.
+function markJobInvoiced(leadId, on){
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return false;
+  if (on){
+    if (!getJobValueAmount(arr[i])){
+      if (typeof toast === 'function') toast('Enter a Job Value first — there is no amount to count as revenue.', 'warning');
+      return false;
+    }
+    arr[i].invoiced = { done: true, at: new Date().toISOString(), by: (S.user && S.user.id) || '' };
+  } else {
+    delete arr[i].invoiced;
+  }
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  return true;
+}
+// One-time migration: give existing jobs a jobValue from their best existing
+// quote so revenue history isn't lost when Reports switch to jobValue. Idempotent
+// (skips jobs that already have a jobValue). Reports also fall back to quote
+// logic, so this is belt-and-suspenders. Returns count migrated.
+function backfillJobValues(){
+  const arr = getLeads(); const quotes = (typeof getQuotes === 'function') ? getQuotes() : [];
+  let n = 0;
+  arr.forEach(l => {
+    if (l.jobValue && typeof l.jobValue.amount === 'number') return; // already set
+    const cand = quotes
+      .filter(q => q.leadId === l.id && (q.status === 'invoiced' || q.status === 'approved' || q.status === 'contingent-approved'))
+      .sort((a,b) => new Date(b.customerActionAt || b.updatedAt || 0) - new Date(a.customerActionAt || a.updatedAt || 0))[0];
+    if (!cand) return;
+    l.jobValue = { amount: cand.quoteTotal || 0, source: 'quote', quoteId: cand.id, setAt: new Date().toISOString(), backfilled: true };
+    if (cand.status === 'invoiced') l.invoiced = { done: true, at: cand.invoiceDate || cand.updatedAt || new Date().toISOString(), backfilled: true };
+    n++;
+  });
+  if (n) saveLeads(arr);
+  return n;
+}
+
+// Qmerit program details — tucked behind the blue Qmerit chip in the header
+// (optional fields; most jobs don't need them, so they're out of the way).
+function showQmeritInfo(leadId){
   const lead=getLead(leadId); if(!lead) return;
-  const quotes=(typeof getQuotes==='function'?getQuotes():[]).filter(q=>q.leadId===leadId);
-  if(quotes.some(q=>q.status==='approved'||q.status==='contingent-approved')){ toast('This is auto-set from the approved quote in the CRM — no manual change needed.','info'); return; }
-  const done=!!lead.milestones?.quoteApproved?.done;
-  if(done){
-    if(confirm('Quote is marked approved (manually). Undo and set back to pending?')){ _setMilestone(leadId,'quoteApproved',false); renderJobDetail(leadId); }
-    return;
-  }
-  if(confirm('Mark the quote approved for this job?\n\nUse this for jobs quoted outside the CRM (Treehouse, Qmerit, or an Excel quote) where there is no CRM quote to auto-detect.')){
-    _setMilestone(leadId,'quoteApproved',true); renderJobDetail(leadId);
-  }
-}
-function clickPermitChip(leadId) {
-  const lead = getLead(leadId);
-  if (!lead) return;
-  const done = !!lead.milestones?.permitReceived?.done;
-  if (done) {
-    if (confirm('Permit is currently marked as received. Undo and mark pending again?')) {
-      _setMilestone(leadId, 'permitReceived', false);
-      renderJobDetail(leadId);
-    }
-    return;
-  }
-  // Pending — let user choose: upload or mark-only
-  const choice = confirm(
-    'Mark permit received:\n\n' +
-    'OK — Upload the permit document (preferred)\n' +
-    'Cancel — See more options'
-  );
-  if (choice) { _uploadJobDocument(leadId, 'permit'); return; }
-  // Second-chance: mark without upload
-  if (confirm('Mark permit received WITHOUT uploading the document?\n\nA follow-up task will be created to upload it later.')) {
-    _setMilestone(leadId, 'permitReceived', true);
-    _createUploadFollowupTask(leadId, 'permit');
-    renderJobDetail(leadId);
-  }
+  const q=lead.qmerit||{};
+  const rows=[
+    ['Program Sponsor', q.programSponsor],
+    ['Tier', q.tier],
+    ['EVSE provided by Qmerit', q.evseProvided ? ('Yes'+(q.evseModel?(' — '+q.evseModel):'')) : null],
+    ['Max Payout', q.maxPayout ? ('$'+Number(q.maxPayout).toLocaleString()) : null],
+    ['Customer Pay', q.customerPay ? ('$'+Number(q.customerPay).toLocaleString()) : null]
+  ].filter(r=>r[1]);
+  const body = rows.length
+    ? `<div style="display:flex;flex-direction:column;gap:9px">${rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:12px;font-size:13px"><span style="color:var(--text-muted)">${r[0]}</span><span style="font-weight:500;text-align:right">${escHtml(String(r[1]))}</span></div>`).join('')}</div>`
+    : `<div style="font-size:13px;color:var(--text-muted);line-height:1.5">No Qmerit program details recorded — these fields are optional and most jobs don't need them. Add them in <strong>Edit Info</strong> if a job ever requires payout tracking.</div>`;
+  openDrawer('Qmerit Program Details', body, `<button class="btn btn-g" onclick="closeDrawer()">Close</button>`);
 }
 
-function clickInspectionChip(leadId) {
-  const lead = getLead(leadId);
-  if (!lead) return;
-  const done = !!lead.milestones?.finalInspPassed?.done;
-  if (done) {
-    if (confirm('Final inspection is marked as passed. Undo?')) {
-      _setMilestone(leadId, 'finalInspPassed', false);
-      renderJobDetail(leadId);
-    }
-    return;
+// ── RIGHT RAIL: Property & Money (replaces the old milestone checklist) ─────
+// Job Value (prominent, top) → property aerial + Street View/Earth/Site View
+// links → Active Quotes with an Accept marker that prefills the Job Value.
+function _jobSiteAddress(lead){
+  if(!lead) return '';
+  const parts=[lead.siteStreet, lead.siteCity, (lead.siteState||'VA'), lead.siteZip].filter(Boolean);
+  if(parts.length>=2) return parts.join(', ');
+  return lead.siteAddress || lead.address || (parts.length?parts.join(', '):'');
+}
+function _renderJobRail(lead){
+  const id=lead.id;
+  const amt=getJobValueAmount(lead), inv=isJobInvoiced(lead), jv=getJobValue(lead);
+  const srcTag = jv
+    ? (jv.source==='quote' && jv.quoteId
+        ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">from quote ${escHtml(jv.quoteId)}${jv.backfilled?' (prior)':''}</div>`
+        : (jv.source==='manual' ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">manually entered</div>` : ''))
+    : '';
+  const valueSec = `<div class="jd-sec"><div class="jd-sb" style="padding:14px 16px">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:2px">Job Value</div>
+    <div style="font-size:28px;font-weight:700;letter-spacing:-1px;line-height:1.1;color:${inv?'var(--green)':'var(--text-primary)'}">${amt?('$'+amt.toLocaleString()):'<span style="color:var(--text-muted);font-size:19px;font-weight:500">Not set</span>'}</div>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input class="jd-fi" type="number" step="0.01" style="width:118px" value="${amt||''}" placeholder="Enter $" onchange="_editJobValue('${id}',this.value)">
+      ${inv
+        ? `<span style="font-size:11.5px;font-weight:600;color:var(--green)">💰 Counted</span><button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="markJobInvoiced('${id}',false);renderJobDetail('${id}')">Undo</button>`
+        : `<button class="btn btn-p" style="padding:3px 11px;font-size:11.5px" onclick="if(markJobInvoiced('${id}',true))renderJobDetail('${id}')">Mark invoiced</button>`}
+    </div>${srcTag}
+  </div></div>`;
+  const addr=_jobSiteAddress(lead);
+  const earthUrl = addr ? `https://earth.google.com/web/search/${encodeURIComponent(addr)}` : '';
+  const mapsUrl  = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : '';
+  const propSec = `<div class="jd-sec"><div class="jd-sh"><div class="jd-st">Property</div></div><div class="jd-sb" style="padding:12px 14px">
+    <img id="jd-aerial-${id}" alt="Aerial view of the property" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:10px">
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      <a id="jd-streetview-${id}" href="${mapsUrl||'#'}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🛣️ Street View</a>
+      ${earthUrl?`<a href="${earthUrl}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🌎 Google Earth</a>`:''}
+      <button class="btn btn-g" style="padding:5px 10px;font-size:11.5px" onclick="openSiteViewModal('${id}')">📐 Site View</button>
+    </div>
+    ${addr?'':'<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Add a site address to enable map views.</div>'}
+  </div></div>`;
+  const quotes=getQuotes().filter(q=>q.leadId===id).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
+  const acceptedId=lead.acceptedQuoteId;
+  const qRows = quotes.length ? quotes.map(q=>{
+    const isAcc = (acceptedId===q.id) || q.status==='approved' || q.status==='contingent-approved';
+    const stColor = (q.status==='approved'||q.status==='contingent-approved')?'var(--green)':(q.status==='invoiced')?'#8e44ad':(q.status==='declined')?'var(--red)':'var(--text-muted)';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:0;cursor:pointer" onclick="openQuoteBuilder('${q.id}')">
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">$${(q.quoteTotal||0).toLocaleString()}</div>
+        <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
+      </div>
+      <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
+    </div>`;
+  }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet.</div>`;
+  const quotesSec = `<div class="jd-sec"><div class="jd-sh" style="display:flex;align-items:center;justify-content:space-between"><div class="jd-st">Active Quotes</div><button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button></div><div class="jd-sb" style="padding:6px 14px 12px">${qRows}</div></div>`;
+  return valueSec + propSec + quotesSec;
+}
+async function _loadJobRailMap(leadId){
+  const lead=getLead(leadId); if(!lead) return;
+  const addr=_jobSiteAddress(lead); if(!addr) return;
+  let c=null; try{ c=await geocodeOne(addr, leadId); }catch(_){}
+  if(!c) return;
+  const img=document.getElementById('jd-aerial-'+leadId);
+  if(img){ img.src=`https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/${c.lon},${c.lat},17,0/320x150@2x?access_token=${MAPBOX_TOKEN}`; img.style.display='block'; }
+  const sv=document.getElementById('jd-streetview-'+leadId);
+  if(sv) sv.href=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lon}`;
+}
+// Accept a quote → mark it the winner, prefill Job Value, green the Quote chip,
+// and fire the pre-install tasks (811/materials) like the normal approval path.
+function acceptJobQuote(leadId, quoteId){
+  const lead=getLead(leadId); const q=getQuotes().find(x=>x.id===quoteId); if(!lead||!q) return;
+  if(lead.acceptedQuoteId===quoteId){
+    const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
+    if(i>=0){ delete arr[i].acceptedQuoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
+    renderJobDetail(leadId); return;
   }
-  const choice = confirm(
-    'Mark final inspection passed:\n\n' +
-    'OK — Upload the pass certificate (preferred)\n' +
-    'Cancel — See more options'
-  );
-  if (choice) { _uploadJobDocument(leadId, 'inspection-pass'); return; }
-  if (confirm('Mark final inspection passed WITHOUT uploading the certificate?\n\nA follow-up task will be created to upload it later.')) {
-    _setMilestone(leadId, 'finalInspPassed', true);
-    _createUploadFollowupTask(leadId, 'inspection-pass');
-    renderJobDetail(leadId);
-  }
+  const cur=getJobValueAmount(lead);
+  if(cur && cur!==(q.quoteTotal||0) && !confirm(`Accept this quote and set Job Value to $${(q.quoteTotal||0).toLocaleString()}?\n\n(Current Job Value is $${cur.toLocaleString()}.)`)) return;
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
+  if(i>=0){ arr[i].acceptedQuoteId=quoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
+  setJobValueFromQuote(leadId, q.quoteTotal||0, quoteId);
+  _setMilestone(leadId,'quoteApproved',true);
+  try{ if(typeof _autoCreatePreInstallTasks==='function') _autoCreatePreInstallTasks(q); }catch(_){}
+  renderJobDetail(leadId);
 }
 
-function clickMissUtilityChip(leadId) {
-  const tasks = getTasks().filter(t => t.linkedId === leadId);
-  const muTask = tasks.find(t => t.id === 'task-mu-' + leadId);
-  if (muTask) {
-    openTaskDetail(muTask.id);
-  } else {
-    // Required but no task yet (quote not approved, or detection just turned
-    // on) — offer to create it now instead of making the user wait.
-    const lead = getLead(leadId);
-    if (lead && confirm('No 811 task exists yet (it normally fires on quote approval).\n\nCreate it now and email Sherri?')) {
-      const created = _createMissUtilityTask(lead, '', 'This job');
-      toast(created ? '811 task created + Sherri emailed' : '811 task already exists', 'success');
-      if (typeof openJobDetail === 'function' && S.jobDetailId === leadId) openJobDetail(leadId);
-    }
-  }
-}
-
-function clickMaterialsChip(leadId) {
-  const tasks = getTasks().filter(t => t.linkedId === leadId);
-  const matTask = tasks.find(t => t.id === 'task-mat-' + leadId);
-  if (matTask) {
-    openTaskDetail(matTask.id);
-  } else {
-    toast('No Materials task yet — auto-created when the quote is approved.', 'info');
-  }
-}
+function clickScheduleChip(leadId){ openChipEditor(leadId,'schedule'); }
+function clickQuoteChip(leadId){ openChipEditor(leadId,'quote'); }
+function clickPermitChip(leadId){ openChipEditor(leadId,'permit'); }
+function clickInspectionChip(leadId){ openChipEditor(leadId,'inspection'); }
+function clickMissUtilityChip(leadId){ openChipEditor(leadId,'missutility'); }
+function clickMaterialsChip(leadId){ openChipEditor(leadId,'materials'); }
 
 // Set a milestone done/undone with optional date and persist.
 function _setMilestone(leadId, key, done) {
@@ -10444,21 +10680,38 @@ function checkAutoArchive(leadId) {
   }
 }
 
+// Moving into 'not-won' records the job as lost (reason captured in the Not Won
+// section); moving back out clears the lost flag. Stamps the stage it was lost
+// from so "where deals die" analytics survive the move.
+function _applyNotWonTransition(leadObj, prevStage, newStage){
+  if (newStage === 'not-won' && prevStage !== 'not-won'){
+    const li = leadObj.lostInfo || {};
+    leadObj.lostInfo = { isLost:true, reason: li.reason||'', notes: li.notes||'', lostAt: li.lostAt||new Date().toISOString(), lostAtStage: prevStage||'' };
+  } else if (prevStage === 'not-won' && newStage !== 'not-won'){
+    if (leadObj.lostInfo) leadObj.lostInfo.isLost = false;
+  }
+}
 function updateJobStage(leadId, newStage) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
+  const _prevStage = arr[idx].stage;
+  _applyNotWonTransition(arr[idx], _prevStage, newStage);
   arr[idx].stage = newStage;
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
   if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
-  // update chips inline — preserve the Lost chip if this lead is marked lost
-  const chipsEl = document.getElementById('jd-stage-chips');
-  if (chipsEl) {
-    const li = arr[idx].lostInfo;
-    const lostChip = li?.isLost ? `<span class="chip chip-lost" style="margin-left:6px">Lost${li.reason?' · '+escHtml(li.reason):''}</span>` : '';
-    chipsEl.innerHTML = stageChip(newStage) + lostChip;
+  // Entering/leaving Not Won toggles the reason section, so re-render fully.
+  if (S.jobDetailId === leadId && (newStage === 'not-won' || _prevStage === 'not-won')) {
+    renderJobDetail(leadId);
+  } else {
+    const chipsEl = document.getElementById('jd-stage-chips');
+    if (chipsEl) {
+      const li = arr[idx].lostInfo;
+      const lostChip = li?.isLost ? `<span class="chip chip-lost" style="margin-left:6px">Lost${li.reason?' · '+escHtml(li.reason):''}</span>` : '';
+      chipsEl.innerHTML = stageChip(newStage) + lostChip;
+    }
   }
   toast('Stage: ' + (STAGE_MAP[newStage]?.label || newStage), 'success');
 }
@@ -11114,14 +11367,15 @@ function saveLostInfo(leadId, silent=false) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
-  const isLost = document.getElementById('lost-cb')?.checked || false;
-  const wasAlreadyLost = !!arr[idx].lostInfo?.isLost;
+  // Lost state is driven by the 'Not Won' stage now (the old checkbox is gone).
+  const _prevLost = arr[idx].lostInfo || {};
+  const isLost = arr[idx].stage === 'not-won' || !!(document.getElementById('lost-cb') && document.getElementById('lost-cb').checked);
   arr[idx].lostInfo = {
     isLost,
-    reason: isLost ? (document.getElementById('lost-reason')?.value || '') : '',
-    notes:  isLost ? (document.getElementById('lost-notes')?.value  || '') : '',
-    // Preserve original lostAt timestamp on subsequent edits, set fresh if newly lost
-    lostAt: isLost ? (wasAlreadyLost ? (arr[idx].lostInfo?.lostAt || new Date().toISOString()) : new Date().toISOString()) : ''
+    reason: isLost ? ((document.getElementById('lost-reason') ? document.getElementById('lost-reason').value : '') || _prevLost.reason || '') : '',
+    notes:  isLost ? ((document.getElementById('lost-notes') ? document.getElementById('lost-notes').value : '') || _prevLost.notes || '') : '',
+    lostAt: isLost ? (_prevLost.lostAt || new Date().toISOString()) : '',
+    lostAtStage: isLost ? (_prevLost.lostAtStage || '') : ''
   };
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
@@ -11191,10 +11445,10 @@ function renderJobDetail(id) {
       Pipeline
     </button>
     <div class="jd-meta">
-      <div class="jd-id">${id}</div>
+      <div class="jd-id">${id}${lead.createdAt?`<span style="font-weight:400;color:var(--text-muted);font-size:11px;margin-left:8px">· Received ${lead.createdAt.slice(0,10)}</span>`:''}</div>
       <div class="jd-name">${custName}</div>
       <div class="jd-chips">
-        ${typeChip(lead.jobType)}${sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
+        ${typeChip(lead.jobType)}${lead.source==='Qmerit'?`<span onclick="showQmeritInfo('${id}')" style="cursor:pointer" title="View Qmerit program details">${sourceChip(lead.source)}</span>`:sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
         ${lead.inspectionRequired?`<span class="chip chip-flag">⚠ In-person Inspection</span>`:''}
       </div>
       <div class="stg-row">
@@ -11385,6 +11639,23 @@ function renderJobDetail(id) {
     </div>
   </div>`;
 
+  // ── Not Won (reason/notes) — shows only when the job is in the Not Won stage.
+  // Replaces the old "Mark as Lost" checkbox; lost state is driven by the stage.
+  const notWonSec = (lead.stage === 'not-won') ? `<div class="jd-sec">
+    <div class="jd-sh"><div class="jd-st" style="color:var(--red)">Not Won — why?</div></div>
+    <div class="jd-sb" onchange="autoSaveLostNow('${id}')" oninput="autoSaveLost('${id}')">
+      <div class="jd-fg">
+        <div class="jd-f"><div class="jd-fl">Reason</div>
+          <select class="jd-fsel" id="lost-reason"><option value=""${!lostInfo.reason?' selected':''}>— Select a reason —</option>${lostReasonOpts}</select>
+        </div>
+        ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Not Won</div><div class="jd-fv" style="font-size:12px">${lostInfo.lostAt.slice(0,10)}${lostInfo.lostAtStage?` · from ${STAGE_MAP[lostInfo.lostAtStage]?.label||lostInfo.lostAtStage}`:''}</div></div>`:''}
+      </div>
+      <div class="jd-f" style="margin-top:8px"><div class="jd-fl">Notes (optional)</div>
+        <textarea class="jd-fi" id="lost-notes" placeholder="Quick context — competitor name, price gap, etc." rows="2" style="width:100%;resize:vertical;font-family:inherit;font-size:12.5px">${escHtml(lostInfo.notes||'')}</textarea>
+      </div>
+    </div>
+  </div>` : '';
+
   // ── Scope of Work ──
   const scopeSec = `<div class="jd-sec">
     <div class="jd-sh">
@@ -11395,7 +11666,7 @@ function renderJobDetail(id) {
       </button>
     </div>
     <div class="jd-sb">
-      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…" oninput="autoSaveScope('${id}')">${(lead.scopeOfWork||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…" oninput="autoSaveScope('${id}')">${(lead.scopeOfWork||lead.description||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
     </div>
   </div>`;
 
@@ -11787,21 +12058,12 @@ function renderJobDetail(id) {
   // is kept available as an Advanced collapsible for users who want the full
   // checklist for unusual jobs.
   const preInstallStripHtml = _renderPreInstallStrip(lead);
-  // Significant milestones live here, in the Job Details column, where they
-  // matter and there's room — chips for the key statuses + an inline install
-  // date/time you can set without opening the full checklist.
-  const _ims = lead.milestones?.installScheduled || {};
+  // Status section = the chip strip + the unified inline editor (the install
+  // date/time now lives behind the Schedule chip, like every other chip).
   const statusSec = `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Status</div></div>
     <div class="jd-sb">
       ${preInstallStripHtml}
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span class="jd-fl" style="margin:0;display:inline-flex;align-items:center;gap:5px">📅 Install date &amp; time</span>
-        <input type="date" class="jd-fi" id="jd-install-date" value="${_ims.date||''}" onchange="saveMsField('${id}','installScheduled','date',this.value)" style="width:150px">
-        <input type="time" class="jd-fi" value="${_ims.time||''}" onchange="saveMsField('${id}','installScheduled','time',this.value)" style="width:120px">
-        ${_ims.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''}
-        ${(()=>{ const c=lead.scheduling?.confirmations?.[_ims.date]; if(!c||!c.status) return ''; const b=(typeof _schedConfirmBadge==='function')?_schedConfirmBadge(c.status,c.note):{label:c.status,color:'#888',title:''}; return `<span title="${escHtml(b.title||'')}" style="font-size:11px;font-weight:600;color:${b.color};border:1px solid ${b.color};border-radius:12px;padding:2px 9px;white-space:nowrap">${b.label}</span>`; })()}
-      </div>
     </div>
   </div>`;
   // Sidebar keeps the full, granular checklist (collapsed) for the long tail.
@@ -11827,14 +12089,16 @@ function renderJobDetail(id) {
   // custActionBanner sits between the header and the two-column wrap so it
   // spans the full content width and is the first thing the user sees.
   dv.innerHTML = hdr + custActionBanner + `<div class="jd-wrap">
-    <div>${custSec}${smsSec}${jobSec}${statusSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
-    <div>${milestoneSec}</div>
+    <div>${custSec}${smsSec}${statusSec}${notWonSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
+    <div>${_renderJobRail(lead)}</div>
   </div>`;
 
   document.getElementById('content').scrollTop = 0;
 
   // Asynchronously load the SMS thread for this lead.
   try { renderSMSThread(id); } catch (e) { console.warn('[GK] renderSMSThread failed:', e); }
+  // Fill the rail's aerial thumbnail + exact Street View link (async geocode).
+  try { _loadJobRailMap(id); } catch (e) { console.warn('[GK] rail map load failed:', e); }
 }
 
 // Helper: open new quote pre-linked to a specific job
@@ -13807,6 +14071,32 @@ function inPeriod(dateStr, period) {
   return d>=s && d<=e;
 }
 
+// ── REVENUE SOURCE OF TRUTH ────────────────────────────────────────────────
+// Revenue = one Job Value per job, counted only when the job is marked Invoiced
+// (lead.invoiced). Returns "revenue lines" shaped like quotes (quoteTotal,
+// jobType, source, leadId, customerId, invoiceDate) so the existing report
+// code works unchanged. Dated by the invoiced timestamp.
+function _maybeBackfillJobValues(){
+  try {
+    if (localStorage.getItem('gk_jobvalue_backfill_v1')) return;
+    const n = backfillJobValues();
+    localStorage.setItem('gk_jobvalue_backfill_v1','1');
+    if (n) console.log('[GK] Backfilled Job Value on', n, 'jobs');
+  } catch(_){}
+}
+function _revenueLines(period){
+  _maybeBackfillJobValues();
+  const out=[];
+  getLeads().forEach(l=>{
+    if (!isJobInvoiced(l)) return;
+    const amt = getJobValueAmount(l); if (!amt) return;
+    const at = (l.invoiced && l.invoiced.at) || l.updatedAt;
+    if (period && !inPeriod(at, period)) return;
+    out.push({ leadId:l.id, customerId:l.customerId, jobType:l.jobType, source:l.source, quoteTotal:amt, invoiceDate:at, updatedAt:at, status:'invoiced' });
+  });
+  return out;
+}
+
 // ── DASHBOARD WIDGET (full) ──
 function updateDashboardWidget() {
   // Mobile-route diagnostic banner. Only shows when something seems off
@@ -13861,7 +14151,7 @@ function updateDashboardWidget() {
   if (isAdmin) {
     const now = new Date();
     const ms = new Date(now.getFullYear(), now.getMonth(), 1);
-    const mRev = quotes.filter(q=>q.status==='invoiced'&&q.invoiceDate&&new Date(q.invoiceDate)>=ms)
+    const mRev = _revenueLines(null).filter(q=>q.invoiceDate&&new Date(q.invoiceDate)>=ms)
                        .reduce((s,q)=>s+(q.quoteTotal||0),0);
     const mrEl = document.getElementById('stat-month-rev');
     if (mrEl) mrEl.textContent = fmtDollar(mRev);
@@ -17547,7 +17837,7 @@ function rptOpenPipeline() {
 
 // ── 2. THIS MONTH ──
 function rptThisMonth(period) {
-  const quotes=getQuotes().filter(q=>(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+  const quotes=_revenueLines(period);
   const leads=getLeads(),custs=getCustomers();
   if (!quotes.length) return emptyRpt('No invoiced jobs for this period.');
   const total=quotes.reduce((s,q)=>s+(q.quoteTotal||0),0);
@@ -17614,7 +17904,7 @@ function rptOverdueTasks() {
 
 // ── 4. REVENUE BY SERVICE TYPE ──
 function rptRevenueByType(period) {
-  const quotes=getQuotes().filter(q=>(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+  const quotes=_revenueLines(period);
   if (!quotes.length) return emptyRpt('No revenue data for this period.');
   const total=quotes.reduce((s,q)=>s+(q.quoteTotal||0),0);
   const byType={};
@@ -17652,7 +17942,7 @@ function rptRevenueByType(period) {
 
 // ── 5. QMERIT ROYALTY ──
 function rptQmeritRoyalty(period) {
-  const allEV=getQuotes().filter(q=>q.jobType==='ev-residential'&&(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+  const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
   if (!allEV.length) return emptyRpt('No residential EV installs for this period.');
   const totalRev=allEV.reduce((s,q)=>s+(q.quoteTotal||0),0);
   const royalty=totalRev*0.03;
@@ -17874,7 +18164,7 @@ function exportReportCSV() {
       filename='open-pipeline';break;
     }
     case 'thismonth':case 'revenue':{
-      const quotes=getQuotes().filter(q=>(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+      const quotes=_revenueLines(period);
       const leads=getLeads(),custs=getCustomers();
       rows=[['Job ID','Customer','Type','Source','Amount','Invoice Date']];
       quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',q.quoteTotal||0,(q.invoiceDate||q.updatedAt||'').slice(0,10)]);});
@@ -17889,14 +18179,14 @@ function exportReportCSV() {
       filename='overdue-tasks';break;
     }
     case 'royalty':{
-      const allEV=getQuotes().filter(q=>q.jobType==='ev-residential'&&(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+      const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
       const leads=getLeads(),custs=getCustomers();
       rows=[['Job ID','Customer','Source','Amount','3% Royalty','Date']];
       allEV.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,(q.quoteTotal||0)*0.03,(q.invoiceDate||q.updatedAt||'').slice(0,10)]);});
       filename='qmerit-royalty';break;
     }
     case 'margins':{
-      const quotes=getQuotes().filter(q=>(q.status==='invoiced'||q.status==='approved')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+      const quotes=_revenueLines(period);
       const leads=getLeads(),custs=getCustomers();
       rows=[['Job ID','Customer','Type','Source','L&M','Qmerit Fee','Permit','Total','Margin %']];
       quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);const lm=q.laborAndMaterials||0,fee=q.qmeritFee||0;const pct=lm>0?(((lm-fee)/lm)*100).toFixed(1):'';rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',lm,fee,q.permitFee||0,q.quoteTotal||0,pct]);});
