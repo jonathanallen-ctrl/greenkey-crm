@@ -10325,7 +10325,7 @@ function _chipEditorHTML(leadId, key){
         row(inv
           ? `<span style="font-size:12px;color:var(--green)">✓ Counted as revenue</span>`+btn('Undo invoiced',`markJobInvoiced('${leadId}',false);renderJobDetail('${leadId}')`)
           : btnP('Mark invoiced — count as revenue',`if(markJobInvoiced('${leadId}',true))renderJobDetail('${leadId}')`))+
-        note('Marking invoiced counts this job\\'s value in revenue reports. QuickBooks handles collecting it.'));
+        note('Marking invoiced counts the job value in revenue reports. QuickBooks handles collecting it.'));
     }
     case 'charger': {
       const ci=lead.chargerInfo||{}; const desc=[ci.make,ci.model].filter(Boolean).join(' ');
