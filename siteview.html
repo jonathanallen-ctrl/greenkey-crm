@@ -81,7 +81,7 @@ function haversineFt(a,b){ const R=6371000,t=Math.PI/180; const dLa=(b.lat-a.lat
 function lineFt(pts){ let t=0; for(let i=1;i<pts.length;i++)t+=haversineFt(pts[i-1],pts[i]); return t; }
 function polyAreaSqft(pts){ if(pts.length<3)return 0; const lat0=pts.reduce((a,p)=>a+p.lat,0)/pts.length*Math.PI/180, R=6371000; const xy=pts.map(p=>({x:p.lon*Math.PI/180*Math.cos(lat0)*R, y:p.lat*Math.PI/180*R})); let a=0; for(let i=0;i<xy.length;i++){ const j=(i+1)%xy.length; a+=xy[i].x*xy[j].y-xy[j].x*xy[i].y; } return Math.abs(a/2)*10.7639; }
 
-function loadBase(){ if(!center)return; computeScale();
+function loadBase(deferRedraw){ if(!center)return; computeScale();
   let url;
   if(basemap==='va'){
     // ArcGIS export for the EXACT lat/lon window of the current view (corners from unproject → 3857),
@@ -95,7 +95,10 @@ function loadBase(){ if(!center)return; computeScale();
   baseImg.onload=()=>{ document.getElementById('hint').style.display='none'; document.getElementById('scale-badge').style.display='block'; redraw(); };
   baseImg.onerror=()=>{ if(basemap==='va'){ basemap='mapbox'; setBasemapBtn(); loadBase(); return; }  // VA service unavailable/here → silently fall back to Mapbox
     document.getElementById('hint').textContent='Could not load imagery — check the address or connection.'; document.getElementById('hint').style.display='flex'; };
-  baseImg.crossOrigin='anonymous'; baseImg.src=url; redraw();
+  // deferRedraw (zoom): keep the current pin/measures aligned with the CURRENT
+  // image until the new one loads, so nothing drifts during the fetch. The
+  // onload handler above redraws crisp once the new image is in.
+  baseImg.crossOrigin='anonymous'; baseImg.src=url; if(!deferRedraw) redraw();
 }
 function setBasemapBtn(){ const b=document.getElementById('btn-base'); if(b) b.classList.toggle('on', basemap==='va'); }
 function drawScaleBadge(){ const b=document.getElementById('scale-badge'); if(!metersPerPx){b.style.display='none';return;} const raw=metersPerPx*110*3.28084; const nice=[10,20,25,50,75,100,150,200,300,500].reduce((a,c)=>Math.abs(c-raw)<Math.abs(a-raw)?c:a); const px=(nice/3.28084)/metersPerPx/S2; b.innerHTML=`<span style="display:inline-block;width:${px.toFixed(0)}px;height:4px;background:#1a1f2a;border-radius:2px;vertical-align:middle"></span> ${nice} ft`; }
@@ -142,7 +145,7 @@ function setTool(t){ finish(); tool=t; ['pan','dist','area'].forEach(x=>document
 document.getElementById('t-pan').onclick=()=>setTool('pan'); document.getElementById('t-dist').onclick=()=>setTool('dist'); document.getElementById('t-area').onclick=()=>setTool('area'); setTool('pan');
 document.getElementById('zin').onclick=()=>{ if(center&&zoom<20){zoom++;loadBase();} }; document.getElementById('zout').onclick=()=>{ if(center&&zoom>15){zoom--;loadBase();} };
 document.getElementById('btn-base').onclick=()=>{ basemap=(basemap==='va'?'mapbox':'va'); try{localStorage.setItem('gk_siteview_basemap',basemap);}catch(e){} setBasemapBtn(); if(center)loadBase(); }; setBasemapBtn();
-canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault(); const nz=zoom+(e.deltaY<0?1:-1); if(nz<15||nz>20)return; const p=evtPt(e); const g=unproject(p.x,p.y); center={lon:g.lon,lat:g.lat}; /* zoom toward the cursor */ zoom=nz; loadBase(); },{passive:false});
+canvas.addEventListener('wheel',e=>{ if(!center)return; e.preventDefault(); const nz=zoom+(e.deltaY<0?1:-1); if(nz<15||nz>20)return; const p=evtPt(e); const g=unproject(p.x,p.y); /* geo point under cursor (old zoom) */ zoom=nz; const gw=toW(g.lon,g.lat); /* proper zoom-to-cursor: solve for the center that keeps g under the cursor at the new zoom, so the property + pin stay put instead of the map jumping to the cursor */ center=frW(gw.x-(p.x-canvas.width/2)/S2, gw.y-(p.y-canvas.height/2)/S2); loadBase(true); },{passive:false});
 
 // address search
 const addr=document.getElementById('addr'), drop=document.getElementById('addr-drop'); let gt=null;

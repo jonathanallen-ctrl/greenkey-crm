@@ -746,7 +746,7 @@
       Schedule in Outlook
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.5">
-      Pick the type of appointment — subject and body will pre-fill from this job's data. Edit anything before opening Outlook. You'll pick the date, time, and target calendar in Outlook itself.
+      Pick the type of appointment — subject and body pre-fill from this job's data. Set the date and time below; for an <strong>Installation</strong> appointment this also sets the job's install date/time (the Schedule status). It then creates the event on your chosen calendar.
     </div>
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Appointment Type</div>
@@ -2657,7 +2657,7 @@ function renderSchedulingSettings() {
 
     <div style="margin-top:28px;padding-top:18px;border-top:1px solid var(--border)">
       <div class="srl" style="font-size:14px;font-weight:600;margin-bottom:6px">Outlook Calendar Target</div>
-      <div class="srd" style="margin-bottom:12px">When you click <strong>Schedule in Outlook</strong> on a job, the event is created on this calendar. Default is your primary inbox calendar — pick a different one (e.g. <em>GreenKey Business Calendar</em>) so events land in the right place automatically.</div>
+      <div class="srd" style="margin-bottom:12px">When you click <strong>Schedule in Outlook</strong> on a job, the event is created on this calendar. Default is your primary inbox calendar — pick a different one (e.g. <em>GreenKey Business Calendar</em>). This is set <strong>per device</strong>: each person picks their own here, and it never changes your Outlook's own default calendar.</div>
       ${calBlock}
       <div id="cal-picker-wrap" style="margin-top:12px"></div>
       <div style="margin-top:10px;font-size:11.5px;color:var(--text-muted);font-style:italic">First-time use will prompt you to grant Microsoft the <code>Calendars.ReadWrite</code> permission. After that, picking and changing is instant.</div>
@@ -10184,15 +10184,12 @@ function _renderPreInstallStrip(lead) {
 
 // Schedule chip → open the Advanced checklist and jump to the install date/time row.
 function clickScheduleChip(leadId){
+  // Inline install date/time lives in the Status card now — focus it directly.
+  const d=document.getElementById('jd-install-date');
+  if(d){ d.scrollIntoView({behavior:'smooth',block:'center'}); setTimeout(()=>{ try{ d.focus(); if(d.showPicker) d.showPicker(); }catch(_){}},250); return; }
   const det=document.getElementById('jd-advanced-ms'); if(det) det.open=true;
   const row=document.getElementById('ms-item-installScheduled');
-  if(row){
-    setTimeout(()=>{ row.scrollIntoView({behavior:'smooth',block:'center'}); },30);
-    const d=row.querySelector('input[type="date"]');
-    const orig=row.style.background; row.style.transition='background .4s'; row.style.background='rgba(243,156,18,0.18)';
-    setTimeout(()=>{ if(d) d.focus(); },380);
-    setTimeout(()=>{ row.style.background=orig||''; },1900);
-  }
+  if(row){ setTimeout(()=>{ row.scrollIntoView({behavior:'smooth',block:'center'}); const dd=row.querySelector('input[type="date"]'); if(dd) dd.focus(); },60); }
 }
 // Quote chip → auto from an approved CRM quote; otherwise lets the user mark it
 // approved manually (jobs quoted outside the CRM: Treehouse, Qmerit, Excel).
@@ -11337,7 +11334,6 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">Lead Source</div><div class="jd-fv">${sourceChip(lead.source)}</div></div>
         <div class="jd-f"><div class="jd-fl">Date Received</div><div class="jd-fv" style="font-size:12px">${lead.createdAt?.slice(0,10)||'—'}</div></div>
         <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(Math.max(lead.permitFee || 0, defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction })))}</div></div>
-        <div class="jd-f"><div class="jd-fl">Info Complete</div><div class="jd-fv">${lead.infoComplete?`<span class="chip chip-ok">✓ Yes</span>`:`<span class="chip chip-warn">Pending</span>`}</div></div>
       </div>
       ${lead.description?`<div class="jd-f" style="margin-top:8px"><div class="jd-fl">Description</div><div class="jd-fv" style="font-size:12.5px;white-space:pre-wrap;color:var(--text-secondary)">${lead.description}</div></div>`:''}
       <div style="margin-top:8px"><div class="jd-fl" style="margin-bottom:4px">Quote</div>${quoteLinkHtml}</div>
@@ -11772,15 +11768,29 @@ function renderJobDetail(id) {
   // is kept available as an Advanced collapsible for users who want the full
   // checklist for unusual jobs.
   const preInstallStripHtml = _renderPreInstallStrip(lead);
-  const milestoneSec = `<div class="jd-sec" style="position:sticky;top:14px">
-    <div class="jd-sh">
-      <div class="jd-st">Pre-Install Status</div>
-    </div>
-    <div style="padding:10px 12px">
+  // Significant milestones live here, in the Job Details column, where they
+  // matter and there's room — chips for the key statuses + an inline install
+  // date/time you can set without opening the full checklist.
+  const _ims = lead.milestones?.installScheduled || {};
+  const statusSec = `<div class="jd-sec">
+    <div class="jd-sh"><div class="jd-st">Status</div></div>
+    <div class="jd-sb">
       ${preInstallStripHtml}
-      <details id="jd-advanced-ms" style="margin-top:14px">
-        <summary style="cursor:pointer;font-size:11.5px;color:var(--text-muted);user-select:none;padding:4px 0">Advanced — full milestone checklist</summary>
-        <div style="max-height:calc(100vh - 320px);overflow-y:auto;padding:8px 0;margin-top:6px;border-top:1px solid var(--border)">
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="jd-fl" style="margin:0;display:inline-flex;align-items:center;gap:5px">📅 Install date &amp; time</span>
+        <input type="date" class="jd-fi" id="jd-install-date" value="${_ims.date||''}" onchange="saveMsField('${id}','installScheduled','date',this.value)" style="width:150px">
+        <input type="time" class="jd-fi" value="${_ims.time||''}" onchange="saveMsField('${id}','installScheduled','time',this.value)" style="width:120px">
+        ${_ims.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''}
+      </div>
+    </div>
+  </div>`;
+  // Sidebar keeps the full, granular checklist (collapsed) for the long tail.
+  const milestoneSec = `<div class="jd-sec">
+    <div class="jd-sh"><div class="jd-st">Milestone Checklist</div></div>
+    <div style="padding:10px 12px">
+      <details id="jd-advanced-ms" open>
+        <summary style="cursor:pointer;font-size:11.5px;color:var(--text-muted);user-select:none;padding:4px 0">Full milestone checklist</summary>
+        <div style="max-height:calc(100vh - 220px);overflow-y:auto;padding:8px 0;margin-top:6px;border-top:1px solid var(--border)">
           ${msHtml}
         </div>
       </details>
@@ -11797,7 +11807,7 @@ function renderJobDetail(id) {
   // custActionBanner sits between the header and the two-column wrap so it
   // spans the full content width and is the first thing the user sees.
   dv.innerHTML = hdr + custActionBanner + `<div class="jd-wrap">
-    <div>${custSec}${smsSec}${jobSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
+    <div>${custSec}${smsSec}${jobSec}${statusSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${milestoneSec}</div>
   </div>`;
 
@@ -21853,19 +21863,23 @@ function _buildSchedContent(lead, cust, quote, type) {
 // Admin picks once in Settings → Scheduling; the modal honors it on every
 // event creation. Falls back to /me/calendar (user's default) if unset.
 
+// Device-local (NOT synced). Microsoft Graph calendar IDs are per-USER, and
+// people (e.g. Sherri) may want a different target than the business calendar —
+// so each person picks their own once, on their own machine, with no cross-user
+// clobbering. This never changes Outlook's own default calendar; it only tells
+// the CRM which calendar to post job events to.
+const _SCHED_CAL_KEY = 'gk_sched_calendar';
 function getSchedTargetCalendar() {
-  const p = getPrefs();
-  return p.outlookCalendar && p.outlookCalendar.id ? p.outlookCalendar : null;
+  try { const v = localStorage.getItem(_SCHED_CAL_KEY); if (v) { const o = JSON.parse(v); if (o && o.id) return o; } } catch(e){}
+  return null;
 }
 function saveSchedTargetCalendar(id, name) {
-  const p = getPrefs();
-  p.outlookCalendar = { id, name };
-  savePrefs(p);
+  try { localStorage.setItem(_SCHED_CAL_KEY, JSON.stringify({ id, name })); } catch(e){}
 }
 function clearSchedTargetCalendar() {
-  const p = getPrefs();
-  delete p.outlookCalendar;
-  savePrefs(p);
+  try { localStorage.removeItem(_SCHED_CAL_KEY); } catch(e){}
+  // Remove any legacy synced copy so an old cross-user ID can't resurrect.
+  try { const p = getPrefs(); if (p.outlookCalendar) { delete p.outlookCalendar; savePrefs(p); } } catch(e){}
 }
 
 // Fetch the user's calendars from Graph. Cached briefly to avoid spamming the
@@ -21957,6 +21971,23 @@ async function openSchedInOutlook() {
   if (!date)            { toast('Pick a date', 'error'); return; }
   if (!start || !end)   { toast('Pick a start and end time', 'error'); return; }
   if (start >= end)     { toast('End time must be after start time', 'error'); return; }
+
+  // Installation appointments feed the job's install schedule (single source of
+  // truth) — so the Schedule chip/milestone reflects the Outlook booking
+  // automatically. Other types (walkdown, inspection, etc.) don't touch it, and
+  // externally-scheduled jobs can still set it manually on the Schedule chip.
+  if ((document.getElementById('sched-type')?.value || '') === 'installation') {
+    try {
+      const _arr = getLeads(); const _i = _arr.findIndex(l => l.id === _schedLeadId);
+      if (_i >= 0) {
+        if (!_arr[_i].milestones) _arr[_i].milestones = {};
+        _arr[_i].milestones.installScheduled = { ...(_arr[_i].milestones.installScheduled||{}), done:true, date, time:start, viaOutlook:true };
+        _arr[_i].updatedAt = new Date().toISOString();
+        saveLeads(_arr);
+        try { if (typeof renderJobDetail === 'function') renderJobDetail(_schedLeadId); } catch(_){}
+      }
+    } catch(e){ console.warn('[GK] install-schedule stamp failed:', e); }
+  }
 
   const bodyHtml = _schedBodyToHtml(bodyPlain);
   const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
