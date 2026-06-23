@@ -1179,14 +1179,17 @@
           <svg id="theme-icon-light" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         </button>
         <div id="bell-wrap" style="position:relative">
-          <button class="btn btn-g" id="bell-btn" onclick="toggleSmsBell()" title="Recent customer SMS" aria-label="Notifications" style="padding:8px 10px;position:relative">
+          <button class="btn btn-g" id="bell-btn" onclick="toggleSmsBell()" title="Customer notifications — texts, confirmations, quote responses" aria-label="Notifications" style="padding:8px 10px;position:relative">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             <span id="bell-badge" style="display:none;position:absolute;top:-3px;right:-3px;background:#dc2626;color:white;font-size:10px;font-weight:700;border-radius:9px;min-width:16px;height:16px;line-height:16px;padding:0 4px;text-align:center">0</span>
           </button>
           <div id="bell-dropdown" style="display:none;position:absolute;top:100%;right:0;margin-top:6px;width:340px;max-height:420px;overflow-y:auto;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);z-index:1400">
-            <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-              <div style="font-size:12px;font-weight:600;color:var(--text-primary)">Recent customer SMS</div>
-              <button onclick="toggleSmsBell()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
+            <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <div style="font-size:12px;font-weight:600;color:var(--text-primary)">Customer activity</div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <button onclick="acknowledgeAllNotifs()" style="background:none;border:none;color:var(--green);cursor:pointer;font-size:11px;font-weight:600;padding:0">Acknowledge all</button>
+                <button onclick="toggleSmsBell()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
+              </div>
             </div>
             <div id="bell-list"></div>
           </div>
@@ -10037,6 +10040,8 @@ function openJobDetail(id) {
   renderJobDetail(id);
   // Begin auto-refresh of SMS thread + consent state for this lead.
   try { if (typeof startSMSPolling === 'function') startSMSPolling(id); } catch (_) {}
+  // Fire-and-forget poll for any pending install-confirmation response (Outlook-button flow).
+  try { if (typeof _pollJobSchedConfirm === 'function') _pollJobSchedConfirm(id); } catch (_) {}
   // Fire-and-forget poll for any customer accept/decline action that may have
   // happened since we last looked. Re-render if anything changed so the
   // accept/decline banner appears without the user having to drill into the
@@ -10152,7 +10157,19 @@ function _renderPreInstallStrip(lead) {
   if (_schedDate) {
     const _t = ms.installScheduled.time;
     const _tt = _t ? (()=>{const p=_t.split(':');let h=parseInt(p[0]);const ap=h>=12?'PM':'AM';h=h%12||12;return ' '+h+':'+p[1]+' '+ap;})() : '';
-    states.push({ state:'done', icon:'📅', label:'Scheduled', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
+    // Reflect the customer's confirmation response (if a confirmation request
+    // was sent for this date) right on the strip — parallel to the Quote chip.
+    const _conf = lead.scheduling?.confirmations?.[_schedDate];
+    const _cs = _conf?.status;
+    if (_cs === 'confirmed') {
+      states.push({ state:'done', icon:'✅', label:'Confirmed', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Customer confirmed this appointment date & time. Click to view or change.' });
+    } else if (_cs === 'reschedule_requested') {
+      states.push({ state:'reschedule', icon:'📅', label:'Reschedule requested', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:(_conf.note?('Customer note: '+_conf.note+' — '):'Customer asked to reschedule — ')+'click to set a new date/time.' });
+    } else if (_cs === 'pending') {
+      states.push({ state:'pending', icon:'⏳', label:'Awaiting confirm', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Confirmation request sent — waiting on the customer\'s reply.' });
+    } else {
+      states.push({ state:'done', icon:'📅', label:'Scheduled', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
+    }
   } else {
     states.push({ state:'pending', icon:'📅', label:'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip:'No install date set. Click to set the day & time.' });
   }
@@ -10163,9 +10180,10 @@ function _renderPreInstallStrip(lead) {
     : { state: 'pending', icon: '·', label: 'Inspection',  meta: '', click: `clickInspectionChip('${lead.id}')`, tip: 'Click to upload pass cert or mark passed without doc.' });
 
   const chipColor = (s) => ({
-    done:    'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
-    pending: 'background:rgba(243,156,18,0.10);color:#b9770e;border-color:#f39c12',
-    na:      'background:var(--bg-elevated);color:var(--text-muted);border-color:var(--border)'
+    done:       'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
+    pending:    'background:rgba(243,156,18,0.10);color:#b9770e;border-color:#f39c12',
+    reschedule: 'background:rgba(231,76,60,0.12);color:#c0392b;border-color:#e74c3c',
+    na:         'background:var(--bg-elevated);color:var(--text-muted);border-color:var(--border)'
   })[s] || '';
 
   return `<div style="display:flex;flex-wrap:wrap;gap:6px">${states.map(c => `
@@ -11782,6 +11800,7 @@ function renderJobDetail(id) {
         <input type="date" class="jd-fi" id="jd-install-date" value="${_ims.date||''}" onchange="saveMsField('${id}','installScheduled','date',this.value)" style="width:150px">
         <input type="time" class="jd-fi" value="${_ims.time||''}" onchange="saveMsField('${id}','installScheduled','time',this.value)" style="width:120px">
         ${_ims.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''}
+        ${(()=>{ const c=lead.scheduling?.confirmations?.[_ims.date]; if(!c||!c.status) return ''; const b=(typeof _schedConfirmBadge==='function')?_schedConfirmBadge(c.status,c.note):{label:c.status,color:'#888',title:''}; return `<span title="${escHtml(b.title||'')}" style="font-size:11px;font-weight:600;color:${b.color};border:1px solid ${b.color};border-radius:12px;padding:2px 9px;white-space:nowrap">${b.label}</span>`; })()}
       </div>
     </div>
   </div>`;
@@ -12992,6 +13011,49 @@ function getNotifications() { try { return JSON.parse(localStorage.getItem(NK)||
 function saveNotifications(arr) { localStorage.setItem(NK, JSON.stringify(arr)); queueSPSync(); }
 function getNotification(id) { return getNotifications().find(n=>n.id===id)||null; }
 
+// ── CUSTOMER-ACTIVITY NOTIFICATIONS (drive the header bell) ──
+// These are customer-triggered events (inbound text, appointment
+// confirm/reschedule, quote accept/decline) that land in the SAME synced
+// gk_notifications store so they persist across reloads and across the team
+// until someone acknowledges them — they never age out on their own. They are
+// kept distinct from the internal "Admin Queue" notifications (field-revision
+// approvals) by their `type`, so each surface stays focused.
+const CUST_NOTIF_TYPES = new Set([
+  'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
+  'cust-quote-accepted', 'cust-quote-declined'
+]);
+function isCustomerNotif(n) { return !!(n && CUST_NOTIF_TYPES.has(n.type)); }
+function getPendingCustomerNotifs() {
+  return getNotifications()
+    .filter(n => isCustomerNotif(n) && n.status === 'pending')
+    .sort((a,b)=>(b.at||b.createdAt||'').localeCompare(a.at||a.createdAt||''));
+}
+// Acknowledge a single customer notification (clears it from the bell count).
+function acknowledgeNotif(id) {
+  const arr = getNotifications();
+  const idx = arr.findIndex(n=>n.id===id);
+  if (idx<0) return;
+  arr[idx].status = 'acknowledged';
+  arr[idx].resolvedAt = new Date().toISOString();
+  arr[idx].resolvedBy = S.user?.id || '';
+  arr[idx].updatedAt = new Date().toISOString();
+  saveNotifications(arr);
+  updateNotifBadge();
+  if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
+}
+// Acknowledge every pending customer notification at once.
+function acknowledgeAllNotifs() {
+  const arr = getNotifications();
+  const now = new Date().toISOString();
+  let changed = 0;
+  arr.forEach(n => {
+    if (isCustomerNotif(n) && n.status === 'pending') {
+      n.status = 'acknowledged'; n.resolvedAt = now; n.resolvedBy = S.user?.id || ''; n.updatedAt = now; changed++;
+    }
+  });
+  if (changed) { saveNotifications(arr); updateNotifBadge(); if (typeof _bellRefreshUI==='function') _bellRefreshUI(); }
+}
+
 function upsertNotification(data) {
   const arr = getNotifications();
   const idx = arr.findIndex(n=>n.id===data.id);
@@ -13000,6 +13062,7 @@ function upsertNotification(data) {
   else { arr.push({...data, id:data.id||'notif-'+Date.now(), status:'pending', createdAt:now, updatedAt:now}); }
   saveNotifications(arr);
   updateNotifBadge();
+  if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
 }
 
 function createFieldRevisionRequest(jobId, description, quoteId) {
@@ -13035,7 +13098,9 @@ function updateTaskBadge() {
 }
 
 function updateNotifBadge() {
-  const pending = getNotifications().filter(n=>n.status==='pending').length;
+  // Admin Queue badge counts only internal (non-customer) pending items so it
+  // stays focused on field-revision approvals; customer activity drives the bell.
+  const pending = getNotifications().filter(n=>n.status==='pending' && !isCustomerNotif(n)).length;
   const inner = document.getElementById('notif-badge-inner');
   if (inner) inner.innerHTML = pending ? `<span class="nbadge" style="margin-left:4px">${pending}</span>` : '';
 }
@@ -13608,7 +13673,7 @@ function saveFollowUp(linkedType, linkedId) {
 function renderNotifList() {
   const wrap = document.getElementById('notifs-list-wrap');
   if (!wrap) return;
-  const notifs = getNotifications().sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const notifs = getNotifications().filter(n=>!isCustomerNotif(n)).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
 
   if (!notifs.length) {
     wrap.innerHTML = `<div class="tasks-empty">
@@ -19957,12 +20022,150 @@ async function _bellPollOnce() {
     fresh.forEach(m => { if (!seenIds.has(m.id)) _bellRecentCache.unshift(m); });
     _bellRecentCache.sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
     if (_bellRecentCache.length > BELL_RECENT_CAP) _bellRecentCache.length = BELL_RECENT_CAP;
+    // PERSIST each inbound text into the synced notifications store so it stays
+    // in the bell until acknowledged (survives reloads, visible to the team).
+    // upsert preserves an already-acknowledged status, so this won't resurrect
+    // messages someone already cleared.
+    fresh.forEach(m => {
+      if (m && (m.direction === 'outbound')) return;  // only inbound
+      try {
+        const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
+        const cust = (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
+        const who = cust ? (typeof custFullName === 'function' ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim())
+                         : ((lead && lead.customerName) || m.from_number || m.phone || 'Customer');
+        upsertNotification({
+          id: 'cust-sms-' + (m.id || (m.created_at + '-' + (m.from_number||''))),
+          type: 'cust-sms',
+          title: 'New text — ' + who,
+          description: (m.body || '').replace(/\s+/g,' ').slice(0, 200),
+          jobId: m.lead_id || null,
+          at: m.created_at || new Date().toISOString()
+        });
+      } catch (_) {}
+    });
     _bellRefreshUI();
     // Fire desktop notification + sound for each truly new inbound message.
     if (brandNew.length) _bellNotify(brandNew);
   } catch (_) {
     // Silent — polling failures shouldn't toast.
   }
+}
+
+// ─── Customer-activity poll (scheduling + quote responses) ────────────────
+//
+// Runs on the same cadence as the SMS bell. Polls the Worker's unified
+// /activity/recent feed and folds appointment confirm/reschedule and quote
+// accept/decline events into the SAME persistent notifications store the bell
+// reads — so a customer clicking "Confirm" or "Decline" shows up in the bell
+// (with a count + desktop pop-up) even if nobody has that job open. The email
+// failsafe (server-side) covers the case where the CRM isn't open at all.
+const ACTIVITY_LAST_KEY = 'gk_activity_last_seen';
+function _activityGetSince() {
+  const stored = localStorage.getItem(ACTIVITY_LAST_KEY);
+  if (stored) return stored;
+  // First run: only look back 24h so we don't surface a big historical backlog.
+  const fallback = new Date(Date.now() - 24*60*60*1000).toISOString();
+  localStorage.setItem(ACTIVITY_LAST_KEY, fallback);
+  return fallback;
+}
+function _activitySetSince(iso) { try { localStorage.setItem(ACTIVITY_LAST_KEY, iso); } catch(_){} }
+
+function _activityEventToNotif(ev) {
+  if (!ev || !ev.type) return null;
+  if (ev.type === 'scheduling') {
+    const resched = ev.action === 'reschedule_requested';
+    const dateStr = ev.proposedDate ? (' · ' + ev.proposedDate) : '';
+    return {
+      id: 'cust-sched-' + (ev.id || (ev.leadId + '-' + ev.at)),
+      type: resched ? 'cust-sched-reschedule' : 'cust-sched-confirmed',
+      title: resched ? 'Reschedule requested' : 'Appointment confirmed',
+      description: (resched ? 'Customer asked to reschedule' : 'Customer confirmed the appointment')
+                   + dateStr + (ev.note ? (' — “' + ev.note + '”') : ''),
+      jobId: ev.leadId || null,
+      at: ev.at
+    };
+  }
+  if (ev.type === 'quote') {
+    const declined = ev.action === 'declined';
+    const lead = (ev.quoteId && typeof getQuote === 'function') ? getQuote(ev.quoteId) : null;
+    return {
+      id: 'cust-quote-' + (ev.id || (ev.quoteId + '-' + ev.at)),
+      type: declined ? 'cust-quote-declined' : 'cust-quote-accepted',
+      title: declined ? 'Quote declined' : (ev.action === 'contingent_accepted' ? 'Quote accepted (contingent)' : 'Quote accepted'),
+      description: (declined ? 'Customer declined quote ' : 'Customer accepted quote ')
+                   + (ev.quoteId || '') + (ev.note ? (' — “' + ev.note + '”') : ''),
+      jobId: (lead && lead.leadId) || null,
+      quoteId: ev.quoteId || null,
+      at: ev.at
+    };
+  }
+  return null;
+}
+
+async function _activityPollOnce() {
+  if (typeof _msal === 'undefined' || !_msal) return;
+  if (typeof SMS_WORKER_URL === 'undefined' || !SMS_WORKER_URL) return;
+  try {
+    const token = await _acquireSMSToken();
+    const since = _activityGetSince();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/activity/recent?since=' + encodeURIComponent(since) + '&limit=50',
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json().catch(() => ({}));
+    const events = Array.isArray(data.events) ? data.events : [];
+    if (!events.length) return;
+    let newest = since;
+    const brandNew = [];
+    events.forEach(ev => {
+      if ((ev.at||'') > newest) newest = ev.at;
+      const n = _activityEventToNotif(ev);
+      if (!n) return;
+      const existed = (typeof getNotification === 'function') ? getNotification(n.id) : null;
+      upsertNotification(n);
+      if (!existed) brandNew.push(n);
+    });
+    if (newest > since) _activitySetSince(newest);
+    _bellRefreshUI();
+    // AUTO-APPLY scheduling responses to the lead — status + Outlook event flip
+    // (tentative→busy on confirm) — even when the job isn't open. Reuses the
+    // per-job reconciler, keyed off the leads that just had a response. It
+    // no-ops unless that lead still has a locally-pending confirmation.
+    const schedLeadIds = [...new Set(events.filter(e => e.type === 'scheduling' && e.leadId).map(e => e.leadId))];
+    schedLeadIds.forEach(lid => { try { _pollJobSchedConfirm(lid); } catch(_){} });
+    // Desktop pop-up for brand-new appointment/quote responses (same UX as texts).
+    if (brandNew.length) _activityOsNotify(brandNew);
+  } catch (_) { /* silent — polling failures shouldn't toast */ }
+}
+
+// Desktop pop-up + chime for new scheduling/quote events.
+function _activityOsNotify(notifs) {
+  if (!('Notification' in window)) return;
+  const fire = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type='sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime+0.15);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.4);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime+0.4);
+    } catch(_){}
+    notifs.slice(0,3).forEach(n => {
+      try {
+        const note = new Notification(n.title + ' — GreenKey CRM', {
+          body: n.description || '',
+          icon: typeof GK_LOGO_B64 !== 'undefined' ? GK_LOGO_B64 : undefined,
+          tag: n.id
+        });
+        note.onclick = () => { try { window.focus(); if (n.jobId) _bellOpenLead(n.jobId); } catch(_){} note.close(); };
+      } catch(_){}
+    });
+  };
+  if (Notification.permission === 'granted') fire();
+  else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p==='granted') fire(); });
 }
 
 // ── Desktop push notifications for inbound texts ──────────────────────────
@@ -20044,12 +20247,14 @@ function _bellFireNotifications(messages) {
 }
 
 function _bellRefreshUI() {
-  const lastSeen = _bellGetLastSeen();
-  const unread = _bellRecentCache.filter(m => (m.created_at||'') > lastSeen).length;
+  // Badge = number of UNACKNOWLEDGED customer notifications in the persistent
+  // synced store. It only drops as items are acknowledged — nothing ages out
+  // just because time passed or the dropdown was closed.
+  const count = (typeof getPendingCustomerNotifs === 'function') ? getPendingCustomerNotifs().length : 0;
   const badge = document.getElementById('bell-badge');
   if (badge) {
-    if (unread > 0) {
-      badge.textContent = unread > 99 ? '99+' : String(unread);
+    if (count > 0) {
+      badge.textContent = count > 99 ? '99+' : String(count);
       badge.style.display = 'inline-block';
     } else {
       badge.style.display = 'none';
@@ -20058,28 +20263,41 @@ function _bellRefreshUI() {
   if (_bellOpen) _bellRenderList();
 }
 
+// Icon + accent per customer-notification type.
+function _bellTypeMeta(type) {
+  switch (type) {
+    case 'cust-sched-reschedule': return { ico:'📅', accent:'var(--amber,#f59e0b)' };
+    case 'cust-sched-confirmed':  return { ico:'✅', accent:'var(--green,#22c55e)' };
+    case 'cust-quote-accepted':   return { ico:'📝', accent:'var(--green,#22c55e)' };
+    case 'cust-quote-declined':   return { ico:'❌', accent:'var(--red,#dc2626)' };
+    case 'cust-sms':              return { ico:'💬', accent:'var(--blue,#3498db)' };
+    default:                      return { ico:'🔔', accent:'var(--text-muted)' };
+  }
+}
 function _bellRenderList() {
   const list = document.getElementById('bell-list');
   if (!list) return;
-  if (!_bellRecentCache.length) {
-    list.innerHTML = `<div style="padding:24px 14px;text-align:center;color:var(--text-muted);font-size:12.5px">No recent customer messages.</div>`;
+  const items = (typeof getPendingCustomerNotifs === 'function') ? getPendingCustomerNotifs() : [];
+  if (!items.length) {
+    list.innerHTML = `<div style="padding:24px 14px;text-align:center;color:var(--text-muted);font-size:12.5px">You're all caught up — no unacknowledged customer activity.</div>`;
     return;
   }
-  const lastSeen = _bellGetLastSeen();
-  list.innerHTML = _bellRecentCache.map(m => {
-    const isUnread = (m.created_at||'') > lastSeen;
-    const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
-    const cust = (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
-    const name = cust ? (typeof custFullName === 'function' ? custFullName(cust) : (cust.firstName + ' ' + cust.lastName).trim())
-                       : (lead && lead.customerName) || (m.from_number || m.phone || 'Unknown');
-    const preview = (m.body || '').replace(/\s+/g,' ').slice(0, 110);
-    const when = _bellRelativeTime(m.created_at);
-    return `<div onclick="_bellOpenLead('${m.lead_id||''}')" style="padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;${isUnread?'background:var(--green-dim)':''}">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <div style="font-size:12.5px;font-weight:${isUnread?'600':'500'};color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}${isUnread?' <span style="color:var(--green);font-size:10px">●</span>':''}</div>
-        <div style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">${when}</div>
+  list.innerHTML = items.map(n => {
+    const meta = _bellTypeMeta(n.type);
+    const when = _bellRelativeTime(n.at || n.createdAt);
+    const hasJob = !!n.jobId;
+    return `<div style="padding:10px 12px;border-bottom:1px solid var(--border);border-left:3px solid ${meta.accent};cursor:pointer" onclick="_bellSelectNotif('${n.id}','${n.jobId||''}')" title="${hasJob?'Open job and mark acknowledged':'Mark acknowledged'}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="min-width:0">
+          <div style="font-size:12.5px;font-weight:600;color:var(--text-primary)">${meta.ico} ${escHtml(n.title||'')}</div>
+          <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4">${escHtml(n.description||'')}</div>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-muted);flex-shrink:0;white-space:nowrap">${when}</div>
       </div>
-      <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(preview)}</div>
+      <div style="margin-top:7px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span style="font-size:10.5px;color:var(--text-muted)">${hasJob?'Click row → open job &amp; acknowledge':'Click row → acknowledge'}</span>
+        <button class="btn btn-g" style="padding:2px 9px;font-size:11px;color:var(--green)" onclick="event.stopPropagation();acknowledgeNotif('${n.id}')" title="Acknowledge without leaving this list">✓ Dismiss</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -20105,11 +20323,22 @@ function toggleSmsBell() {
     _bellRenderList();
     // Trigger a fresh poll on open so the list isn't stale.
     _bellPollOnce();
-  } else {
-    // Closing the dropdown is the explicit "I've seen these" signal —
-    // bump the last-seen timestamp so the badge clears.
-    _bellSetLastSeen(new Date().toISOString());
-    _bellRefreshUI();
+    _activityPollOnce();
+  }
+  // NOTE: closing no longer clears the badge — items persist until explicitly
+  // acknowledged (per-item ✓ Acknowledge, or "Acknowledge all"). This is the
+  // "don't let notices disappear unseen" behavior Jonathan asked for.
+}
+
+// Selecting a notice = acknowledge it AND jump to its job (the "handle one,
+// come back, repeat" loop). Acknowledge first so the count/list update before
+// we navigate away; if there's no linked job, just acknowledge + close.
+function _bellSelectNotif(id, jobId) {
+  try { acknowledgeNotif(id); } catch(_){}
+  if (jobId) { _bellOpenLead(jobId); }
+  else {
+    if (typeof toggleSmsBell === 'function') toggleSmsBell();
+    if (typeof toast === 'function') toast('Acknowledged', 'success');
   }
 }
 
@@ -20132,10 +20361,8 @@ document.addEventListener('click', (e) => {
     const dd = document.getElementById('bell-dropdown');
     if (dd) dd.style.display = 'none';
     _bellOpen = false;
-    // Treat outside-click as a soft dismiss: clear the badge but don't
-    // wipe the recent list — user can re-open to glance.
-    _bellSetLastSeen(new Date().toISOString());
-    _bellRefreshUI();
+    // Outside-click just closes the dropdown; it does NOT clear the badge.
+    // Notices persist until acknowledged.
   }
 });
 
@@ -20145,8 +20372,9 @@ function _bellStartPolling() {
   // browser prompt appears at a natural moment rather than mid-conversation.
   _bellRequestPermission();
   _bellPollOnce();
+  _activityPollOnce();
   _bellPollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') _bellPollOnce();
+    if (document.visibilityState === 'visible') { _bellPollOnce(); _activityPollOnce(); }
   }, BELL_POLL_INTERVAL_MS);
 }
 function _bellStopPolling() {
@@ -22011,10 +22239,21 @@ async function openSchedInOutlook() {
   if (start >= end)     { toast('End time must be after start time', 'error'); return; }
 
   // Installation appointments feed the job's install schedule (single source of
-  // truth) — so the Schedule chip/milestone reflects the Outlook booking
-  // automatically. Other types (walkdown, inspection, etc.) don't touch it, and
-  // externally-scheduled jobs can still set it manually on the Schedule chip.
-  if ((document.getElementById('sched-type')?.value || '') === 'installation') {
+  // truth). For installs with a customer email, offer to send a confirmation
+  // request — if accepted, the event is created TENTATIVE and flips to busy when
+  // the customer confirms (via the /scheduling/* Worker flow).
+  const _isInstall = (document.getElementById('sched-type')?.value || '') === 'installation';
+  const _cust = (lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
+  const _custEmail = (_cust?.email || lead.customerEmail || '').trim();
+  let _wantConfirm = false;
+  if (_isInstall && _custEmail) {
+    _wantConfirm = confirm(
+      `Send ${_cust ? custFullName(_cust) : (lead.customerName || 'the customer')} a confirmation request for this appointment?\n\n` +
+      `• OK — the event is created as TENTATIVE and the customer gets a "Confirm / Request reschedule" email; it flips to confirmed when they reply.\n` +
+      `• Cancel — just create the event (no email to the customer).`
+    );
+  }
+  if (_isInstall) {
     try {
       const _arr = getLeads(); const _i = _arr.findIndex(l => l.id === _schedLeadId);
       if (_i >= 0) {
@@ -22077,7 +22316,8 @@ async function openSchedInOutlook() {
     end:   { dateTime: endDateTime,   timeZone: tz },
     location: location ? { displayName: location } : undefined,
     isReminderOn: true,
-    reminderMinutesBeforeStart: 60
+    reminderMinutesBeforeStart: 60,
+    showAs: _wantConfirm ? 'tentative' : 'busy'   // tentative until the customer confirms
   };
 
   // Show progress; the user has just clicked the button.
@@ -22090,7 +22330,20 @@ async function openSchedInOutlook() {
     });
     // resp is the created event; it has webLink we can open for review.
     const webLink = resp?.webLink;
-    toast(`Event created on ${calendarLabel}.`, 'success');
+    const eventId = resp?.id || '';
+    // Store the event id on the install milestone so a later customer
+    // confirmation can flip the event tentative → busy.
+    if (_isInstall && eventId) {
+      try {
+        const _a = getLeads(); const _j = _a.findIndex(l => l.id === _schedLeadId);
+        if (_j >= 0 && _a[_j].milestones?.installScheduled) {
+          _a[_j].milestones.installScheduled.outlookEventId = eventId;
+          _a[_j].milestones.installScheduled.outlookCalId = (tgt && tgt.id) || '';
+          saveLeads(_a);
+        }
+      } catch(_){}
+    }
+    toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''}.`, 'success');
     closeSchedModal();
     // Open the created event in Outlook for review/edit.
     if (webLink) {
@@ -22098,6 +22351,10 @@ async function openSchedInOutlook() {
       if (!win) {
         toast('Pop-up blocked — your event was created, but check your calendar to review it.', 'warning');
       }
+    }
+    // Fire the customer confirmation request (after the event exists).
+    if (_wantConfirm) {
+      _sendOutlookConfirmRequest(_schedLeadId, { date, start, end, custEmail: _custEmail, cust: _cust, eventId });
     }
   } catch (e) {
     console.warn('[GK] Calendar event creation failed:', e);
@@ -22110,6 +22367,109 @@ async function openSchedInOutlook() {
       toast('Could not create event: ' + msg.slice(0, 200), 'error');
     }
   }
+}
+
+// Single-job confirmation request (Outlook button). Mints a Worker token,
+// emails the customer the Confirm/Reschedule request (reusing the Scheduler's
+// email builder), and records it on the lead in the same shape the day-route
+// Scheduler uses (`lead.scheduling.confirmations[date]`).
+async function _sendOutlookConfirmRequest(leadId, { date, start, end, custEmail, cust, eventId }) {
+  const lead = getLead(leadId); if (!lead || !custEmail) return;
+  try {
+    const workerToken = await _acquireSMSToken();
+    if (!workerToken) { toast('Confirmation not sent — could not reach the scheduling service.', 'warning'); return; }
+    const techName = '';  // single-job Outlook events don't carry a crew assignment
+    // 1. Mint the token on the Worker.
+    const tokenResp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/scheduling/issue-token', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${workerToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leadId, customerEmail: custEmail,
+        customerName: cust ? custFullName(cust) : (lead.customerName || ''),
+        proposedDate: date, proposedStartTime: start, proposedEndTime: end,
+        techName,
+        scopeSummary: (lead.scopeOfWork || lead.description || '').slice(0, 1500),
+        siteAddress: [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ')
+      })
+    });
+    if (!tokenResp.ok) throw new Error('issue-token ' + tokenResp.status);
+    const { token, confirmUrl } = await tokenResp.json();
+    if (!token || !confirmUrl) throw new Error('no token returned');
+    // 2. Send the email via Graph (reuses the Scheduler's confirmation template).
+    const firstName = (cust?.firstName) || (cust ? custFullName(cust).split(' ')[0] : String(lead.customerName||'there').split(' ')[0]);
+    const html = _buildSchedConfirmEmailHtml({
+      firstName, dateLabel: formatSchedDate(date),
+      timeLabel: `${start} – ${end}`, techName, lead, confirmUrl
+    });
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject: `Please confirm your GreenKey appointment on ${formatSchedDate(date)}`,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: custEmail } }],
+          ccRecipients: (typeof _buildCCRecipients === 'function') ? _buildCCRecipients() : []
+        },
+        saveToSentItems: true
+      })
+    });
+    // 3. Record on the lead so the poll/badge can track it.
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0) {
+      if (!arr[i].scheduling) arr[i].scheduling = {};
+      if (!arr[i].scheduling.confirmations) arr[i].scheduling.confirmations = {};
+      arr[i].scheduling.confirmations[date] = { token, sentAt: new Date().toISOString(), status: 'pending', techName, outlookEventId: eventId || '' };
+      arr[i].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+    toast('Confirmation request sent to ' + custEmail, 'success');
+    try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+  } catch (e) {
+    console.warn('[GK] Outlook confirmation send failed:', e);
+    toast('Confirmation request failed: ' + (e.message || e), 'error');
+  }
+}
+
+// On opening a job with a pending confirmation, poll the Worker once; if the
+// customer confirmed, flip the Outlook event tentative → busy; if they asked to
+// reschedule, surface it. (The day-route Scheduler has its own poll on its page.)
+async function _pollJobSchedConfirm(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const confs = lead.scheduling?.confirmations || {};
+  const pending = Object.entries(confs).filter(([d, c]) => c && c.token && c.status === 'pending');
+  if (!pending.length) return;
+  let workerToken = ''; try { workerToken = await _acquireSMSToken(); } catch(_) { return; }
+  if (!workerToken) return;
+  try {
+    const tokens = pending.map(([d, c]) => c.token);
+    const url = SMS_WORKER_URL.replace(/\/$/,'') + '/scheduling/status?tokens=' + encodeURIComponent(tokens.join(','));
+    const r = await fetch(url, { headers: { 'Authorization': `Bearer ${workerToken}` } });
+    if (!r.ok) return;
+    const { statuses } = await r.json();
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
+    let dirty = false, changed = false;
+    for (const [d, c] of pending) {
+      const s = statuses?.[c.token]; if (!s || s.status === c.status) continue;
+      const conf = arr[i].scheduling.confirmations[d];
+      conf.status = s.status; conf.respondedAt = s.respondedAt; conf.note = s.note; dirty = true; changed = true;
+      if (s.status === 'confirmed' && conf.outlookEventId) _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId);
+      if (s.status === 'confirmed') toast('Customer confirmed the appointment.', 'success');
+      else if (s.status === 'reschedule_requested') toast('Customer asked to reschedule' + (s.note ? ': ' + s.note : '') + '.', 'warning');
+    }
+    if (dirty) saveLeads(arr);
+    if (changed) { try { if (typeof renderJobDetail === 'function' && S.jobDetailId === leadId) renderJobDetail(leadId); } catch(_){} }
+  } catch (e) { console.warn('[GK] job confirmation poll failed:', e); }
+}
+
+// Flip a created Outlook event tentative → busy once the customer confirms.
+async function _patchOutlookEventBusy(eventId, calId) {
+  if (!eventId) return;
+  try {
+    const path = calId
+      ? `/me/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(eventId)}`
+      : `/me/events/${encodeURIComponent(eventId)}`;
+    await _graphFetch(path, { method: 'PATCH', body: JSON.stringify({ showAs: 'busy' }) });
+  } catch (e) { console.warn('[GK] event busy-patch failed (non-fatal):', e); }
 }
 
 function openSMSModal(leadId) {
