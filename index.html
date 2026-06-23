@@ -11205,6 +11205,7 @@ function renderJobDetail(id) {
         Schedule Now
       </button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2e7d32;color:#2e7d32" onclick="openSiteViewModal('${id}')" title="Satellite site view — measure runs/areas and screenshot for the estimate">📍 Site View</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
   </div>`;
@@ -18752,6 +18753,43 @@ async function _spCreateFolder(parentPath, folderName) {
   }
   const item = await resp.json();
   return { existed: false, name: folderName, id: item.id, webUrl: item.webUrl };
+}
+
+// Resolve a SharePoint folder's browser URL by path (works for folders that
+// already exist — unlike _spCreateFolder, which only returns webUrl on a fresh
+// create).
+async function _spGetFolderWebUrl(path) {
+  if (!_gToken || !_spDrive) return null;
+  const url = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(path)}`;
+  const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + _gToken } });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error('Folder lookup ' + resp.status);
+  const item = await resp.json();
+  return item.webUrl || null;
+}
+
+// Open this job's Active Leads folder (all its files) in a new browser tab.
+// A web app can't launch native Windows File Explorer, but this lands on the
+// exact SharePoint folder — which is the same folder that shows in File Explorer
+// if the library is synced to OneDrive.
+async function openJobFolder(leadId) {
+  const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
+  if (!lead) { toast('Job not found', 'error'); return; }
+  const customer = lead.customerId ? getCustomer(lead.customerId) : null;
+  const folderName = _buildSPLeadFolderName(lead, customer);
+  if (!folderName) { toast('No job folder yet — the customer needs a last name first.', 'warning'); return; }
+  if (!_gToken || !_spDrive) { toast('Sign in to Microsoft first to open the SharePoint folder.', 'warning'); return; }
+  toast('Opening job folder…', 'info');
+  const path = SP_ACTIVE_LEADS_PATH + '/' + folderName;
+  try {
+    let webUrl = await _spGetFolderWebUrl(path);
+    if (!webUrl) { await _ensureSPLeadFolderForLead(leadId); webUrl = await _spGetFolderWebUrl(path); }
+    if (webUrl) { window.open(webUrl, '_blank', 'noopener'); }
+    else { toast('Could not locate the job folder in SharePoint.', 'error'); }
+  } catch (e) {
+    console.warn('[GK] openJobFolder failed:', e);
+    toast('Could not open the folder: ' + (e.message || e), 'error');
+  }
 }
 
 // Read a template, populate the customer fields, write it into the target
