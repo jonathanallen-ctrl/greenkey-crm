@@ -4682,14 +4682,15 @@ function _autoCreatePreInstallTasks(quote) {
     if (!existing) {
       upsertTask({
         id:          taskId,
-        title:       `Order materials — ${lead.id}`,
-        description: `Quote ${quote.id} has non-stock items to order:\n\n${materials}\n\nCustomer: ${linkLabel}`,
+        title:       `Order special materials — ${lead.id}`,
+        description: `Quote ${quote.id} has special-order items:\n\n${materials}\n\nCustomer: ${linkLabel}\n\nTrack vendor / PO / arrival on the job's "Special Order Materials" chip.`,
         linkedId:    lead.id,
         linkedLabel: linkLabel,
         priority:    'high',
         status:      'open',
         dueDate:     computeDue(5),
         source:      'auto-pre-install',
+        assignedTo:  'u-jon',
         createdBy:   S.user?.id || ''
       });
     }
@@ -10127,7 +10128,7 @@ function _renderPreInstallStrip(lead) {
   const matTask  = tasks.find(t => t.id === 'task-mat-' + lead.id);
 
   const muRequired   = leadRequiresMissUtility(lead, quotes);
-  const matsRequired = quotes.some(q => (q.specialMaterials || '').trim());
+  const matsRequired = (Array.isArray(lead.materials) && lead.materials.length > 0) || quotes.some(q => (q.specialMaterials || '').trim());
 
   const states = [];
 
@@ -10171,13 +10172,22 @@ function _renderPreInstallStrip(lead) {
       : { state: 'pending', icon: '·', label: 'MU Call',   meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Click to open the Miss Utility task — or create it now if it hasn\'t fired yet.' });
   }
 
-  // Materials Ordered — only show if any quote has special materials.
+  // Special Order Materials — structured tracker (vendor / PO / ETA / arrival per item).
   if (!matsRequired) {
-    states.push({ state: 'na', icon: '—', label: 'Materials N/A', meta: '', tip: 'No quote on this job has special materials listed.' });
+    states.push({ state: 'na', icon: '—', label: 'Materials N/A', meta: '', tip: 'No special-order materials for this job.' });
   } else {
-    states.push(matTask?.status === 'done'
-      ? { state: 'done',    icon: '✓', label: 'Materials Ordered', meta: '', click: `clickMaterialsChip('${lead.id}')`, tip: 'Auto-flips when the Order Materials task is marked done.' }
-      : { state: 'pending', icon: '·', label: 'Order Materials',   meta: '', click: `clickMaterialsChip('${lead.id}')`, tip: 'Click to open the Materials task. Created automatically on quote approval.' });
+    const _mItems = (typeof getJobMaterials === 'function') ? getJobMaterials(lead) : (Array.isArray(lead.materials) ? lead.materials : []);
+    const _arr = _mItems.filter(m => m.arrived).length;
+    const _allArr = _mItems.length > 0 && _arr === _mItems.length;
+    const _anyOrdered = _mItems.some(m => (m.po || '').trim() || m.orderedDate);
+    const _cnt = _mItems.length > 1 ? `${_arr}/${_mItems.length}` : '';
+    if (_allArr) {
+      states.push({ state:'done', icon:'✓', label:'Materials Arrived', meta:_cnt, click:`openChipEditor('${lead.id}','materials')`, tip:'All special-order materials arrived. Click to view.' });
+    } else if (_mItems.length && _anyOrdered) {
+      states.push({ state:'pending', icon:'·', label:'Materials Ordered', meta:_cnt?`${_cnt} in`:'', click:`openChipEditor('${lead.id}','materials')`, tip:'Ordered — waiting on arrival. Click to update PO / tracking / arrival.' });
+    } else {
+      states.push({ state:'pending', icon:'·', label:'Order Materials', meta:'', click:`openChipEditor('${lead.id}','materials')`, tip:'Special-order materials needed. Click to list them, add PO #s, and track arrival.' });
+    }
   }
 
   // Install Scheduled — install date + time. Visible here; settable here (click)
@@ -10316,10 +10326,36 @@ function _chipEditorHTML(leadId, key){
         : row(btnP('Create 811 task + email Sherri',`flagMissUtility('${leadId}')`))+note('Normally fires on quote approval — use this for jobs quoted outside the CRM.'));
     }
     case 'materials': {
-      const mat=getTasks().find(t=>t.linkedId===leadId && t.id==='task-mat-'+leadId);
-      return _chipEditorShell('Materials', mat
-        ? row(btnP('Open Materials task',`closeChipEditor();openTaskDetail('${mat.id}')`)+`<span style="font-size:12px;color:var(--text-secondary)">Status: ${escHtml(mat.status)}</span>`)
-        : note('No materials task — auto-created when a quote with special materials is approved.'));
+      let mItems = getJobMaterials(lead);
+      if (!mItems.length) {
+        const seeded = _seedJobMaterials(lead);
+        if (seeded.length) { _saveJobMaterials(leadId, seeded); mItems = seeded; }
+      }
+      const mRow = (m) => `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px;${m.arrived?'background:rgba(46,204,113,0.08)':''}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <input class="jd-fi" style="flex:1;min-width:0" value="${escHtml(m.name||'')}" placeholder="Material / item" onchange="_updMaterialField('${leadId}','${m.id}','name',this.value)">
+          <input class="jd-fi" style="width:52px" value="${escHtml(m.qty||'')}" placeholder="Qty" onchange="_updMaterialField('${leadId}','${m.id}','qty',this.value)">
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;white-space:nowrap;cursor:pointer"><input type="checkbox" ${m.arrived?'checked':''} onchange="_toggleMaterialArrived('${leadId}','${m.id}',this.checked)" style="accent-color:var(--green)">arrived</label>
+          <button class="btn btn-g" style="padding:1px 7px;font-size:12px;color:var(--red)" title="Remove item" onclick="_removeMaterialItem('${leadId}','${m.id}')">✕</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <input class="jd-fi" style="width:130px" value="${escHtml(m.vendor||'')}" placeholder="Vendor" onchange="_updMaterialField('${leadId}','${m.id}','vendor',this.value)">
+          <input class="jd-fi" style="width:120px" value="${escHtml(m.po||'')}" placeholder="PO #" onchange="_updMaterialField('${leadId}','${m.id}','po',this.value)">
+          <input type="date" class="jd-fi" style="width:140px" title="Ordered date" value="${m.orderedDate||''}" onchange="_updMaterialField('${leadId}','${m.id}','orderedDate',this.value)">
+          <input type="date" class="jd-fi" style="width:140px" title="Expected / ETA" value="${m.eta||''}" onchange="_updMaterialField('${leadId}','${m.id}','eta',this.value)">
+          <input class="jd-fi" style="width:150px" value="${escHtml(m.tracking||'')}" placeholder="Tracking #" onchange="_updMaterialField('${leadId}','${m.id}','tracking',this.value)">
+          <input class="jd-fi" style="flex:1;min-width:120px" value="${escHtml(m.notes||'')}" placeholder="Notes" onchange="_updMaterialField('${leadId}','${m.id}','notes',this.value)">
+        </div>
+      </div>`;
+      const mList = mItems.length ? mItems.map(mRow).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:4px 0 8px">No items yet — add the special-order materials for this job.</div>`;
+      const mAllArr = mItems.length > 0 && mItems.every(m => m.arrived);
+      return _chipEditorShell('Special Order Materials',
+        mList +
+        `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+           <button class="btn btn-g" style="padding:4px 11px;font-size:12px" onclick="_addMaterialItem('${leadId}')">+ Add item</button>
+           ${mItems.length && !mAllArr ? `<button class="btn btn-g" style="padding:4px 11px;font-size:12px;color:var(--green)" onclick="_markAllMaterialsArrived('${leadId}')">✓ Mark all arrived</button>` : ''}
+         </div>` +
+        note('Per item: vendor, PO #, ordered/ETA dates, tracking. Check Arrived as each comes in — when all are in, the chip turns green and the reminder task closes.'));
     }
     case 'schedule': {
       const im=ms.installScheduled||{};
@@ -10547,6 +10583,63 @@ function acceptJobQuote(leadId, quoteId){
   _setMilestone(leadId,'quoteApproved',true);
   try{ if(typeof _autoCreatePreInstallTasks==='function') _autoCreatePreInstallTasks(q); }catch(_){}
   renderJobDetail(leadId);
+}
+
+// ── SPECIAL ORDER MATERIALS (tracker behind the Materials chip) ────────────
+function getJobMaterials(lead){ return (lead && Array.isArray(lead.materials)) ? lead.materials : []; }
+function _saveJobMaterials(leadId, items){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  arr[i].materials = items; arr[i].updatedAt = new Date().toISOString(); saveLeads(arr);
+}
+function _newMaterialItem(name){
+  return { id:'m-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), name:name||'', qty:'', vendor:'', po:'', orderedDate:'', eta:'', tracking:'', arrived:false, notes:'' };
+}
+// Seed the item list one-time from the quote's free-text "Special Materials" box.
+function _seedJobMaterials(lead){
+  if(!lead) return [];
+  const q=(typeof getQuotes==='function'?getQuotes():[])
+    .filter(x=>x.leadId===lead.id && (x.specialMaterials||'').trim())
+    .sort((a,b)=>new Date(b.updatedAt||b.createdAt||0)-new Date(a.updatedAt||a.createdAt||0))[0];
+  if(!q) return [];
+  return (q.specialMaterials||'').split(/[\n,;]+/).map(s=>s.trim()).filter(Boolean).map(_newMaterialItem);
+}
+function _updMaterialField(leadId, itemId, field, value){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  const items=Array.isArray(arr[i].materials)?arr[i].materials:[]; const it=items.find(m=>m.id===itemId); if(!it) return;
+  it[field]=value; arr[i].materials=items; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+}
+function _toggleMaterialArrived(leadId, itemId, checked){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  const items=Array.isArray(arr[i].materials)?arr[i].materials:[]; const it=items.find(m=>m.id===itemId); if(!it) return;
+  it.arrived=!!checked; arr[i].materials=items; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+  if(items.length && items.every(m=>m.arrived)) _completeMaterialsTask(leadId);
+  renderJobDetail(leadId); openChipEditor(leadId,'materials');
+}
+function _addMaterialItem(leadId){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  if(!Array.isArray(arr[i].materials)) arr[i].materials=[];
+  arr[i].materials.push(_newMaterialItem('')); arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+  renderJobDetail(leadId); openChipEditor(leadId,'materials');
+}
+function _removeMaterialItem(leadId, itemId){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  arr[i].materials=(Array.isArray(arr[i].materials)?arr[i].materials:[]).filter(m=>m.id!==itemId);
+  arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+  renderJobDetail(leadId); openChipEditor(leadId,'materials');
+}
+function _markAllMaterialsArrived(leadId){
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  const items=Array.isArray(arr[i].materials)?arr[i].materials:[]; items.forEach(m=>m.arrived=true);
+  arr[i].materials=items; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+  if(items.length) _completeMaterialsTask(leadId);
+  renderJobDetail(leadId); openChipEditor(leadId,'materials');
+}
+// When all materials arrive, auto-close the "order materials" reminder task.
+function _completeMaterialsTask(leadId){
+  try{
+    const t=(typeof getTasks==='function'?getTasks():[]).find(x=>x.id==='task-mat-'+leadId && x.status!=='done');
+    if(t && typeof upsertTask==='function') upsertTask({ id:t.id, status:'done', completedAt:new Date().toISOString(), completionNote:'All special-order materials arrived' });
+  }catch(_){}
 }
 
 function clickScheduleChip(leadId){ openChipEditor(leadId,'schedule'); }
