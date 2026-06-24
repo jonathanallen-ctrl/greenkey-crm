@@ -11934,15 +11934,6 @@ function renderJobDetail(id) {
           <input type="checkbox" id="${eid}" ${val?'checked':''} style="accent-color:var(--green)"> ${lbl}
         </label>`).join('')}
       </div>
-
-      <!-- Wire Runs -->
-      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <div style="font-size:12px;font-weight:500;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Wire Runs</div>
-          <button class="btn btn-g" style="padding:3px 10px;font-size:11px" onclick="addWireRun('${id}')">+ Add Run</button>
-        </div>
-        <div id="wire-runs-${id}">${renderWireRunRows(id, snap.wireRuns||[], snap.breakerSize)}</div>
-      </div>
     </div>
   </div>`;
 
@@ -15803,22 +15794,6 @@ function renderTechPage(leadId) {
     ${snap.major240VLoads?`<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)"><strong>Issue:</strong> ${escHtml(snap.major240VLoads)}</div>`:''}
   </div>`;
 
-  // ── Wire Runs (read-only list) ──
-  const runs = snap.wireRuns || [];
-  const wireBlock = runs.length
-    ? `<div class="card" style="padding:12px 14px;margin-bottom:10px">
-        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Wire Runs</div>
-        ${runs.map(r => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          ${r.label?`<div style="font-weight:500;margin-bottom:2px">${escHtml(r.label)}</div>`:''}
-          <div style="color:var(--text-secondary);font-size:12.5px">
-            <span style="font-family:var(--mono)">${escHtml(r.gauge||'— gauge —')}</span>
-            · <span style="font-family:var(--mono)">${r.length||0} ft</span>
-            ${r.conduit?` · ${escHtml(r.conduit)}`:''}
-          </div>
-        </div>`).join('')}
-      </div>`
-    : '';
-
   // ── Charger info (EV only) ──
   const chargerBlock = !isEV ? '' : `<div class="card" style="padding:12px 14px;margin-bottom:10px">
     <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Charger</div>
@@ -15902,7 +15877,6 @@ function renderTechPage(leadId) {
     ${milestoneBlock}
     ${scopeBlock}
     ${snapBlock}
-    ${wireBlock}
     ${chargerBlock}
     ${materialsBlock}
     ${photosBlock}
