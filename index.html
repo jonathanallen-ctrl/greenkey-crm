@@ -11850,7 +11850,7 @@ function renderJobDetail(id) {
     </div>
     <div class="jd-sb">
       ${consentBannerHtml}
-      <div id="sms-thread-${id}" style="max-height:340px;overflow-y:auto;padding:4px 2px">
+      <div id="sms-thread-${id}" style="max-height:220px;overflow-y:auto;padding:4px 2px">
         <div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading messages…</div>
       </div>
     </div>
@@ -23235,17 +23235,17 @@ async function renderSMSThread(leadId, quiet) {
           if (Array.isArray(items)) mediaHtml = items.map(it => {
             const u = (it && it.url) ? String(it.url) : '';
             if (!u) return '';
-            const st = 'max-width:140px;max-height:150px;border-radius:8px;margin:1px 0 4px;display:block;border:1px solid var(--border);cursor:pointer';
+            const st = 'max-width:140px;max-height:150px;border-radius:8px;margin:0 0 1px;display:block;border:1px solid var(--border);cursor:pointer';
             return /twilio\.com/i.test(u)
               ? `<img data-twmedia="${escHtml(u)}" alt="📷 loading…" style="${st};min-height:38px;background:var(--bg-elevated)">`
               : `<img src="${escHtml(u)}" alt="📷 picture" style="${st}" onclick="window.open(this.src,'_blank')">`;
           }).join('');
         } catch(_){}
       }
-      return `<div style="display:flex;justify-content:${align};margin:3px 0">
-        <div style="max-width:66%;padding:5px 9px;background:${bg};border:${border};border-radius:10px;font-size:12.5px;line-height:1.35;color:var(--text-primary);white-space:pre-wrap">
+      return `<div style="display:flex;justify-content:${align};margin:2px 0">
+        <div style="max-width:66%;padding:3px 8px;background:${bg};border:${border};border-radius:9px;font-size:12.5px;line-height:1.2;color:var(--text-primary);white-space:pre-wrap">
           ${mediaHtml}${m.body ? escHtml(m.body) : ''}
-          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${escHtml(who)} · ${ts}${statusChip}</div>
+          <div style="font-size:9.5px;color:var(--text-muted);margin-top:1px">${escHtml(who)} · ${ts}${statusChip}</div>
         </div>
       </div>`;
     }).join('');
