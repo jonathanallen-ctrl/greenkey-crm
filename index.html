@@ -5564,7 +5564,7 @@ function renderQuickQuoteForm(q){
       <div class="qq-row">
         <div>
           <div class="qq-lbl">Round-trip drive time (min)</div>
-          <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
+          <div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
@@ -5731,7 +5731,7 @@ function _renderQQ_HVAC(q) {
       <div class="qq-row">
         <div>
           <div class="qq-lbl">Round-trip drive time (min)</div>
-          <div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
+          <div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
@@ -5843,7 +5843,7 @@ function _renderQQ_CircuitReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
+        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
         <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
@@ -5985,7 +5985,7 @@ function _renderQQ_PanelReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
-        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per additional 30 min · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.ceil(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
+        <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
         <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
     </div>
@@ -6083,7 +6083,7 @@ function onQQChange(qid){
   const tandemBreakers=parseInt(document.getElementById('qq-tandem')?.value)||0;
   const difficultyFee=_readNum('qq-difficulty', 0);
   const travelMinutes=parseInt(document.getElementById('qq-travel-min')?.value)||0;
-  const travelAdder=Math.ceil(Math.max(0,travelMinutes-60)/30)*80;
+  const travelAdder=Math.round(Math.max(0,travelMinutes-60)/30)*80;
   const travelFee=_readNum('qq-travel', 0);
   const travelFeeType=document.getElementById('qq-travtype')?.value||'baked';
   // Update travel calc display
@@ -6517,7 +6517,7 @@ function _onQQChange_HVAC(qid) {
   const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
+  const travelAdder = Math.round(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const _pRaw = document.getElementById('qq-permit')?.value;
   const permitFee = (_pRaw !== '' && _pRaw != null && isFinite(parseFloat(_pRaw))) ? parseFloat(_pRaw) : defaultPermitFee(q); // honors a deliberate 0
@@ -6596,7 +6596,7 @@ function _onQQChange_CircuitReplacement(qid) {
   const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
+  const travelAdder = Math.round(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const permitFee = parseFloat(document.getElementById('qq-permit')?.value) || 0; // no permit by default
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
@@ -6670,7 +6670,7 @@ function _onQQChange_PanelReplacement(qid) {
   const afciCount = upgradeAFCI ? (isNaN(afciCountRaw) ? breakerCount : Math.max(0, Math.min(breakerCount, afciCountRaw))) : 0;
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
-  const travelAdder = Math.ceil(Math.max(0, travelMinutes - 60) / 30) * 80;
+  const travelAdder = Math.round(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const _pRaw = document.getElementById('qq-permit')?.value;
   const permitFee = (_pRaw !== '' && _pRaw != null && isFinite(parseFloat(_pRaw))) ? parseFloat(_pRaw) : defaultPermitFee(q); // honors a deliberate 0
@@ -9753,8 +9753,9 @@ function saveMaterialEntry(existingId){
   const markup=parseFloat(document.getElementById('am-markup')?.value)||30;
   if(!name||!cat){toast('Please fill in name and category','error');return;}
   const mats=getMaterials();
-  if(existingId){const idx=mats.findIndex(m=>m.id===existingId);if(idx>=0)mats[idx]={...mats[idx],name,category:cat,unit,unitCost:cost,markup};}
-  else{mats.push({id:'m-'+Date.now(),name,category:cat,unit,unitCost:cost,markup});}
+  const _now=new Date().toISOString();
+  if(existingId){const idx=mats.findIndex(m=>m.id===existingId);if(idx>=0)mats[idx]={...mats[idx],name,category:cat,unit,unitCost:cost,markup,updatedAt:_now};}
+  else{mats.push({id:'m-'+Date.now(),name,category:cat,unit,unitCost:cost,markup,updatedAt:_now});}
   saveMaterials(mats);
   toast('Material saved','success');
   showSec(null,'Materials Library');
@@ -9916,11 +9917,12 @@ function applyMaterialImport() {
   const diff = _diffMaterialImport(parsed);
   const mats = getMaterials();
   const today = new Date().toISOString().slice(0,10);
+  const nowTs = new Date().toISOString();   // full timestamp drives cross-device merge (updatedAt)
   // Apply price updates
   diff.updates.forEach(u => {
     const idx = mats.findIndex(m => m.id === u.existing.id);
     if (idx >= 0) {
-      mats[idx] = { ...mats[idx], unitCost: u.newCost, lastUpdated: today, source: 'Capital Electric' };
+      mats[idx] = { ...mats[idx], unitCost: u.newCost, lastUpdated: today, updatedAt: nowTs, source: 'Capital Electric' };
     }
   });
   // Add new items — default category is heuristic, user can re-categorize manually
@@ -9937,6 +9939,7 @@ function applyMaterialImport() {
       ceId: p.ceId,
       manufacturer: p.manufacturer || '',
       lastUpdated: today,
+      updatedAt: nowTs,
       source: 'Capital Electric'
     });
   });
@@ -10043,7 +10046,8 @@ function commitMaterialImport(){
       markup: 30,
       manufacturer: src.manufacturer || '',
       catalog: src.catalog || '',
-      source: src.source || 'imported'
+      source: src.source || 'imported',
+      updatedAt: new Date().toISOString()
     });
     added++;
   }
@@ -18768,7 +18772,14 @@ async function _spEnsureDrive() {
 //   - PULL: don't clobber local-only records when SP doesn't have them
 //   - PUSH: don't clobber SP records that were added by another user
 //           between our last pull and our current push
-const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications'];
+// gk_materials added 2026-06-24: it was a NON-merge (whole-list overwrite) key,
+// so a device that only had the 43 seeded defaults would overwrite a full
+// imported catalog on SharePoint (last-writer-wins) — silently wiping hundreds
+// of imported items. Merging by id makes the lists UNION instead, so an import
+// can no longer be clobbered by a stale device. Material ids are stable
+// (m-###, m-ce-<CEid>); add/edit/import now stamp updatedAt so price edits win
+// across devices by recency.
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials'];
 function _mergeArrayByIdAndTs(localArr, remoteArr) {
   if (!Array.isArray(localArr)) localArr = [];
   if (!Array.isArray(remoteArr)) remoteArr = [];
