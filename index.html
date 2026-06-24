@@ -10174,7 +10174,7 @@ function _renderPreInstallStrip(lead) {
 
   // Special Order Materials — structured tracker (vendor / PO / ETA / arrival per item).
   if (!matsRequired) {
-    states.push({ state: 'na', icon: '—', label: 'Materials N/A', meta: '', tip: 'No special-order materials for this job.' });
+    states.push({ state: 'na', icon: '+', label: 'Materials', meta: '', click:`openChipEditor('${lead.id}','materials')`, tip: 'No special-order materials detected for this job. Click to add and track them — vendor, PO #, ETA, arrival.' });
   } else {
     const _mItems = (typeof getJobMaterials === 'function') ? getJobMaterials(lead) : (Array.isArray(lead.materials) ? lead.materials : []);
     const _arr = _mItems.filter(m => m.arrived).length;
