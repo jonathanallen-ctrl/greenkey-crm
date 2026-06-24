@@ -19453,6 +19453,21 @@ async function _writeLeadInfoFormToSP(leadId) {
 const _infoFormTimers = {};
 function _regenLeadInfoForm(leadId) {
   if (!leadId) return;
+  // STOP auto-updating the Info form once the quote is approved AND the job has
+  // moved past the "Quote Approved" stage. By then Sherri has moved the folder
+  // out of Active Leads, so a regen would just recreate a stray folder + file.
+  // The quote-approval update is the last one. (Guards both conditions so we
+  // don't freeze early-stage edits or never-approved jobs.)
+  try {
+    const _l = (typeof getLead === 'function') ? getLead(leadId) : null;
+    if (_l) {
+      const _approved = !!_l.milestones?.quoteApproved?.done
+        || (typeof getQuotes === 'function' && getQuotes().some(q => q.leadId === leadId && (q.status === 'approved' || q.status === 'contingent-approved')));
+      const _qaIdx  = STAGES.findIndex(s => s.id === 'quote-approved');
+      const _curIdx = STAGES.findIndex(s => s.id === _l.stage);
+      if (_approved && _qaIdx >= 0 && _curIdx > _qaIdx) return;  // past approval — leave the form (and folder) alone
+    }
+  } catch (_) {}
   clearTimeout(_infoFormTimers[leadId]);
   _infoFormTimers[leadId] = setTimeout(() => {
     delete _infoFormTimers[leadId];
