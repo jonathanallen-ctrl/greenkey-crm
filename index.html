@@ -702,6 +702,15 @@
       </div>
       <textarea id="sms-body" style="width:100%;min-height:160px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.6;transition:border-color 0.15s" oninput="document.getElementById('sms-char-count').textContent=this.value.length+' chars'"></textarea>
     </div>
+    <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <input type="file" id="sms-image-input" accept="image/*" style="display:none" onchange="_smsOnImagePick(this)">
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="document.getElementById('sms-image-input').click()">📎 Attach picture</button>
+      <div id="sms-image-preview" style="display:none;align-items:center;gap:8px">
+        <img id="sms-image-thumb" alt="attachment" style="height:40px;border-radius:6px;border:1px solid var(--border)">
+        <span id="sms-image-name" style="font-size:11.5px;color:var(--text-secondary);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <button class="btn btn-g" style="padding:2px 8px;font-size:11px" onclick="_smsClearImage()">✕ remove</button>
+      </div>
+    </div>
     <div id="sms-prev-wrap" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
       <span style="color:var(--green);font-weight:600">Previously sent</span> — <span id="sms-prev-date"></span>
     </div>
@@ -8375,14 +8384,22 @@ async function sendQuoteEmail(){
       const accts = _msal.getAllAccounts();
       if (accts && accts.length > 0) {
         try {
-          const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
-          _gToken = tr.accessToken;
-        } catch(silentErr) {
-          // Silent failed — scope needs interactive consent (first time Mail.Send).
-          // On iOS/PWA this will redirect away; caller will not resume.
-          console.warn('[GK] silent token failed, trying interactive:', silentErr);
-          const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
-          _gToken = tr2.accessToken;
+          // Fast path: a cached valid token (no network), so a transient blip
+          // doesn't fail the send. This is the common case after Mail.Send was
+          // granted once.
+          const tr0 = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES });
+          _gToken = tr0.accessToken;
+        } catch(_cacheMiss) {
+          try {
+            const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES, forceRefresh: true });
+            _gToken = tr.accessToken;
+          } catch(silentErr) {
+            // Silent failed — scope needs interactive consent (first time Mail.Send).
+            // On iOS/PWA this will redirect away; caller will not resume.
+            console.warn('[GK] silent token failed, trying interactive:', silentErr);
+            const tr2 = await _acquireTokenInteractive(GRAPH_SCOPES);
+            _gToken = tr2.accessToken;
+          }
         }
         canGraph = !!_gToken;
       }
@@ -10490,8 +10507,10 @@ function _renderJobRail(lead){
   const qRows = quotes.length ? quotes.map(q=>{
     const isAcc = (acceptedId===q.id) || q.status==='approved' || q.status==='contingent-approved';
     const stColor = (q.status==='approved'||q.status==='contingent-approved')?'var(--green)':(q.status==='invoiced')?'#8e44ad':(q.status==='declined')?'var(--red)':'var(--text-muted)';
+    const qDate = q.createdAt ? new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
       <div style="min-width:0;cursor:pointer" onclick="openQuoteBuilder('${q.id}')">
+        <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}</div>
         <div style="font-size:13px;font-weight:600;color:var(--text-primary)">$${(q.quoteTotal||0).toLocaleString()}</div>
         <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
       </div>
@@ -11468,17 +11487,11 @@ function renderJobDetail(id) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
         Send Email
       </button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f39c12;color:#f39c12" onclick="scheduleInOutlook('${id}')" title="Open a new Outlook event pre-filled with this job's scope, address, and contact info">
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f39c12;color:#f39c12" onclick="scheduleInOutlook('${id}')" title="Schedule this job — pick the appointment type, set the date and time, and create the Outlook calendar event (installs also send the customer a confirmation)">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
-        Outlook
+        Schedule
       </button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="scheduleNow('${id}')" title="Open the Scheduler with this job pre-selected — bypasses gates if needed">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 4v4l2.5 1.5"/></svg>
-        Schedule Now
-      </button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2e7d32;color:#2e7d32" onclick="openSiteViewModal('${id}')" title="Satellite site view — measure runs/areas and screenshot for the estimate">📍 Site View</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
-      <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button>
     </div>
   </div>`;
 
@@ -20695,13 +20708,21 @@ async function _acquireSMSToken() {
   }
   const accounts = _msal.getAllAccounts();
   if (!accounts.length) throw new Error('No signed-in account — please sign in');
+  // Silent (cache) → silent forceRefresh (retry, fixes an expired/stale token)
+  // → interactive. The middle tier catches the common transient case without a
+  // popup, so a one-off network blip doesn't strand the send.
   try {
     const r = await _msal.acquireTokenSilent({ account: accounts[0], scopes: SMS_SCOPES });
     return r.accessToken;
   } catch (_) {
-    // Popup on desktop, redirect on iOS/PWA (redirect throws mid-flow).
-    const r = await _acquireTokenInteractive(SMS_SCOPES);
-    return r.accessToken;
+    try {
+      const r2 = await _msal.acquireTokenSilent({ account: accounts[0], scopes: SMS_SCOPES, forceRefresh: true });
+      return r2.accessToken;
+    } catch (__) {
+      // Popup on desktop, redirect on iOS/PWA (redirect throws mid-flow).
+      const r3 = await _acquireTokenInteractive(SMS_SCOPES);
+      return r3.accessToken;
+    }
   }
 }
 
@@ -22816,6 +22837,7 @@ function openSMSModal(leadId) {
   if (prevWrap) prevWrap.style.display = 'none';
 
   applySMSTemplate('intro', lead, cust);
+  try { _smsClearImage(); } catch(_){}
   document.getElementById('sms-modal').classList.add('show');
 }
 
@@ -22831,6 +22853,36 @@ function applySMSTemplate(key, lead, cust) {
   if (cc) cc.textContent = body.length + ' chars';
 }
 
+// Outbound picture (MMS): pick + preview, reusing the photo resize helper so
+// the image stays small enough for MMS. Held until send, then uploaded.
+let _smsPendingImage = null; // { contentType, dataBase64, name }
+async function _smsOnImagePick(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!/^image\//i.test(file.type)) { toast('Please choose an image file', 'warning'); input.value = ''; return; }
+  try {
+    const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
+    let blob, mime = file.type, name = file.name || 'photo.jpg';
+    if (typeof _resizeAndConvertImage === 'function') {
+      try { const r = await _resizeAndConvertImage(file, dataUrl, { maxDimension: 1200, quality: 0.8 }); blob = r.blob; mime = r.mimeType || mime; name = r.name || name; }
+      catch(_) { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
+    } else { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
+    const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
+    if (b64.length > 1500000) { toast('That picture is too large even after resizing — try a smaller one', 'warning'); input.value = ''; return; }
+    _smsPendingImage = { contentType: mime, dataBase64: b64, name };
+    const prev = document.getElementById('sms-image-preview');
+    const thumb = document.getElementById('sms-image-thumb');
+    if (thumb) thumb.src = URL.createObjectURL(blob);
+    const nm = document.getElementById('sms-image-name'); if (nm) nm.textContent = name;
+    if (prev) prev.style.display = 'inline-flex';
+  } catch(e) { toast('Could not read image: ' + (e.message || e), 'error'); }
+}
+function _smsClearImage() {
+  _smsPendingImage = null;
+  const prev = document.getElementById('sms-image-preview'); if (prev) prev.style.display = 'none';
+  const inp = document.getElementById('sms-image-input'); if (inp) inp.value = '';
+}
+
 // Outbound send (kept name "sendIntroSMS" for existing button handler).
 async function sendIntroSMS() {
   const lead = getLead(_smsLeadId);
@@ -22839,7 +22891,7 @@ async function sendIntroSMS() {
   const phone = cust?.phone || lead?.customerPhone || '';
   const message = document.getElementById('sms-body').value.trim();
 
-  if (!message) { toast('Message cannot be empty', 'error'); return; }
+  if (!message && !_smsPendingImage) { toast('Add a message or a picture to send', 'error'); return; }
 
   const btn = document.getElementById('sms-send-btn');
   btn.disabled = true;
@@ -22847,6 +22899,18 @@ async function sendIntroSMS() {
 
   try {
     const token = await _acquireSMSToken();
+    // If a picture is attached, upload it first to get a public URL Twilio can fetch.
+    let mediaUrl = null;
+    if (_smsPendingImage) {
+      const up = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/upload-media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ contentType: _smsPendingImage.contentType, dataBase64: _smsPendingImage.dataBase64 })
+      });
+      const upData = await up.json().catch(() => ({}));
+      if (!up.ok || !upData.url) throw new Error(upData?.error || 'Picture upload failed');
+      mediaUrl = upData.url;
+    }
     const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/send', {
       method: 'POST',
       headers: {
@@ -22857,14 +22921,16 @@ async function sendIntroSMS() {
         leadId:      _smsLeadId,
         to:          phone,
         message,
-        templateKey: _smsCurrentTemplateKey
+        templateKey: _smsCurrentTemplateKey,
+        mediaUrl
       })
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data?.error || data?.message || 'Send failed');
 
+    _smsClearImage();
     document.getElementById('sms-modal').classList.remove('show');
-    toast('Text sent successfully! 📱', 'success');
+    toast(mediaUrl ? 'Picture text sent! 📷' : 'Text sent successfully! 📱', 'success');
     renderSMSThread(_smsLeadId);
   } catch(e) {
     toast('Failed to send: ' + e.message, 'error');
@@ -22872,6 +22938,33 @@ async function sendIntroSMS() {
     btn.disabled = false;
     btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3l2 2 2-2h5a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z"/></svg> Send Text';
   }
+}
+
+// Load inbound MMS pictures (Twilio media) through the authed worker proxy and
+// swap them into the <img> placeholders. Outbound media uses a public URL and
+// loads directly, so it isn't touched here.
+async function _hydrateSmsMedia(container){
+  if (!container) return;
+  const imgs = container.querySelectorAll('img[data-twmedia]');
+  if (!imgs.length) return;
+  let token;
+  try { token = await _acquireSMSToken(); } catch(_) { return; }
+  imgs.forEach(async (img) => {
+    const u = img.getAttribute('data-twmedia');
+    img.removeAttribute('data-twmedia');
+    try {
+      const r = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/media?url=' + encodeURIComponent(u),
+        { headers: { 'Authorization': 'Bearer ' + token } });
+      if (!r.ok) throw new Error('media ' + r.status);
+      const blob = await r.blob();
+      const obj = URL.createObjectURL(blob);
+      img.src = obj; img.alt = '📷 picture';
+      img.onclick = () => window.open(obj, '_blank');
+    } catch(e) {
+      img.alt = '📷 (could not load picture)';
+      img.style.minHeight = '';
+    }
+  });
 }
 
 // Fetch & render the full SMS thread for a lead.
@@ -22903,7 +22996,7 @@ async function renderSMSThread(leadId, quiet) {
     const msgs = data.messages || [];
 
     // Fingerprint to detect changes — covers count, ids, and status updates.
-    const fingerprint = msgs.map(m => (m.id || '') + ':' + (m.status || '') + ':' + (m.body || '').length).join('|');
+    const fingerprint = msgs.map(m => (m.id || '') + ':' + (m.status || '') + ':' + (m.body || '').length + ':' + (m.media_json ? '1' : '0')).join('|');
     if (quiet && _smsThreadFingerprint[leadId] === fingerprint) {
       return; // nothing changed, skip re-render
     }
@@ -22927,13 +23020,30 @@ async function renderSMSThread(leadId, quiet) {
       const border = out ? '1px solid var(--green)' : '1px solid var(--border)';
       const statusChip = (m.status && !['sent','delivered','received','queued'].includes(m.status))
         ? ` · <span style="color:#e74c3c">${escHtml(m.status)}</span>` : '';
+      // MMS pictures: inbound Twilio media needs the authed proxy (hydrated after
+      // render); outbound media is our own public URL and loads directly.
+      let mediaHtml = '';
+      if (m.media_json) {
+        try {
+          const items = JSON.parse(m.media_json);
+          if (Array.isArray(items)) mediaHtml = items.map(it => {
+            const u = (it && it.url) ? String(it.url) : '';
+            if (!u) return '';
+            const st = 'max-width:200px;max-height:240px;border-radius:8px;margin:2px 0 6px;display:block;border:1px solid var(--border);cursor:pointer';
+            return /twilio\.com/i.test(u)
+              ? `<img data-twmedia="${escHtml(u)}" alt="📷 loading…" style="${st};min-height:60px;background:var(--bg-elevated)">`
+              : `<img src="${escHtml(u)}" alt="📷 picture" style="${st}" onclick="window.open(this.src,'_blank')">`;
+          }).join('');
+        } catch(_){}
+      }
       return `<div style="display:flex;justify-content:${align};margin:6px 0">
         <div style="max-width:78%;padding:8px 12px;background:${bg};border:${border};border-radius:10px;font-size:13px;line-height:1.45;color:var(--text-primary);white-space:pre-wrap">
-          ${escHtml(m.body)}
+          ${mediaHtml}${m.body ? escHtml(m.body) : ''}
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">${escHtml(who)} · ${ts}${statusChip}</div>
         </div>
       </div>`;
     }).join('');
+    try { _hydrateSmsMedia(el); } catch(_){}
 
     // Only auto-scroll on initial load or if user was at the bottom already.
     if (!quiet || wasPinnedToBottom) {
