@@ -23075,6 +23075,104 @@ async function _hydrateSmsMedia(container){
   });
 }
 
+// ─────────────────── AUTO-FILE INBOUND TEXT PHOTOS ───────────────────
+// Pictures customers text in are captured permanently by the worker the moment
+// they arrive (24/7, even with the CRM closed). This pass is the "when the CRM
+// is open" half: it pulls each NEW inbound picture down through the worker proxy
+// and files it into the job exactly like any other job photo — which means it
+// shows up in the job's Pictures AND uploads to the SharePoint Photo Library
+// under the job id. Deduped by lead.smsPhotosFiled (a synced array of the Twilio
+// media URLs already filed), so a picture is filed once and only once, even
+// across devices and repeated polls.
+const _smsPhotoFilingInFlight = new Set();
+function _blobToFileAndDataUrl(blob, name) {
+  return new Promise((resolve, reject) => {
+    const f = new File([blob], name, { type: blob.type || 'image/jpeg' });
+    const fr = new FileReader();
+    fr.onload = () => resolve({ file: f, dataUrl: fr.result });
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+async function _fileInboundSmsPhotos(leadId, msgs) {
+  if (!leadId || !Array.isArray(msgs)) return;
+  // Only file when Graph is signed in — addFileRecord needs both to upload to
+  // SharePoint. If not signed in, skip: the worker still has the picture, and
+  // we mark nothing as filed, so a later pass (once signed in) files it.
+  if (typeof _spDrive === 'undefined' || !_spDrive || !_gToken) return;
+  const lead = getLead(leadId);
+  if (!lead) return;
+  const filed = Array.isArray(lead.smsPhotosFiled) ? lead.smsPhotosFiled.slice() : [];
+
+  // Collect unfiled inbound image URLs (skip non-image media like shared
+  // contacts, and outbound media — those are our own, not customer photos).
+  const pending = [];
+  for (const m of msgs) {
+    if (!m || m.direction !== 'in' || !m.media_json) continue;
+    let items; try { items = JSON.parse(m.media_json); } catch (_) { continue; }
+    if (!Array.isArray(items)) continue;
+    for (const it of items) {
+      const u = (it && it.url) ? String(it.url) : '';
+      if (!u || !/twilio\.com/i.test(u)) continue;
+      const ct = (it && it.contentType) ? String(it.contentType) : '';
+      if (ct && !/^image\//i.test(ct)) continue;
+      if (filed.includes(u) || _smsPhotoFilingInFlight.has(u)) continue;
+      pending.push({ url: u, ts: m.created_at });
+    }
+  }
+  if (!pending.length) return;
+
+  let token; try { token = await _acquireSMSToken(); } catch (_) { return; }
+  let anyFiled = false;
+  for (const item of pending) {
+    const u = item.url;
+    if (filed.includes(u) || _smsPhotoFilingInFlight.has(u)) continue;
+    _smsPhotoFilingInFlight.add(u);
+    try {
+      const r = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/media?url=' + encodeURIComponent(u),
+        { headers: { 'Authorization': 'Bearer ' + token } });
+      if (!r.ok) throw new Error('media ' + r.status);
+      const blob = await r.blob();
+      if (blob.type && !/^image\//i.test(blob.type)) { _smsPhotoFilingInFlight.delete(u); continue; }
+      const d = item.ts ? new Date(item.ts) : new Date();
+      const stamp = isNaN(d.getTime()) ? String(Date.now()) : d.toISOString().slice(0,16).replace('T',' ').replace(/:/g,'-');
+      let ext = (blob.type && blob.type.split('/')[1]) ? blob.type.split('/')[1].toLowerCase() : 'jpg';
+      if (ext === 'jpeg') ext = 'jpg';
+      const name = 'Text photo ' + stamp + '.' + ext;
+      const conv = await _blobToFileAndDataUrl(blob, name);
+      // Files into the job: appears in Pictures + uploads to SharePoint Photo Library.
+      const rec = addFileRecord(leadId, 'site', null, conv.file, conv.dataUrl);
+      try { if (rec) { rec.source = 'sms'; rec.mediaUrl = u; _idbPut(rec); } } catch (_) {}
+      // Mark filed on the lead (synced across devices) so it is never re-filed.
+      const arr = getLeads();
+      const idx = arr.findIndex(l => l.id === leadId);
+      if (idx >= 0) {
+        if (!Array.isArray(arr[idx].smsPhotosFiled)) arr[idx].smsPhotosFiled = [];
+        if (!arr[idx].smsPhotosFiled.includes(u)) {
+          arr[idx].smsPhotosFiled.push(u);
+          arr[idx].updatedAt = new Date().toISOString();
+          saveLeads(arr);
+        }
+      }
+      filed.push(u);
+      anyFiled = true;
+    } catch (e) {
+      console.warn('[GK] Could not file inbound text photo:', u, e);
+    } finally {
+      _smsPhotoFilingInFlight.delete(u);
+    }
+  }
+  // If the Files page is open on this job, refresh so the new photo shows.
+  if (anyFiled) {
+    try {
+      if (typeof renderFilesPage === 'function' && typeof fmState === 'function') {
+        const fm = fmState();
+        if (fm && fm.jobId === leadId) renderFilesPage();
+      }
+    } catch (_) {}
+  }
+}
+
 // Fetch & render the full SMS thread for a lead.
 // quiet=true is used by the auto-refresh poller — skip the loading placeholder,
 // skip re-rendering if nothing changed, and don't yank the scroll position
@@ -23152,6 +23250,8 @@ async function renderSMSThread(leadId, quiet) {
       </div>`;
     }).join('');
     try { _hydrateSmsMedia(el); } catch(_){}
+    // File any new inbound customer pictures into the job (Pictures + SharePoint).
+    try { _fileInboundSmsPhotos(leadId, msgs); } catch(_){}
 
     // Only auto-scroll on initial load or if user was at the bottom already.
     if (!quiet || wasPinnedToBottom) {
