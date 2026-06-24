@@ -337,6 +337,10 @@
   .pipe-filters{display:flex;gap:8px;flex:1;flex-wrap:wrap}
   .psel{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;color:var(--text-secondary);outline:none;cursor:pointer;transition:border-color var(--t)}
   .psel:focus{border-color:var(--green)}
+  /* Quote-sidebar selects — explicit custom chevron so the arrow always shows
+     (native arrow can get crowded out by long labels like "HVAC Dedicated Circuit"). */
+  .qb-sel{flex:1;min-width:0;background-color:var(--bg-elevated);background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23999' stroke-width='1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;-webkit-appearance:none;appearance:none;border:1px solid var(--border);border-radius:var(--r);padding:6px 26px 6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none;cursor:pointer}
+  .qb-sel:focus{border-color:var(--green)}
   .pipe-tog{display:flex;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
   .ptog{padding:6px 14px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-muted);background:transparent;border:none;font-family:var(--font);transition:all var(--t)}
   .ptog.active{background:var(--green-dim);color:var(--green)}
@@ -1611,7 +1615,7 @@ const JOB_TYPES = [
   {id:'ev-residential',      label:'EV Charger — Residential',     description:'Hardwired Level 2 EVSE',                qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'nema-1450',           label:'NEMA 14-50 Outlet',             description:'50A 240V outlet for plug-in EVSE',       qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'hvac-circuit',        label:'HVAC Dedicated Circuit',        description:'Branch circuit for HVAC equipment',      qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
-  {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:false, permitDefault:0,   permitQmerit:0,   noPermit:true, category:'Branch Circuit'},
+  {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:false, permitDefault:0,   permitQmerit:0,   noPermit:true, retired:true, category:'Branch Circuit'},
 
   // Panel & service work
   // Panel replacement permit is $500 (2026-06-12): covers the required
@@ -3889,10 +3893,10 @@ function showLeadForm(lead, prefillCustId) {
             ${(() => {
               const cats = [...new Set(JOB_TYPES.map(t => t.category || 'Other'))];
               return cats.map(cat => {
-                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat).map(t =>
+                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat && (!t.retired || t.id===l.jobType)).map(t =>
                   `<option value="${t.id}"${t.id===l.jobType?' selected':''}>${t.label}</option>`
                 ).join('');
-                return `<optgroup label="${cat}">${opts}</optgroup>`;
+                return opts ? `<optgroup label="${cat}">${opts}</optgroup>` : '';
               }).join('');
             })()}
           </select>
@@ -5335,21 +5339,21 @@ function renderQuoteBuilder(qid){
         ${(typeof gkSiteViewThumbHTML==='function'?gkSiteViewThumbHTML(lead):'')}
         <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Job Type</div>
-          <select id="qb-jobtype" onchange="changeQuoteJobType('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+          <select id="qb-jobtype" class="qb-sel" onchange="changeQuoteJobType('${q.id}', this.value)">
             ${(() => {
               const cats = [...new Set(JOB_TYPES.map(t => t.category || 'Other'))];
               return cats.map(cat => {
-                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat).map(t =>
+                const opts = JOB_TYPES.filter(t => (t.category||'Other')===cat && (!t.retired || t.id===q.jobType)).map(t =>
                   `<option value="${t.id}"${(q.jobType||'')===t.id?' selected':''}>${t.label}${t.qqEnabled?'':' — Detailed'}</option>`
                 ).join('');
-                return `<optgroup label="${cat}">${opts}</optgroup>`;
+                return opts ? `<optgroup label="${cat}">${opts}</optgroup>` : '';
               }).join('');
             })()}
           </select>
         </div>
         <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Source</div>
-          <select id="qb-source" onchange="changeQuoteSource('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+          <select id="qb-source" class="qb-sel" onchange="changeQuoteSource('${q.id}', this.value)">
             ${(['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
           </select>
         </div>
@@ -5366,7 +5370,7 @@ function renderQuoteBuilder(qid){
           return `
             <div class="card" style="padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
               <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Bill To</div>
-              <select id="qb-billto" onchange="changeQuoteBillTo('${q.id}', this.value)" style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">
+              <select id="qb-billto" class="qb-sel" onchange="changeQuoteBillTo('${q.id}', this.value)">
                 <option value="${homeId}"${currentBillTo===homeId?' selected':''}>${escHtml(homeLabel)} (homeowner)</option>
                 ${referrers.map(r => {
                   const label = r.businessName || custFullName(r) || r.id;
