@@ -10421,6 +10421,19 @@ function _chipEditorHTML(leadId, key){
 // populated value). It counts as revenue ONLY when the job's Invoiced status
 // (`lead.invoiced`) is turned on — that's the single revenue trigger.
 // QuickBooks owns actual collection; the CRM tracks booked revenue.
+// Net revenue from a quote = what GreenKey actually keeps, EXCLUDING the 3%
+// payment/service fee (a pass-through we never see). The customer-facing
+// quoteTotal still INCLUDES the fee on the PDF/email — this is only for the
+// internal Active Quotes display + Job Value/revenue, so revenue isn't inflated.
+// Robust to older quotes that predate preProcessingTotal: subtract the stored
+// fee, then fall back to quoteTotal.
+function _quoteNet(q){
+  if (!q) return 0;
+  if (typeof q.preProcessingTotal === 'number' && isFinite(q.preProcessingTotal)) return q.preProcessingTotal;
+  const fee = (typeof q.paymentProcessingFee === 'number') ? q.paymentProcessingFee : 0;
+  if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.max(0, q.quoteTotal - fee);
+  return 0;
+}
 function getJobValue(lead){
   return (lead && lead.jobValue && typeof lead.jobValue === 'object') ? lead.jobValue : null;
 }
@@ -10481,7 +10494,7 @@ function backfillJobValues(){
       .filter(q => q.leadId === l.id && (q.status === 'invoiced' || q.status === 'approved' || q.status === 'contingent-approved'))
       .sort((a,b) => new Date(b.customerActionAt || b.updatedAt || 0) - new Date(a.customerActionAt || a.updatedAt || 0))[0];
     if (!cand) return;
-    l.jobValue = { amount: cand.quoteTotal || 0, source: 'quote', quoteId: cand.id, setAt: new Date().toISOString(), backfilled: true };
+    l.jobValue = { amount: _quoteNet(cand), source: 'quote', quoteId: cand.id, setAt: new Date().toISOString(), backfilled: true };
     if (cand.status === 'invoiced') l.invoiced = { done: true, at: cand.invoiceDate || cand.updatedAt || new Date().toISOString(), backfilled: true };
     n++;
   });
@@ -10555,7 +10568,7 @@ function _renderJobRail(lead){
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
       <div style="min-width:0;cursor:pointer" onclick="openQuoteBuilder('${q.id}')">
         <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">$${(q.quoteTotal||0).toLocaleString()}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${(q.quoteTotal||0).toLocaleString()} (fee included).">$${_quoteNet(q).toLocaleString()}</div>
         <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
@@ -10584,10 +10597,11 @@ function acceptJobQuote(leadId, quoteId){
     renderJobDetail(leadId); return;
   }
   const cur=getJobValueAmount(lead);
-  if(cur && cur!==(q.quoteTotal||0) && !confirm(`Accept this quote and set Job Value to $${(q.quoteTotal||0).toLocaleString()}?\n\n(Current Job Value is $${cur.toLocaleString()}.)`)) return;
+  const _net=_quoteNet(q);
+  if(cur && cur!==_net && !confirm(`Accept this quote and set Job Value to $${_net.toLocaleString()}?\n\n(Job Value is net of the 3% service fee. Current Job Value is $${cur.toLocaleString()}.)`)) return;
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
   if(i>=0){ arr[i].acceptedQuoteId=quoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
-  setJobValueFromQuote(leadId, q.quoteTotal||0, quoteId);
+  setJobValueFromQuote(leadId, _net, quoteId);
   _setMilestone(leadId,'quoteApproved',true);
   try{ if(typeof _autoCreatePreInstallTasks==='function') _autoCreatePreInstallTasks(q); }catch(_){}
   renderJobDetail(leadId);
