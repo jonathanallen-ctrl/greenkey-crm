@@ -6255,10 +6255,10 @@ function onQQChange(qid){
   const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const preProcessingTotal=Math.round(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
+  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
@@ -6610,10 +6610,10 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee = 0;
   if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lmAfterDiscount * p.qmeritPct);
-  const preProcessingTotal = lmAfterDiscount + qmeritFee + permitFee;
+  const preProcessingTotal = Math.round(lmAfterDiscount + qmeritFee + permitFee);  // whole dollars
   const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
   const paymentBuffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee = Math.round(preProcessingTotal * paymentBuffer / 100 * 100) / 100;
+  const paymentProcessingFee = Math.round(preProcessingTotal * paymentBuffer / 100);
   const quoteTotal = preProcessingTotal + paymentProcessingFee;
   upsertQuote({
     ...q,
@@ -7652,10 +7652,10 @@ function onDQChange(qid){
   const lmAfterDiscount=lm-veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=lmAfterDiscount+qmeritFee+permitFee;
+  const preProcessingTotal=Math.round(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100*100)/100;
+  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
@@ -7699,14 +7699,14 @@ function calcQuoteTotals(q){
   const achBufferPct  = _zeroBuf ? 0 : ((typeof _prefs.achBuffer  === 'number') ? _prefs.achBuffer  : 1);
   const cashBufferPct = _zeroBuf ? 0 : ((typeof _prefs.cashBuffer === 'number') ? _prefs.cashBuffer : 0);
   const lmAfterDiscount = (q.laborAndMaterials||0) - (q.veteranDiscount||0);
-  const preProcessingTotal = lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0);
+  const preProcessingTotal = Math.round(lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0));  // whole dollars
   const _round2 = (x) => Math.round(x * 100) / 100;
   // Per-tier processing fees — each computed independently from the base, so
   // the math is exact (avoids the "discount-off-discounted-price" rounding
   // weirdness of the old non-card-discount model).
-  const ccFee   = _round2(preProcessingTotal * ccBufferPct  / 100);
-  const achFee  = _round2(preProcessingTotal * achBufferPct / 100);
-  const cashFee = _round2(preProcessingTotal * cashBufferPct/ 100);
+  const ccFee   = Math.round(preProcessingTotal * ccBufferPct  / 100);
+  const achFee  = Math.round(preProcessingTotal * achBufferPct / 100);
+  const cashFee = Math.round(preProcessingTotal * cashBufferPct/ 100);
   const ccTotal   = preProcessingTotal + ccFee;
   const achTotal  = preProcessingTotal + achFee;
   const cashTotal = preProcessingTotal + cashFee;
@@ -10604,9 +10604,9 @@ function _chipEditorHTML(leadId, key){
 // fee, then fall back to quoteTotal.
 function _quoteNet(q){
   if (!q) return 0;
-  if (typeof q.preProcessingTotal === 'number' && isFinite(q.preProcessingTotal)) return q.preProcessingTotal;
+  if (typeof q.preProcessingTotal === 'number' && isFinite(q.preProcessingTotal)) return Math.round(q.preProcessingTotal);
   const fee = (typeof q.paymentProcessingFee === 'number') ? q.paymentProcessingFee : 0;
-  if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.max(0, q.quoteTotal - fee);
+  if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.round(Math.max(0, q.quoteTotal - fee));
   return 0;
 }
 function getJobValue(lead){
@@ -10714,9 +10714,9 @@ function _renderJobRail(lead){
     : '';
   const valueSec = `<div class="jd-sec"><div class="jd-sb" style="padding:14px 16px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:2px">Job Value</div>
-    <div style="font-size:28px;font-weight:700;letter-spacing:-1px;line-height:1.1;color:${inv?'var(--green)':'var(--text-primary)'}">${amt?('$'+amt.toLocaleString()):'<span style="color:var(--text-muted);font-size:19px;font-weight:500">Not set</span>'}</div>
+    <div style="font-size:28px;font-weight:700;letter-spacing:-1px;line-height:1.1;color:${inv?'var(--green)':'var(--text-primary)'}">${amt?('$'+Math.round(amt).toLocaleString()):'<span style="color:var(--text-muted);font-size:19px;font-weight:500">Not set</span>'}</div>
     <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <input class="jd-fi" type="number" step="0.01" style="width:118px" value="${amt||''}" placeholder="Enter $" onchange="_editJobValue('${id}',this.value)">
+      <input class="jd-fi" type="number" step="1" style="width:118px" value="${amt?Math.round(amt):''}" placeholder="Enter $" onchange="_editJobValue('${id}',this.value)">
       ${inv
         ? `<span style="font-size:11.5px;font-weight:600;color:var(--green)">💰 Counted</span><button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="markJobInvoiced('${id}',false);renderJobDetail('${id}')">Undo</button>`
         : `<button class="btn btn-p" style="padding:3px 11px;font-size:11.5px" onclick="if(markJobInvoiced('${id}',true))renderJobDetail('${id}')">Mark invoiced</button>`}
@@ -10744,7 +10744,7 @@ function _renderJobRail(lead){
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
       <div style="min-width:0;cursor:pointer" onclick="openQuoteBuilder('${q.id}')">
         <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${(q.quoteTotal||0).toLocaleString()} (fee included).">$${_quoteNet(q).toLocaleString()}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${Math.round(q.quoteTotal||0).toLocaleString()} (fee included).">$${_quoteNet(q).toLocaleString()}</div>
         <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
@@ -22774,11 +22774,13 @@ function _buildSchedContent(lead, cust, quote, type) {
   const paymentLine = (() => {
     if (!isDirect) return `Lead source: ${source} — platform invoices the customer. Do NOT collect payment on site.`;
     if (quote && quote.quoteTotal) {
-      const total   = quote.quoteTotal;
+      // Collect the NET amount on site (NO 3% card fee) — we can't take cards yet,
+      // so on-site/check collection is the fee-free price. Whole dollars.
+      const total   = (typeof _quoteNet === 'function') ? _quoteNet(quote) : quote.quoteTotal;
       const deposit = quote.depositAmount || 0;
-      const due     = Math.max(0, total - deposit);
+      const due     = Math.max(0, Math.round(total - deposit));
       if (due > 0) {
-        const dollars = '$' + Number(due).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const dollars = '$' + due.toLocaleString('en-US');
         return `${dollars} due on completion (we can invoice if a check isn't available).`;
       }
     }
