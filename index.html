@@ -1807,7 +1807,19 @@ function getCustomers() {
   try { return JSON.parse(localStorage.getItem(CK)||'[]'); } catch{ return []; }
 }
 function saveCustomers(arr) { localStorage.setItem(CK, JSON.stringify(arr)); queueSPSync(); }
-function getCustomer(id) { return getCustomers().find(c=>c.id===id)||null; }
+function getCustomer(id) {
+  const arr = getCustomers();
+  let c = arr.find(c=>c.id===id) || null;
+  // Follow a merge pointer so any lingering reference to a folded-in duplicate
+  // resolves to the surviving record. Guard against loops.
+  let guard = 0;
+  while (c && c.mergedInto && guard++ < 8) {
+    const t = arr.find(x=>x.id===c.mergedInto);
+    if (!t || t.id===c.id) break;
+    c = t;
+  }
+  return c;
+}
 
 function upsertCustomer(data) {
   const arr = getCustomers();
@@ -3612,7 +3624,7 @@ function updateLeadsBadge() {
 function renderCustomersPage() {
   const q = (document.getElementById('cust-search-inp')||{}).value||'';
   const ql = q.toLowerCase();
-  let custs = getCustomers();
+  let custs = getCustomers().filter(c=>!c.mergedInto);
   if (ql) custs = custs.filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
     (c.email||'').toLowerCase().includes(ql)||
@@ -3700,6 +3712,7 @@ function renderCustomerDetail(custId) {
         </div>
         ${subName ? `<div style="font-size:13px;color:var(--text-secondary);margin-top:2px">Contact: ${subName}</div>` : ''}
       </div>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="openCustomerMerge('${c.id}')" title="Fold a duplicate customer record into this one">⤵ Merge</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="openEditCustomer('${c.id}')">Edit</button>
       <button class="btn btn-p" style="padding:6px 12px;font-size:12px" onclick="openNewLeadForCustomer('${c.id}')">+ New Job</button>
     </div>
@@ -3735,6 +3748,118 @@ function renderCustomerDetail(custId) {
     </div>`;
 }
 
+// ── CUSTOMER MERGE ───────────────────────────────────────────────────────
+// Fold a duplicate customer into a keeper. We re-point every reference (leads'
+// customerId + cached name/email/phone, quotes' customerId + billToCustomerId),
+// fill blank keeper fields from the duplicate, then mark the duplicate
+// mergedInto:<keeperId> — hidden everywhere; getCustomer() resolves it to the
+// keeper. We never hard-delete: customers sync by union-merge, so a delete could
+// resurrect from another device. The pointer approach is resurrection-proof and
+// self-heals any reference we didn't explicitly re-point. Reversible from a backup.
+function _custMergeCounts(custId){
+  const leads = getLeads().filter(l=>l.customerId===custId).length;
+  const quotes = (typeof getQuotes==='function') ? getQuotes().filter(q=>q.customerId===custId || q.billToCustomerId===custId).length : 0;
+  return { leads, quotes };
+}
+function mergeCustomers(keepId, dropId){
+  if(!keepId || !dropId || keepId===dropId) return false;
+  const carr = getCustomers();
+  const keeper = carr.find(c=>c.id===keepId);
+  const drop   = carr.find(c=>c.id===dropId);
+  if(!keeper || !drop) return false;
+  if(drop.isReferrer || /^cust-ref-/.test(dropId)){ toast('That is a shared bill-to (referrer) record — not safe to merge.','warning'); return false; }
+  const now = new Date().toISOString();
+  // Re-point leads.
+  const larr = getLeads(); let lc=0;
+  larr.forEach(l=>{ if(l.customerId===dropId){
+    l.customerId = keepId;
+    l.customerFirstName = keeper.firstName || l.customerFirstName || '';
+    l.customerLastName  = keeper.lastName  || l.customerLastName  || '';
+    if(keeper.email) l.customerEmail = keeper.email;
+    if(keeper.phone) l.customerPhone = keeper.phone;
+    l.updatedAt = now; lc++;
+  }});
+  if(lc) saveLeads(larr);
+  // Re-point quotes (customer + bill-to).
+  if(typeof getQuotes==='function'){
+    const qarr = getQuotes(); let qc=0;
+    qarr.forEach(q=>{ let t=false;
+      if(q.customerId===dropId){ q.customerId=keepId; t=true; }
+      if(q.billToCustomerId===dropId){ q.billToCustomerId=keepId; t=true; }
+      if(t){ q.updatedAt=now; qc++; }
+    });
+    if(qc && typeof saveQuotes==='function') saveQuotes(qarr);
+  }
+  // Fill blank keeper fields from the duplicate; merge notes + consent.
+  const k = carr.find(c=>c.id===keepId);
+  ['firstName','lastName','email','phone','street','city','state','zip','businessName','propertyType','salutation','paymentTerms'].forEach(f=>{
+    if((k[f]==null || k[f]==='') && drop[f]) k[f]=drop[f];
+  });
+  if((drop.notes||'').trim() && !((k.notes||'').includes((drop.notes||'').trim()))){
+    k.notes = ((k.notes||'').trim() + (k.notes ? '\n— merged from duplicate —\n' : '') + (drop.notes||'').trim()).trim();
+  }
+  if(!k.consentSms && drop.consentSms) k.consentSms = drop.consentSms;
+  if(!k.consentEmail && drop.consentEmail) k.consentEmail = drop.consentEmail;
+  k.updatedAt = now;
+  // Tombstone the duplicate (hidden; pointer-resolved).
+  drop.mergedInto = keepId; drop.mergedAt = now; drop.updatedAt = now;
+  saveCustomers(carr);
+  return true;
+}
+function openCustomerMerge(keepId){
+  const keeper = getCustomer(keepId); if(!keeper) return;
+  const list = findDuplicateCustomers(keeper.firstName, keeper.lastName, keeper.email, keeper.phone)
+    .filter(m => m.cust.id!==keepId && !m.cust.mergedInto && !m.cust.isReferrer);
+  _renderCustomerMergeDrawer(keepId, list, '');
+}
+function _custMergeSearch(keepId, query){
+  const ql=(query||'').toLowerCase().trim();
+  let list;
+  if(ql){
+    list = getCustomers().filter(c=> c.id!==keepId && !c.mergedInto && !c.isReferrer && (
+      custFullName(c).toLowerCase().includes(ql) || (c.email||'').toLowerCase().includes(ql) || (c.phone||'').toLowerCase().includes(ql)
+    )).slice(0,15).map(c=>({cust:c, reasons:[]}));
+  } else {
+    const keeper=getCustomer(keepId);
+    list = findDuplicateCustomers(keeper.firstName, keeper.lastName, keeper.email, keeper.phone)
+      .filter(m=>m.cust.id!==keepId && !m.cust.mergedInto && !m.cust.isReferrer);
+  }
+  _renderCustomerMergeDrawer(keepId, list, query);
+}
+function _renderCustomerMergeDrawer(keepId, candidates, query){
+  const keeper=getCustomer(keepId); if(!keeper) return;
+  const kName = custFullName(keeper)||keeper.businessName||keeper.id;
+  const rows = candidates.length ? candidates.map(m=>{
+    const c=m.cust; const cnt=_custMergeCounts(c.id);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div style="font-weight:600;font-size:13px">${escHtml(custFullName(c)||c.businessName||c.id)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(c.email||'')}${c.email&&c.phone?' · ':''}${escHtml(c.phone||'')}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${cnt.leads} job${cnt.leads!==1?'s':''}, ${cnt.quotes} quote${cnt.quotes!==1?'s':''}${m.reasons&&m.reasons.length?' · '+escHtml(m.reasons.join(', ')):''}</div>
+      </div>
+      <button class="btn btn-p" style="padding:5px 11px;font-size:12px;flex-shrink:0" onclick="_confirmCustomerMerge('${keepId}','${c.id}')">Merge in →</button>
+    </div>`;
+  }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:10px 0">${query?'No matches for that search.':'No likely duplicates detected — search by name, email, or phone above.'}</div>`;
+  const body = `<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">Keeping <strong>${escHtml(kName)}</strong>. Pick the duplicate record to fold in — its jobs, quotes, and any details the keeper is missing move over, and the duplicate is hidden.</div>
+    <input class="fi" id="cust-merge-search" placeholder="Search name, email, or phone…" oninput="_custMergeSearch('${keepId}',this.value)" value="${escHtml(query||'')}" style="width:100%;margin-bottom:6px">
+    <div>${rows}</div>`;
+  openDrawer('Merge duplicate into '+kName, body, `<button class="btn btn-g" onclick="closeDrawer()">Done</button>`);
+}
+function _confirmCustomerMerge(keepId, dropId){
+  const keeper=getCustomer(keepId); const drop=getCustomers().find(c=>c.id===dropId);
+  if(!keeper||!drop) return;
+  const cnt=_custMergeCounts(dropId);
+  const kN=custFullName(keeper)||keeper.id, dN=custFullName(drop)||drop.id;
+  if(!confirm(`Merge "${dN}" INTO "${kN}"?\n\n${cnt.leads} job(s) and ${cnt.quotes} quote(s) will move to ${kN}. The duplicate record is hidden (not deleted) and reversible from a backup.\n\nProceed?`)) return;
+  if(mergeCustomers(keepId, dropId)){
+    toast('Customers merged','success');
+    try{ closeDrawer(); }catch(_){}
+    try{ renderCustomerDetail(keepId); }catch(_){}
+  } else {
+    toast('Merge could not complete','error');
+  }
+}
+
 // ── DRAWER ──
 function openDrawer(title, bodyHtml, footHtml) {
   document.getElementById('dr-title').textContent = title;
@@ -3757,6 +3882,7 @@ function findDuplicateCustomers(fn, ln, email, phone) {
   const normP = p => (p||'').replace(/\D/g,'');
   const matches = [];
   for (const c of custs) {
+    if (c.mergedInto) continue;   // skip records already folded into another
     let score = 0; const reasons = [];
     const ph = normP(phone);
     if (ph.length >= 7 && normP(c.phone) === ph)                       { score+=3; reasons.push('same phone'); }
@@ -8332,6 +8458,23 @@ async function sendQuoteEmail(){
     toast('Pick at least one quote to attach','warning'); return;
   }
 
+  // ── MARGIN-FLOOR GATE ──
+  // Emailing a quote IS delivering it, so enforce the gross-margin floor here.
+  // It used to be checked ONLY by the manual "Mark Delivered" button — which the
+  // auto-mark-delivered-on-send now bypasses, so without this the floor would
+  // never fire. Applies to DIRECT-customer quotes only (platform/custom emails
+  // have no real margin and skip). enforceMarginFloor() hard-blocks below-floor
+  // quotes for non-admins and offers an admin override (records a reason on the
+  // quote). Any block aborts the send before anything is dispatched.
+  if (!isPlatformSend && !isCustomSend) {
+    for (const cid of checkedIds) {
+      const _mq = getQuote(cid);
+      if (!_mq) continue;
+      if (typeof PLATFORM_PAY_SOURCES !== 'undefined' && PLATFORM_PAY_SOURCES.includes(_mq.source)) continue;
+      if (typeof enforceMarginFloor === 'function' && !enforceMarginFloor(_mq)) return;
+    }
+  }
+
   const sendBtn = document.getElementById('em-send-btn');
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
 
@@ -8444,6 +8587,28 @@ async function sendQuoteEmail(){
         ? '✅ Courtesy email sent (no PDF attached)'
         : `✅ Email sent with ${attachments.length} PDF${attachments.length>1?'s':''} attached!`,
         'success');
+      // Emailing the quote IS the delivery — mark the sent quote(s) 'delivered'
+      // so the status reflects reality (was staying 'draft', which also kept the
+      // accept/decline status pollers from ever checking it). Only upgrade FROM
+      // 'draft' (never downgrade an already approved/invoiced/declined quote).
+      // One bulk write to protect the sync debounce.
+      try {
+        const _toMark = new Set(checkedIds);
+        if (_isDirectQuote && _qidForButtons) _toMark.add(_qidForButtons);
+        if (_toMark.size) {
+          const _qarr = getQuotes(); let _qd = false; const _nowD = new Date().toISOString();
+          for (const id of _toMark) {
+            const _i = _qarr.findIndex(x => x.id === id);
+            if (_i >= 0 && _qarr[_i].status === 'draft') {
+              _qarr[_i].status = 'delivered';
+              _qarr[_i].deliveredAt = _nowD;
+              _qarr[_i].updatedAt = _nowD;
+              _qd = true;
+            }
+          }
+          if (_qd) saveQuotes(_qarr);
+        }
+      } catch (e) { console.warn('[GK] mark-delivered after send failed:', e); }
       // Fire-and-forget: also save each quote PDF to the customer's SharePoint
       // folder under Sales and Marketing/Active Leads/{Prefix} - {LastName}
       // Project/. Gives Sherri the PDF without asking her to use the CRM.
@@ -10098,6 +10263,16 @@ function openJobDetail(id) {
           }
         }).catch(e => console.warn('[GK] Photo hydrate on open failed:', e));
       }
+      // Also pull the job's Active Leads SharePoint folder (Sherri's permits,
+      // the Job Info sheet, emailed quote PDFs, anything dropped in SP) into the
+      // CRM file manager. Throttled per job; re-renders if anything new lands.
+      if (typeof _hydrateJobFolderFromSP === 'function') {
+        _hydrateJobFolderFromSP(id).then(r => {
+          if (r && (r.added > 0 || r.refreshed > 0) && S.jobDetailId === id) {
+            try { renderJobDetail(id); } catch(_){}
+          }
+        }).catch(e => console.warn('[GK] Job-folder hydrate on open failed:', e));
+      }
     } catch(_){}
   }, 200);
 }
@@ -10551,6 +10726,7 @@ function _renderJobRail(lead){
   const earthUrl = addr ? `https://earth.google.com/web/search/${encodeURIComponent(addr)}` : '';
   const mapsUrl  = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : '';
   const propSec = `<div class="jd-sec"><div class="jd-sh"><div class="jd-st">Property</div></div><div class="jd-sb" style="padding:12px 14px">
+    <div id="jd-shopdist-${id}" title="Driving distance and time from the shop (Home Base in Settings → Scheduling) to this site" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;display:none"></div>
     <img id="jd-aerial-${id}" alt="Aerial view of the property" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:10px">
     <div style="display:flex;flex-wrap:wrap;gap:6px">
       <a id="jd-streetview-${id}" href="${mapsUrl||'#'}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🛣️ Street View</a>
@@ -10586,6 +10762,17 @@ async function _loadJobRailMap(leadId){
   if(img){ img.src=`https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/${c.lon},${c.lat},17,0/320x150@2x?access_token=${MAPBOX_TOKEN}`; img.style.display='block'; }
   const sv=document.getElementById('jd-streetview-'+leadId);
   if(sv) sv.href=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lon}`;
+  // Distance from the shop (Home Base → site), shown in the Property card.
+  try{
+    const dEl=document.getElementById('jd-shopdist-'+leadId);
+    if(dEl && typeof homeToJobDistOneWay==='function'){
+      const d=await homeToJobDistOneWay(addr);
+      if(d){
+        dEl.innerHTML='📍 <strong>'+d.miles.toFixed(1)+' mi</strong> · '+Math.round(d.minutes)+' min from shop'+(d.estimate?' <span style="color:var(--text-muted)">(est.)</span>':'');
+        dEl.style.display='block';
+      }
+    }
+  }catch(_){}
 }
 // Accept a quote → mark it the winner, prefill Job Value, green the Quote chip,
 // and fire the pre-install tasks (811/materials) like the normal approval path.
@@ -14942,6 +15129,27 @@ async function homeToJobDriveMinOneWay(jobAddress){
     if(res.ok){ const j=await res.json(); const r=j.routes&&j.routes[0]; if(r&&typeof r.duration==='number') return r.duration/60; }
   }catch(e){ console.warn('[GK] Directions failed, using estimate:', e); }
   return driveTimeHrs(home.lat,home.lon,to.lat,to.lon)*60;   // fallback: straight-line estimate
+}
+// One-way road distance (miles) + drive time (minutes) from the shop (Home Base)
+// to a job address, via Mapbox Directions. Falls back to a straight-line
+// estimate (flagged) if Directions fails. Used by the job Property card so the
+// team sees how far a customer is the moment the site address is entered.
+async function homeToJobDistOneWay(jobAddress){
+  const homeAddr = ((typeof getPrefs==='function' && getPrefs().homeBase) || GK_HOME_BASE_ADDR);
+  const home = await geocodeOne(homeAddr, '__home__');
+  const to   = jobAddress ? await geocodeOne(jobAddress, 'job:'+jobAddress) : null;
+  if(!home || !to) return null;
+  try{
+    const url=`https://api.mapbox.com/directions/v5/mapbox/driving/${home.lon},${home.lat};${to.lon},${to.lat}?access_token=${MAPBOX_TOKEN}&overview=false`;
+    const ctrl=new AbortController(); const tid=setTimeout(()=>ctrl.abort(),8000);
+    let res; try{ res=await fetch(url,{signal:ctrl.signal}); } finally{ clearTimeout(tid); }
+    if(res.ok){ const j=await res.json(); const r=j.routes&&j.routes[0];
+      if(r && typeof r.distance==='number' && typeof r.duration==='number')
+        return { miles: r.distance/1609.344, minutes: r.duration/60 };
+    }
+  }catch(e){ console.warn('[GK] Directions (distance) failed, using estimate:', e); }
+  const km = haversineKm(home.lat,home.lon,to.lat,to.lon);
+  return { miles: km*0.621371, minutes: driveTimeHrs(home.lat,home.lon,to.lat,to.lon)*60, estimate:true };
 }
 function _jobAddrForQuote(q){ const l=q&&q.leadId?getLead(q.leadId):null; return l?[l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '):''; }
 // Quick Quote: fill the round-trip travel field from the home base → job drive.
@@ -19867,6 +20075,108 @@ async function _hydratePhotosFromSP(jobId) {
   } catch (e) {
     console.warn('[GK] _hydratePhotosFromSP failed:', e);
     return { added: 0, skipped: 0, error: e.message };
+  }
+}
+
+// Auto-pull the job's Active Leads SharePoint folder (Sales and Marketing/
+// Active Leads/{Prefix} - {LastName} Project) into the CRM file manager, so
+// files dropped straight into SharePoint by anyone (Sherri's permits, the Job
+// Info sheet, emailed quote PDFs, etc.) show up under the job's Photos & Files.
+// Mirrors _hydratePhotosFromSP but targets the job folder rather than the Photo
+// Library: images land under 'site', everything else under 'documents'. Deduped
+// by spDriveItemId / name+jobId; refreshes stale signed downloadUrls. Throttled
+// per job (2 min) so reopening a job doesn't hammer Graph.
+const _jobFolderPullAt = {};
+async function _hydrateJobFolderFromSP(jobId, force){
+  if (!_gToken || !_spDrive || !jobId) return { added: 0 };
+  if (!force && (Date.now() - (_jobFolderPullAt[jobId] || 0)) < 120000) return { added: 0, throttled: true };
+  _jobFolderPullAt[jobId] = Date.now();
+  try {
+    const lead = getLead(jobId); if (!lead) return { added: 0 };
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const folderName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
+    if (!folderName) return { added: 0 };                     // no last name yet → no folder
+    const rootPath = `${SP_ACTIVE_LEADS_PATH}/${folderName}`;
+    const folderResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(rootPath)}`, {
+      headers: { 'Authorization': `Bearer ${_gToken}` }
+    });
+    if (folderResp.status === 404) return { added: 0 };       // folder not created yet
+    if (!folderResp.ok) throw new Error('Folder lookup failed: ' + folderResp.status);
+    const folder = await folderResp.json();
+
+    const filesFound = [];
+    async function _walk(itemId){
+      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
+      while (next){
+        const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+        if (!r.ok) break;
+        const data = await r.json();
+        for (const item of (data.value||[])){
+          if (item.folder) await _walk(item.id);
+          else if (item.file) filesFound.push(item);
+        }
+        next = data['@odata.nextLink'] || null;
+      }
+    }
+    await _walk(folder.id);
+
+    const existingByDriveId = new Map();
+    const existingByNameJob = new Map();
+    for (const f of _filesCache){
+      if (f.spDriveItemId) existingByDriveId.set(f.spDriveItemId, f);
+      if (f.name && f.jobId) existingByNameJob.set(f.jobId + '|' + f.name, f);
+    }
+    const URL_FRESH_MS = 50 * 60 * 1000;
+    async function _dlUrl(item){
+      if (item['@microsoft.graph.downloadUrl']) return item['@microsoft.graph.downloadUrl'];
+      try {
+        const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${item.id}`, { headers: { 'Authorization': 'Bearer ' + _gToken } });
+        if (!r.ok) return '';
+        const full = await r.json(); return full['@microsoft.graph.downloadUrl'] || '';
+      } catch(_){ return ''; }
+    }
+
+    let added = 0, refreshed = 0;
+    for (const item of filesFound){
+      const isImg = /^image\//i.test((item.file && item.file.mimeType) || '');
+      const category = isImg ? 'site' : 'documents';
+      const freshUrl = await _dlUrl(item);
+      const existing = existingByDriveId.get(item.id) || existingByNameJob.get(jobId + '|' + item.name);
+      if (existing){
+        const stale = !existing.downloadUrl || (Date.now() - (existing.downloadUrlFetchedAt||0)) > URL_FRESH_MS;
+        if (stale && freshUrl){
+          existing.downloadUrl = freshUrl; existing.downloadUrlFetchedAt = Date.now();
+          if (!existing.spDriveItemId) existing.spDriveItemId = item.id;
+          if (!existing.spUrl) existing.spUrl = item.webUrl || '';
+          try { await _idbPut(existing); } catch(_){}
+          refreshed++;
+        }
+        continue;
+      }
+      const rec = {
+        id: 'sp-' + item.id,
+        jobId,
+        category,
+        name: item.name,
+        size: item.size || 0,
+        mimeType: (item.file && item.file.mimeType) || 'application/octet-stream',
+        uploadedBy: 'SharePoint',
+        uploadedAt: item.lastModifiedDateTime || new Date().toISOString(),
+        spDriveItemId: item.id,
+        spUrl: item.webUrl || '',
+        downloadUrl: freshUrl,
+        downloadUrlFetchedAt: Date.now(),
+        dataUrl: null
+      };
+      _filesCache.push(rec);
+      try { await _idbPut(rec); } catch(_){}
+      added++;
+    }
+    if (added || refreshed) console.log(`[GK] Job-folder hydrate (${jobId}): added=${added} refreshed=${refreshed}`);
+    return { added, refreshed };
+  } catch(e){
+    console.warn('[GK] _hydrateJobFolderFromSP failed:', e);
+    return { added: 0, error: e.message };
   }
 }
 
