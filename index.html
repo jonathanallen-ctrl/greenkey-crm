@@ -20555,6 +20555,14 @@ async function _activityPollOnce() {
     // no-ops unless that lead still has a locally-pending confirmation.
     const schedLeadIds = [...new Set(events.filter(e => e.type === 'scheduling' && e.leadId).map(e => e.leadId))];
     schedLeadIds.forEach(lid => { try { _pollJobSchedConfirm(lid); } catch(_){} });
+    // AUTO-APPLY quote accept/decline to the local quote + lead — even when the
+    // job isn't open and even if the quote is still 'draft'. The status pollers
+    // only check 'delivered', so without this a customer's email-acceptance
+    // would notify the team but never move the job. hydrateQuoteStatusFromServer
+    // reflects by quoteId: status → approved, stage → Quote Approved, the
+    // accepted banner, and Job Value (net of the 3% fee).
+    const quoteActionIds = [...new Set(events.filter(e => e.type === 'quote' && e.quoteId).map(e => e.quoteId))];
+    quoteActionIds.forEach(qid => { try { if (typeof hydrateQuoteStatusFromServer === 'function') hydrateQuoteStatusFromServer(qid); } catch(_){} });
     // Desktop pop-up for brand-new appointment/quote responses (same UX as texts).
     if (brandNew.length) _activityOsNotify(brandNew);
   } catch (_) { /* silent — polling failures shouldn't toast */ }
@@ -21558,14 +21566,24 @@ async function hydrateQuoteStatusFromServer(qid) {
     if ((newStatus === 'approved' || newStatus === 'contingent-approved') && q.leadId) {
       const lead = getLead(q.leadId);
       if (lead) {
+        // Mirror the in-CRM Accept button so an email-acceptance fully lands:
+        // advance the stage (only from early stages), mark the winning quote,
+        // and set Job Value (NET of the 3% fee) if the job has none — all in a
+        // SINGLE lead write to protect the sync debounce.
         const earlyStages = ['lead-received','info-gathering','estimating','quote-delivered'];
-        if (earlyStages.includes(lead.stage)) {
-          upsertLead({ ...lead, stage: 'quote-approved', stageAt: new Date().toISOString() });
-          if (S.page === 'jobs' && S.jobDetailId === q.leadId && typeof renderJobDetail === 'function') {
-            try { renderJobDetail(q.leadId); } catch(_){}
-          } else if (S.page === 'jobs' && typeof renderPipeline === 'function') {
-            try { renderPipeline(); } catch(_){}
-          }
+        const upd = { ...lead }; let dirty = false;
+        if (earlyStages.includes(lead.stage)) { upd.stage = 'quote-approved'; upd.stageAt = new Date().toISOString(); dirty = true; }
+        if (lead.acceptedQuoteId !== qid) { upd.acceptedQuoteId = qid; dirty = true; }
+        if (!(lead.jobValue && typeof lead.jobValue.amount === 'number') && typeof _quoteNet === 'function') {
+          upd.jobValue = { amount: _quoteNet(q), source: 'quote', quoteId: qid, setAt: new Date().toISOString(), setBy: 'customer-accept' };
+          dirty = true;
+        }
+        if (dirty) { upd.updatedAt = new Date().toISOString(); upsertLead(upd); }
+        try { if (typeof _autoCreatePreInstallTasks === 'function') _autoCreatePreInstallTasks(q); } catch(_){}
+        if (S.page === 'jobs' && S.jobDetailId === q.leadId && typeof renderJobDetail === 'function') {
+          try { renderJobDetail(q.leadId); } catch(_){}
+        } else if (S.page === 'jobs' && typeof renderPipeline === 'function') {
+          try { renderPipeline(); } catch(_){}
         }
       }
     }
@@ -21721,9 +21739,13 @@ async function _notifyTeamOfQuoteAction(quoteId, data) {
 async function _hydrateLeadQuoteStatuses(leadId) {
   if (!leadId) return 0;
   if (typeof _smsConfigured !== 'function' || !_smsConfigured()) return 0;
+  // Include 'draft' too: a quote can be accepted by the customer while still
+  // showing 'draft' locally (e.g. the send flow didn't flip status, or sync
+  // lag), and we must still reflect that acceptance. Polling a never-sent
+  // draft is harmless — the Worker just returns no action.
   const pollable = getQuotes().filter(q =>
     q.leadId === leadId &&
-    ['delivered','approved','contingent-approved'].includes(q.status)
+    ['draft','delivered','approved','contingent-approved'].includes(q.status)
   );
   if (!pollable.length) return 0;
   let changed = 0;
