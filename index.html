@@ -4600,6 +4600,11 @@ function upsertQuote(data){
   return data.id||a[a.length-1].id;
 }
 
+// Official Virginia 811 / Miss Utility of Virginia site — submit & track locate
+// requests online (24/7, free). Surfaced from the MU chip, the 811 task, and the
+// email to Sherri so the link is one tap from anywhere 811 is referenced.
+const MISS_UTILITY_URL = 'https://va811.com/';
+
 // Email Sherri when a Miss Utility task is auto-created (2026-06-12). She
 // runs permits/811/scheduling from email + the Active Leads folder, not the
 // CRM — same delivery pattern as @mention notifications. Fire-and-forget;
@@ -4630,7 +4635,8 @@ async function _emailSherriMissUtilityTask(lead, custLabel, sherriUser, dueDate)
         <tr><td style="padding:2px 12px 2px 0;font-weight:600">Site</td><td>${escHtml(site || '—')}</td></tr>
         <tr><td style="padding:2px 12px 2px 0;font-weight:600">Call by</td><td>${dueDate ? escHtml(dueDate) : 'ASAP'} — VA 811 needs 3 business days' notice before the dig date</td></tr>
       </table>
-      <p style="font-size:13px;margin:0 0 12px">The job info sheet in the customer's Active Leads folder has the full details. After calling, send Jonathan the ticket #.</p>
+      <p style="font-size:13px;margin:0 0 12px">The job info sheet in the customer's Active Leads folder has the full details. After calling/submitting, send Jonathan the ticket #.</p>
+      <p style="font-size:13px;margin:0 0 12px"><a href="${MISS_UTILITY_URL}" style="display:inline-block;background:#f39c12;color:#fff;text-decoration:none;font-weight:600;padding:9px 16px;border-radius:6px">📍 Submit / track the locate at va811.com →</a></p>
       <p style="font-size:13px;margin:0 0 18px"><a href="${jobUrl}" style="color:#2ecc71;text-decoration:none;font-weight:500">Open the job in the CRM →</a></p>
       <p style="font-size:11px;color:#888;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey CRM · automated Miss Utility notification</p>
     </div>`;
@@ -4715,7 +4721,7 @@ function _createMissUtilityTask(lead, dueDate, sourceNote) {
   upsertTask({
     id:          taskId,
     title:       `Call Miss Utility (811) — ${lead.id}`,
-    description: `${sourceNote || 'This job'} requires a locate request before digging — VA 811 needs 3 business days' notice.\nCustomer: ${linkLabel}\nSite: ${[lead.siteStreet, lead.siteCity, lead.siteState||'VA'].filter(Boolean).join(', ')}\n\nAfter calling, save the ticket # to the job notes.`,
+    description: `${sourceNote || 'This job'} requires a locate request before digging — VA 811 needs 3 business days' notice.\nCustomer: ${linkLabel}\nSite: ${[lead.siteStreet, lead.siteCity, lead.siteState||'VA'].filter(Boolean).join(', ')}\n\nSubmit or track the locate online (24/7, free): ${MISS_UTILITY_URL}\nAfter calling/submitting, save the ticket # to the job notes.`,
     linkedId:    lead.id,
     linkedLabel: linkLabel,
     assignedTo:  _sherri?.id || '',
@@ -10504,9 +10510,11 @@ function _chipEditorHTML(leadId, key){
     }
     case 'missutility': {
       const mu=getTasks().find(t=>t.linkedId===leadId && t.id==='task-mu-'+leadId);
-      return _chipEditorShell('Miss Utility (811)', mu
-        ? row(btnP('Open 811 task',`closeChipEditor();openTaskDetail('${mu.id}')`)+`<span style="font-size:12px;color:var(--text-secondary)">Status: ${escHtml(mu.status)}</span>`)
-        : row(btnP('Create 811 task + email Sherri',`flagMissUtility('${leadId}')`))+note('Normally fires on quote approval — use this for jobs quoted outside the CRM.'));
+      const muLink = `<a class="btn btn-g" href="${MISS_UTILITY_URL}" target="_blank" rel="noopener" style="padding:4px 11px;font-size:12px;text-decoration:none">🔗 Submit / track at va811.com</a>`;
+      return _chipEditorShell('Miss Utility (811)', (mu
+        ? row(btnP('Open 811 task',`closeChipEditor();openTaskDetail('${mu.id}')`)+muLink+`<span style="font-size:12px;color:var(--text-secondary)">Status: ${escHtml(mu.status)}</span>`)
+        : row(btnP('Create 811 task + email Sherri',`flagMissUtility('${leadId}')`)+muLink)+note('Normally fires on quote approval — use this for jobs quoted outside the CRM.'))
+        + note('Virginia 811 (Miss Utility of Virginia) — submit online 24/7, free. Allow 3 business days before digging.'));
     }
     case 'materials': {
       let mItems = getJobMaterials(lead);
@@ -19685,7 +19693,7 @@ function _buildLeadInfoPdfDoc(lead, customer) {
 
   section('Miss Utility (811)');
   if (leadRequiresMissUtility(lead.id, quotes)) {
-    row('Locate required', 'YES — trenching / ground rods. Call 811 at least 3 BUSINESS DAYS before digging.', { color: [200,60,40], bold: true });
+    row('Locate required', 'YES — trenching / ground rods. Call 811 at least 3 BUSINESS DAYS before digging. Submit/track online: va811.com', { color: [200,60,40], bold: true });
   } else {
     row('Locate required', 'Not indicated by current scope (re-check if scope changes)');
   }
