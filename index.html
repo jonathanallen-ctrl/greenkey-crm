@@ -14963,10 +14963,13 @@ function _seedInspectorsOnce(){
 
 function _ahjInspectorsHTML(ahjId){
   const list=inspectorsForAHJ(ahjId);
-  const rows = list.length ? list.map(i=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
-      <div style="flex:1;min-width:0"><span style="font-weight:500;font-size:12.5px">${escHtml(i.name||'')}</span>${i.phone?` <span style="color:var(--text-muted);font-size:11.5px">${escHtml(i.phone)}</span>`:''}</div>
-      ${i.phone?`<button class="btn btn-p" style="padding:2px 9px;font-size:11px" onclick="openInspectorSMS('${i.id}')">💬 Text</button>`:''}
-      <button class="btn btn-g" style="padding:2px 8px;font-size:11px" onclick="openInspectorForm('${ahjId}','${i.id}')">Edit</button>
+  const rows = list.length ? list.map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(i.name||'')}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(i.phone||'no number')}${i.notes?` · ${escHtml(i.notes)}`:''}</div>
+      </div>
+      ${i.phone?`<button class="btn btn-p" style="padding:5px 12px;font-size:12px;flex-shrink:0" onclick="openInspectorSMS('${i.id}')">💬 Text</button>`:''}
+      <button class="btn btn-g" style="padding:5px 9px;font-size:12px;flex-shrink:0" onclick="openInspectorForm('${ahjId}','${i.id}')">Edit</button>
     </div>`).join('') : `<div style="font-size:11.5px;color:var(--text-muted)">No inspectors yet.</div>`;
   return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -15038,13 +15041,41 @@ function _inspTogglePicker(forceOpen){
   if(open){
     const jobs=_awaitingInspectionJobs();
     const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(nm)} — ${escHtml(l.id)}</option>`; }).join('');
-    p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection, then tap photos to attach.</div>
+    p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection. Tap a photo to attach it · tap 🔍 to view full size before sending.</div>
       <select class="fsel" id="insp-pick-job" style="width:100%;margin-bottom:8px" onchange="_inspSetPickJob(this.value)"><option value="">— Select a job —</option>${opts}</select>
-      <div id="insp-photo-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;max-height:240px;overflow:auto"></div>`;
-    if(_inspPickJob) _renderInspPhotoGrid();
+      <div id="insp-pick-addr"></div>
+      <div id="insp-photo-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;max-height:340px;overflow:auto"></div>`;
+    if(_inspPickJob){ _renderInspPickAddr(); _renderInspPhotoGrid(); }
   }
 }
-function _inspSetPickJob(jid){ _inspPickJob=jid||null; _renderInspPhotoGrid(); }
+function _inspSetPickJob(jid){ _inspPickJob=jid||null; _renderInspPickAddr(); _renderInspPhotoGrid(); }
+function _renderInspPickAddr(){
+  const el=document.getElementById('insp-pick-addr'); if(!el) return;
+  if(!_inspPickJob){ el.innerHTML=''; return; }
+  const lead=getLead(_inspPickJob); const addr=lead?_jobSiteAddress(lead):'';
+  if(!addr){ el.innerHTML=`<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">No service address on file for this job.</div>`; return; }
+  el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+    <div style="flex:1;min-width:0"><div style="font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px">Service address</div><div style="font-size:13px;font-weight:600">${escHtml(addr)}</div></div>
+    <button class="btn btn-g" style="padding:5px 10px;font-size:12px;white-space:nowrap;flex-shrink:0" onclick="_inspInsertAddr()">➕ Add to message</button>
+  </div>`;
+}
+function _inspInsertAddr(){
+  const lead=getLead(_inspPickJob); if(!lead) return; const addr=_jobSiteAddress(lead); if(!addr) return;
+  const c=lead.customerId?getCustomer(lead.customerId):null; const nm=c?custFullName(c):(lead.customerName||'');
+  const line=(nm?nm+' — ':'')+addr;
+  const ta=document.getElementById('insp-sms-body'); if(!ta) return;
+  const cur=ta.value||''; ta.value=(cur && !/\s$/.test(cur) ? cur+'\n' : cur)+line; ta.focus(); toast('Address added to message','success');
+}
+function _inspPreviewPhotoById(fileId){
+  const f=getJobFiles(_inspPickJob).find(x=>x.id===fileId); if(!f) return;
+  const url=f.downloadUrl||f.dataUrl||f.spUrl; if(!url) return;
+  let lb=document.getElementById('insp-lightbox');
+  if(!lb){ lb=document.createElement('div'); lb.id='insp-lightbox'; lb.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:3000;padding:16px;box-sizing:border-box'; lb.onclick=function(e){ if(e.target===lb) lb.style.display='none'; }; document.body.appendChild(lb); }
+  lb.innerHTML=`<div style="position:absolute;top:12px;right:16px"><button class="btn btn-g" onclick="document.getElementById('insp-lightbox').style.display='none'">✕ Close</button></div>
+    <img src="${url}" style="max-width:96%;max-height:84vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+    ${f.name?`<div style="color:#fff;font-size:13px;margin-top:10px;opacity:.85">${escHtml(f.name)}</div>`:''}`;
+  lb.style.display='flex';
+}
 function _awaitingInspectionJobs(){
   return getLeads().filter(l=>{ const ms=l.milestones||{}; if(ms.finalInspPassed&&ms.finalInspPassed.done) return false; return l.stage==='final-inspection' || (ms.installScheduled&&ms.installScheduled.date && ['scheduled','installation','post-install-docs','final-inspection'].includes(l.stage)); });
 }
@@ -15052,9 +15083,12 @@ function _renderInspPhotoGrid(){
   const grid=document.getElementById('insp-photo-grid'); if(!grid) return; const jid=_inspPickJob; if(!jid){ grid.innerHTML=''; return; }
   const imgs=(typeof getJobFiles==='function'?getJobFiles(jid):[]).filter(f=>(f.mimeType||'').indexOf('image/')===0 && (f.downloadUrl||f.dataUrl||f.spUrl));
   if(!imgs.length){ grid.innerHTML=`<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">No photos on this job yet. They auto-pull from SharePoint when the job is opened.</div>`; return; }
-  grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=(typeof _imgSrc==='function'?_imgSrc(f):'')||f.downloadUrl||f.dataUrl||'';
-    return `<div onclick="_inspTogglePhoto('${f.id}')" title="${escHtml(f.name||'')}" style="cursor:pointer;border:2px solid ${sel?'var(--green)':'transparent'};border-radius:6px;overflow:hidden;position:relative">
-      <img src="${src}" style="width:100%;height:70px;object-fit:cover;display:block" loading="lazy">${sel?`<div style="position:absolute;top:2px;right:2px;background:var(--green);color:#fff;border-radius:50%;width:16px;height:16px;font-size:11px;text-align:center;line-height:16px">✓</div>`:''}</div>`;
+  grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=f.downloadUrl||f.dataUrl||f.spUrl||'';
+    return `<div style="border:3px solid ${sel?'var(--green)':'var(--border)'};border-radius:8px;overflow:hidden;position:relative">
+      <img onclick="_inspTogglePhoto('${f.id}')" src="${src}" title="${escHtml(f.name||'')}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;cursor:pointer">
+      <button onclick="_inspPreviewPhotoById('${f.id}')" title="View full size" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,.62);color:#fff;border:none;border-radius:6px;padding:3px 7px;font-size:13px;cursor:pointer;line-height:1">🔍</button>
+      ${sel?`<div style="position:absolute;top:5px;left:5px;background:var(--green);color:#fff;border-radius:50%;width:20px;height:20px;font-size:13px;text-align:center;line-height:20px;font-weight:700">✓</div>`:''}
+    </div>`;
   }).join('');
 }
 function _inspTogglePhoto(fileId){
