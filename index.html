@@ -15093,25 +15093,62 @@ function _renderInspPhotoGrid(){
 }
 function _inspTogglePhoto(fileId){
   if(_inspSelPhotos[fileId]) delete _inspSelPhotos[fileId];
-  else { const f=getJobFiles(_inspPickJob).find(x=>x.id===fileId); if(f) _inspSelPhotos[fileId]={ url:(f.downloadUrl||f.dataUrl||f.spUrl), name:f.name }; }
+  else { const f=getJobFiles(_inspPickJob).find(x=>x.id===fileId); if(f) _inspSelPhotos[fileId]={ url:(f.downloadUrl||f.dataUrl||f.spUrl), downloadUrl:f.downloadUrl, dataUrl:f.dataUrl, spUrl:f.spUrl, name:f.name, mimeType:f.mimeType }; }
   _renderInspPhotoGrid(); _renderInspAttachBar();
+}
+// Returns a small, Twilio-friendly media URL for a selected photo. Resizes +
+// re-hosts via the worker (the SAME proven path as customer MMS) so carriers
+// don't drop oversized full-res images. Falls back to the raw URL only if the
+// bytes can't be read client-side (e.g. a cross-origin block) — Twilio then
+// fetches it server-side.
+async function _inspMediaUrl(src, token){
+  const raw = src.downloadUrl || src.dataUrl || src.spUrl || src.url;
+  try{
+    let dataUrl = src.dataUrl;
+    if(!dataUrl){
+      const u=src.downloadUrl||src.spUrl; if(!u) return raw;
+      const r=await fetch(u); if(!r.ok) return raw;
+      const b=await r.blob();
+      dataUrl=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(b); });
+    }
+    let mime='image/jpeg', name=(src.name||'photo.jpg'), blob;
+    if(typeof _resizeAndConvertImage==='function'){ const rr=await _resizeAndConvertImage({type:'image/jpeg',name},dataUrl,{maxDimension:1600,quality:0.82}); blob=rr.blob; mime=rr.mimeType||mime; name=rr.name||name; }
+    else { blob=(typeof _dataUrlToBlob==='function')?_dataUrlToBlob(dataUrl):await(await fetch(dataUrl)).blob(); }
+    const tob64=(bl)=>new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result).split(',')[1]||''); fr.onerror=rej; fr.readAsDataURL(bl); });
+    let b64=await tob64(blob);
+    if(b64.length>1400000 && typeof _resizeAndConvertImage==='function'){ const rr=await _resizeAndConvertImage({type:'image/jpeg',name},dataUrl,{maxDimension:1100,quality:0.7}); b64=await tob64(rr.blob); }
+    if(b64.length>1400000) return raw;
+    const up=await fetch(SMS_WORKER_URL.replace(/\/$/,'')+'/sms/upload-media',{ method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body:JSON.stringify({contentType:mime,dataBase64:b64}) });
+    const upd=await up.json().catch(()=>({})); if(up.ok&&upd&&upd.url) return upd.url;
+    return raw;
+  }catch(e){ console.warn('[GK] resize/rehost failed, sending raw url:',e); return raw; }
 }
 async function sendInspectorSMS(btn){
   const insp=getInspector(_inspSmsId); if(!insp) return;
-  const ta=document.getElementById('insp-sms-body'); const body=((ta&&ta.value)||'').trim(); const photos=Object.values(_inspSelPhotos);
+  const ta=document.getElementById('insp-sms-body'); const body=((ta&&ta.value)||'').trim();
+  const photos=Object.values(_inspSelPhotos);
   if(!body && !photos.length){ toast('Type a message or attach a photo','warning'); return; }
-  if(btn) btn.disabled=true;
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  const key='insp-'+insp.id; const base=SMS_WORKER_URL.replace(/\/$/,''); let sent=0, failed=0;
   try{
-    const token=await _acquireSMSToken(); const key='insp-'+insp.id; const url=SMS_WORKER_URL.replace(/\/$/,'')+'/sms/send';
-    const post=(payload)=>fetch(url,{ method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body:JSON.stringify(payload) });
-    if(photos.length){ for(let i=0;i<photos.length;i++){ await post({ leadId:key, to:insp.phone, message:(i===0?body:''), mediaUrl:photos[i].url }); } }
-    else { await post({ leadId:key, to:insp.phone, message:body }); }
+    const token=await _acquireSMSToken();
+    const send=async(payload)=>{ const r=await fetch(base+'/sms/send',{ method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body:JSON.stringify(payload) }); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error((d&&(d.error||d.message))||('send '+r.status)); return d; };
+    // 1) Text first, on its own, so it never goes down with a failing photo.
+    if(body){ try{ await send({ leadId:key, to:insp.phone, message:body }); sent++; }catch(e){ failed++; console.warn('[GK] inspector text failed:',e); } }
+    // 2) Each photo: resize + re-host (small) then send, spaced out to avoid carrier filtering.
+    for(let i=0;i<photos.length;i++){
+      try{ const mediaUrl=await _inspMediaUrl(photos[i], token); await send({ leadId:key, to:insp.phone, message:'', mediaUrl }); sent++; }
+      catch(e){ failed++; console.warn('[GK] inspector photo failed:',(photos[i]&&photos[i].name),e); }
+      await new Promise(r=>setTimeout(r,400));
+    }
     if(ta) ta.value=''; _inspSelPhotos={}; _renderInspAttachBar();
     const p=document.getElementById('insp-picker'); if(p&&p.style.display!=='none') _renderInspPhotoGrid();
-    setTimeout(()=>{ try{ renderSMSThread(key); }catch(e){} }, 700);
-    toast('Sent to '+insp.name,'success');
+    setTimeout(()=>{ try{ renderSMSThread(key); }catch(e){} }, 800);
+    if(failed && sent) toast(sent+' of '+(sent+failed)+' sent — '+failed+' failed, try resending those','warning');
+    else if(failed && !sent) toast('Send failed — nothing went through','error');
+    else toast('Sent to '+insp.name,'success');
   }catch(e){ console.warn('[GK] inspector SMS send failed:',e); toast('Send failed: '+(e.message||e),'error'); }
-  finally{ if(btn) btn.disabled=false; }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='Send'; } }
 }
 function textInspectorForJob(leadId){
   const lead=getLead(leadId); if(!lead) return; const ahjs=getAHJs(); const j=(lead.jurisdiction||lead.siteCity||'').toLowerCase();
