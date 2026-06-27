@@ -2691,6 +2691,11 @@ function renderSchedulingSettings() {
       <div class="srl" style="font-size:14px;font-weight:600;margin-bottom:6px">Outlook Calendar Target</div>
       <div class="srd" style="margin-bottom:12px">When you click <strong>Schedule in Outlook</strong> on a job, the event is created on this calendar. Default is your primary inbox calendar — pick a different one (e.g. <em>GreenKey Business Calendar</em>). This is set <strong>per device</strong>: each person picks their own here, and it never changes your Outlook's own default calendar.</div>
       ${calBlock}
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" ${getSchedOpenWeb()?'checked':''} onchange="setSchedOpenWeb(this.checked)" style="width:15px;height:15px;cursor:pointer">
+        After scheduling, also open the event in Outlook on the web
+      </label>
+      <div style="font-size:11.5px;color:var(--text-muted);font-style:italic;margin-top:4px;max-width:520px">Leave this <strong>off</strong> if you use the Outlook desktop app — the event is created on the calendar and syncs to your app automatically, so there's no reason to open a browser tab. Turn it on if you prefer to review each event in Outlook on the web.</div>
       <div id="cal-picker-wrap" style="margin-top:12px"></div>
       <div style="margin-top:10px;font-size:11.5px;color:var(--text-muted);font-style:italic">First-time use will prompt you to grant Microsoft the <code>Calendars.ReadWrite</code> permission. After that, picking and changing is instant.</div>
     </div>`;
@@ -10490,14 +10495,31 @@ function _chipEditorHTML(leadId, key){
   const btnP = (l,o)=>`<button class="btn btn-p" style="padding:4px 11px;font-size:12px" onclick="${o}">${l}</button>`;
   switch(key){
     case 'quote': {
-      const quotes=getQuotes().filter(q=>q.leadId===leadId);
-      if(quotes.some(q=>q.status==='approved'||q.status==='contingent-approved'))
-        return _chipEditorShell('Quote', note('Approved automatically from a CRM quote — manage quotes in the Active Quotes panel.'));
+      const quotes=getQuotes().filter(q=>q.leadId===leadId).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
+      if(quotes.length){
+        // Job HAS quotes (CRM-built or recorded outside). Approve = Accept the
+        // specific winning quote — that's how it knows WHICH one with multiples.
+        const accId=lead.acceptedQuoteId;
+        const qrows=quotes.map(q=>{
+          const isAcc=(accId===q.id)||q.status==='approved'||q.status==='contingent-approved';
+          const qd=q.createdAt?new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+          const lbl=`<span style="flex:1;min-width:0;font-size:12.5px"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qd?' · '+qd:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')}</span>`:''} — <strong>$${_quoteNet(q).toLocaleString()}</strong> <span style="color:var(--text-muted)">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</span></span>`;
+          return row(lbl + (isAcc
+            ? btn('✓ Accepted — undo',`acceptJobQuote('${leadId}','${q.id}')`)
+            : btnP('Accept this quote',`acceptJobQuote('${leadId}','${q.id}')`)));
+        }).join('');
+        return _chipEditorShell('Quote', qrows
+          + row(btn('+ Record outside quote',`openExternalQuote('${leadId}')`))
+          + note('Accepting marks that quote the winner, sets the Job Value (net of the 3% fee), and greens this chip. With multiple quotes, accept the one the customer approved.'));
+      }
+      // No quotes yet — outside-CRM / fixed-price job.
       const manual=!!ms.quoteApproved?.done;
-      return _chipEditorShell('Quote', row(manual
-        ? `<span style="font-size:12px;color:var(--text-secondary)">Marked approved manually.</span>`+btn('Set back to pending',`_setMilestone('${leadId}','quoteApproved',false);renderJobDetail('${leadId}')`)
-        : btnP('Mark approved (manual)',`_setMilestone('${leadId}','quoteApproved',true);renderJobDetail('${leadId}')`))
-        + note('Use manual approval for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).'));
+      return _chipEditorShell('Quote',
+        row(btnP('+ Record outside quote',`openExternalQuote('${leadId}')`))
+        + row(manual
+          ? `<span style="font-size:12px;color:var(--text-secondary)">Marked approved (no value).</span>`+btn('Set back to pending',`_setMilestone('${leadId}','quoteApproved',false);renderJobDetail('${leadId}')`)
+          : btn('Mark approved without a value',`_setMilestone('${leadId}','quoteApproved',true);renderJobDetail('${leadId}')`))
+        + note('No CRM quote yet. Use “Record outside quote” for Qmerit / Electrum / Treehouse fixed-price jobs so the value shows in Active Quotes and counts as revenue. “Mark approved” only flags the stage, with no dollar value.'));
     }
     case 'permit': {
       const ap=ms.permitApplied||{}, rc=ms.permitReceived||{};
@@ -10749,15 +10771,19 @@ function _renderJobRail(lead){
     const isAcc = (acceptedId===q.id) || q.status==='approved' || q.status==='contingent-approved';
     const stColor = (q.status==='approved'||q.status==='contingent-approved')?'var(--green)':(q.status==='invoiced')?'#8e44ad':(q.status==='declined')?'var(--red)':'var(--text-muted)';
     const qDate = q.createdAt ? new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    const titleTxt = q.external
+      ? `Outside / fixed-price quote (${escHtml(q.source||'external')}) — no 3% fee; counts as revenue. Click to edit.`
+      : `Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${Math.round(q.quoteTotal||0).toLocaleString()} (fee included).`;
+    const openAction = q.external ? `openExternalQuote('${id}','${q.id}')` : `openQuoteBuilder('${q.id}')`;
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <div style="min-width:0;cursor:pointer" onclick="openQuoteBuilder('${q.id}')">
-        <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${Math.round(q.quoteTotal||0).toLocaleString()} (fee included).">$${_quoteNet(q).toLocaleString()}</div>
+      <div style="min-width:0;cursor:pointer" onclick="${openAction}">
+        <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')} (outside)</span>`:''}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="${titleTxt}">$${_quoteNet(q).toLocaleString()}</div>
         <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
     </div>`;
-  }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet.</div>`;
+  }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
   const quotesSec = `<div class="jd-sec"><div class="jd-sh" style="display:flex;align-items:center;justify-content:space-between"><div class="jd-st">Active Quotes</div><button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button></div><div class="jd-sb" style="padding:6px 14px 12px">${qRows}</div></div>`;
   return valueSec + propSec + quotesSec;
 }
@@ -10787,8 +10813,11 @@ async function _loadJobRailMap(leadId){
 function acceptJobQuote(leadId, quoteId){
   const lead=getLead(leadId); const q=getQuotes().find(x=>x.id===quoteId); if(!lead||!q) return;
   if(lead.acceptedQuoteId===quoteId){
+    // Undo: un-mark the winner. Also revert the quote's status to 'delivered'
+    // IF we set it to approved on accept (don't touch a customer-driven accept).
     const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
     if(i>=0){ delete arr[i].acceptedQuoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
+    try{ if(q.status==='approved' && !q.customerActionAt && !q.external){ upsertQuote({...getQuote(quoteId), status:'delivered', updatedAt:new Date().toISOString()}); } }catch(_){}
     renderJobDetail(leadId); return;
   }
   const cur=getJobValueAmount(lead);
@@ -10798,8 +10827,62 @@ function acceptJobQuote(leadId, quoteId){
   if(i>=0){ arr[i].acceptedQuoteId=quoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
   setJobValueFromQuote(leadId, _net, quoteId);
   _setMilestone(leadId,'quoteApproved',true);
+  // Mark the winning quote Approved so Active Quotes + reports read consistently
+  // (was only flagging it the winner, leaving status as draft/delivered).
+  try{ if(q.status!=='approved' && q.status!=='contingent-approved'){ upsertQuote({...getQuote(quoteId), status:'approved', updatedAt:new Date().toISOString()}); } }catch(_){}
   try{ if(typeof _autoCreatePreInstallTasks==='function') _autoCreatePreInstallTasks(q); }catch(_){}
   renderJobDetail(leadId);
+}
+
+// ── RECORD AN OUTSIDE / FIXED-PRICE QUOTE ──────────────────────────────────
+// For jobs quoted outside the CRM (Qmerit / Electrum / Treehouse fixed price,
+// etc.). Creates a lightweight quote record so the value appears in Active
+// Quotes and counts as revenue. External quotes carry NO 3% fee (the platform
+// pays, or it's a fixed price), so net = the amount entered.
+function openExternalQuote(leadId, quoteId){
+  const lead=getLead(leadId); if(!lead) return;
+  const ex = quoteId ? getQuote(quoteId) : null;
+  const SRCS = ['Qmerit','Electrum','Treehouse','AF1','Website','Phone','Referral','Other'];
+  const curSrc = ex ? (ex.source||'Other') : (lead.source||'Other');
+  const amt = ex ? _quoteNet(ex) : '';
+  const body = `
+    <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px">Record a quote created OUTSIDE the CRM so its value shows in Active Quotes and counts as revenue when the job is invoiced. No 3% fee is added (platform-paid or fixed price).</div>
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Amount ($) — what GreenKey collects/keeps</label>
+    <input class="fi" id="ext-q-amt" type="number" step="1" min="0" value="${amt}" placeholder="e.g. 1850" style="width:100%;margin-bottom:12px">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Source</label>
+    <select class="fsel" id="ext-q-src" style="width:100%;margin-bottom:12px">${SRCS.map(s=>`<option${s===curSrc?' selected':''}>${escHtml(s)}</option>`).join('')}</select>
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Note (optional) — PO #, or where the quote PDF lives in Documents</label>
+    <input class="fi" id="ext-q-note" value="${ex?escHtml(ex.scope||''):''}" placeholder="e.g. Treehouse PO 12345 — PDF in Documents" style="width:100%">`;
+  const foot = `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button><button class="btn btn-p" onclick="saveExternalQuote('${leadId}','${quoteId||''}')">${ex?'Save':'Save & set Job Value'}</button>`;
+  openDrawer(ex?'Edit outside quote':'Record outside quote', body, foot);
+}
+function saveExternalQuote(leadId, quoteId){
+  const lead=getLead(leadId); if(!lead) return;
+  const raw=parseFloat(document.getElementById('ext-q-amt')?.value);
+  if(!isFinite(raw)||raw<=0){ toast('Enter a dollar amount','warning'); return; }
+  const amount=Math.round(raw);
+  const src=document.getElementById('ext-q-src')?.value||'Other';
+  const noteTxt=(document.getElementById('ext-q-note')?.value||'').trim();
+  if(quoteId){
+    const ex=getQuote(quoteId); if(!ex){ toast('Quote not found','error'); return; }
+    upsertQuote({...ex, source:src, scope:noteTxt, external:true, preProcessingTotal:amount, paymentProcessingFee:0, quoteTotal:amount, updatedAt:new Date().toISOString()});
+    closeDrawer();
+    if(getLead(leadId)?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, amount, quoteId);
+    renderJobDetail(leadId);
+    toast('Outside quote updated','success');
+    return;
+  }
+  const qid='qt-ext-'+Date.now();
+  upsertQuote({
+    id:qid, leadId, customerId:lead.customerId||'', source:src, jobType:lead.jobType||'',
+    external:true, status:'approved',
+    preProcessingTotal:amount, paymentProcessingFee:0, quoteTotal:amount,
+    scope:noteTxt, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
+    customerActionAt:new Date().toISOString(), customerActionAction:'accepted', customerActionSource:'external-manual'
+  });
+  closeDrawer();
+  try{ acceptJobQuote(leadId, qid); }catch(_){ renderJobDetail(leadId); }
+  toast('Outside quote recorded — Job Value set','success');
 }
 
 // ── SPECIAL ORDER MATERIALS (tracker behind the Materials chip) ────────────
@@ -22919,6 +23002,15 @@ function clearSchedTargetCalendar() {
   try { const p = getPrefs(); if (p.outlookCalendar) { delete p.outlookCalendar; savePrefs(p); } } catch(e){}
 }
 
+// Whether to ALSO pop the created event open in Outlook WEB for review after
+// scheduling. Device-local, DEFAULT OFF — Outlook desktop-app users don't want
+// a browser tab (the event is already created on the calendar and syncs to
+// their app automatically). Turn on per device for anyone who prefers the web
+// review (e.g. someone without the desktop app).
+const _SCHED_OPENWEB_KEY = 'gk_sched_open_web';
+function getSchedOpenWeb(){ try { return localStorage.getItem(_SCHED_OPENWEB_KEY) === '1'; } catch(e){ return false; } }
+function setSchedOpenWeb(on){ try { if(on) localStorage.setItem(_SCHED_OPENWEB_KEY,'1'); else localStorage.removeItem(_SCHED_OPENWEB_KEY); } catch(e){} }
+
 // Fetch the user's calendars from Graph. Cached briefly to avoid spamming the
 // API when the Settings panel re-renders.
 let _outlookCalendarsCache = null;
@@ -23114,13 +23206,15 @@ async function openSchedInOutlook() {
         }
       } catch(_){}
     }
-    toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''}.`, 'success');
+    toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''} — it will sync to your Outlook app.`, 'success');
     closeSchedModal();
-    // Open the created event in Outlook for review/edit.
-    if (webLink) {
+    // Only pop the event open in Outlook WEB if the device opted in (default OFF).
+    // Desktop-app users don't want a browser tab — the event is already on the
+    // calendar and syncs to their Outlook automatically.
+    if (webLink && typeof getSchedOpenWeb === 'function' && getSchedOpenWeb()) {
       const win = window.open(webLink, '_blank', 'noopener,noreferrer');
       if (!win) {
-        toast('Pop-up blocked — your event was created, but check your calendar to review it.', 'warning');
+        toast('Pop-up blocked — your event was created; check your calendar to review it.', 'warning');
       }
     }
     // Fire the customer confirmation request (after the event exists).
