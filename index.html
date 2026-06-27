@@ -10592,7 +10592,9 @@ function _chipEditorHTML(leadId, key){
       const fi=ms.finalInspPassed||{};
       return _chipEditorShell('Final Inspection', row(fi.done
         ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${(fi.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
-        : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`)));
+        : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`))
+        + row(btn('📱 Text inspector — attach photos',`textInspectorForJob('${leadId}')`))
+        + note('Texts the AHJ inspector and pre-loads this job so you can attach its install photos.'));
     }
     case 'invoiced': {
       const amt=getJobValueAmount(lead), inv=isJobInvoiced(lead);
@@ -14908,6 +14910,187 @@ function getAHJs() {
 }
 function saveAHJs(arr) { localStorage.setItem(AHJ_KEY, JSON.stringify(arr)); }
 
+// ═══════════════ INSPECTORS (by AHJ) + INSPECTOR SMS ═══════════════
+// Inspectors live under each AHJ, managed in Permitting. Texting reuses the
+// deployed Twilio engine with a thread key 'insp-<id>' (NO worker changes;
+// inbound auto-routes by phone). No TCPA consent gate — inspectors are B2B.
+// Synced + MERGE-keyed (union by id); delete = tombstone so a sync can't resurrect.
+const INSPECTORS_KEY = 'gk_inspectors';
+function getInspectors(){ try{ return JSON.parse(localStorage.getItem(INSPECTORS_KEY)||'[]'); }catch(e){ return []; } }
+function saveInspectors(a){ localStorage.setItem(INSPECTORS_KEY, JSON.stringify(a)); try{ queueSPSync(); }catch(e){} }
+function getInspector(id){ return getInspectors().find(i=>i.id===id && !i.deleted) || null; }
+function inspectorsForAHJ(ahjId){ return getInspectors().filter(i=>i.ahjId===ahjId && !i.deleted); }
+function upsertInspector(o){
+  const a=getInspectors(); const i=a.findIndex(x=>x.id===o.id); const now=new Date().toISOString();
+  if(i>=0) a[i]={...a[i],...o,updatedAt:now}; else { o.id=o.id||('insp-'+Date.now()); a.push({...o,createdAt:now,updatedAt:now}); }
+  saveInspectors(a); return o.id;
+}
+function deleteInspector(id){ const a=getInspectors(); const i=a.findIndex(x=>x.id===id); if(i>=0){ a[i].deleted=true; a[i].updatedAt=new Date().toISOString(); saveInspectors(a); } }
+
+// One-time seed from Operations/Inspector Phone List.xlsx (2026-06). Maps each
+// county to its AHJ BY NAME (robust to differing ids), deduped by name+phone,
+// gated by a flag. Retries until AHJs are loaded, then never re-seeds.
+function _seedInspectorsOnce(){
+  const FLAG='gk_inspectors_seeded_v1';
+  try{ if(localStorage.getItem(FLAG)) return; }catch(e){ return; }
+  const ahjs=(typeof getAHJs==='function')?getAHJs():[];
+  if(!ahjs.length) return;   // AHJs not ready yet — retry on a later boot
+  const SEED={
+    'Chesterfield':[['Thomas Mackey','804-814-6987','Supervisor'],['Gary Brockwell','804-731-3647',''],['Alen Hodzic','804-735-9512',''],['Benny Inocencio','804-356-7551',''],['John Johnson','804-551-3983',''],['Robert Hairfield','804-814-6981','']],
+    'Henrico':[['Larry Redford','804-349-2065','Supervisor'],['Jeff Benford','804-761-1556',''],['Todd Gravatt','804-349-2061',''],['Matt Lamb','804-317-6399',''],['Sean Terry','804-349-2079',''],['Michael Wood','804-349-2067','']],
+    'Richmond':[['ToJuan Wilkins','804-489-1943','Supervisor'],['Christopher Woodward','804-495-7040',''],['William Gerber','804-754-6334',''],['Joshua Shackleford','804-546-1969',''],['Cameron Williams','804-387-2039',''],['Paul Shaw','804-629-3240','']],
+    'Hanover':[['Thomas Cash (Randy)','804-634-7615',''],['Benjamin Tyler','804-201-3381','']],
+    'Albemarle':[['Ruth Melcher','434-566-7216',''],['Damon Shelton','434-566-2570',''],['Charlie Letteri','434-566-2566',''],['Allen Mosley','434-566-2572',''],['Sean Norville','434-566-2567',''],['Tommy Parmenter','434-270-3477',''],['Tony Wilkerson','434-566-2579','Commercial']]
+  };
+  const findAhj=(county)=>{ const c=county.toLowerCase(); return ahjs.find(a=>(a.name||'').toLowerCase().includes(c)); };
+  const arr=getInspectors();
+  const have=new Set(arr.map(i=>(i.name||'').toLowerCase()+'|'+(i.phone||'').replace(/\D/g,'')));
+  const now=new Date().toISOString(); let n=0;
+  Object.keys(SEED).forEach(county=>{
+    const ahj=findAhj(county); if(!ahj) return;
+    SEED[county].forEach(p=>{
+      const name=p[0], phone=p[1], role=p[2];
+      const k=name.toLowerCase()+'|'+phone.replace(/\D/g,'');
+      if(have.has(k)) return; have.add(k);
+      arr.push({ id:'insp-seed-'+name.replace(/[^a-z0-9]/gi,'').toLowerCase()+'-'+ahj.id, ahjId:ahj.id, name, phone, email:'', notes:role, source:'seed', createdAt:now, updatedAt:now });
+      n++;
+    });
+  });
+  if(n) saveInspectors(arr);
+  try{ localStorage.setItem(FLAG,'1'); }catch(e){}
+  if(n) console.log('[GK] Seeded '+n+' inspectors from the Inspector Phone List');
+}
+
+function _ahjInspectorsHTML(ahjId){
+  const list=inspectorsForAHJ(ahjId);
+  const rows = list.length ? list.map(i=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+      <div style="flex:1;min-width:0"><span style="font-weight:500;font-size:12.5px">${escHtml(i.name||'')}</span>${i.phone?` <span style="color:var(--text-muted);font-size:11.5px">${escHtml(i.phone)}</span>`:''}</div>
+      ${i.phone?`<button class="btn btn-p" style="padding:2px 9px;font-size:11px" onclick="openInspectorSMS('${i.id}')">💬 Text</button>`:''}
+      <button class="btn btn-g" style="padding:2px 8px;font-size:11px" onclick="openInspectorForm('${ahjId}','${i.id}')">Edit</button>
+    </div>`).join('') : `<div style="font-size:11.5px;color:var(--text-muted)">No inspectors yet.</div>`;
+  return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Inspectors</div>
+      <button class="btn btn-g" style="padding:2px 9px;font-size:11px" onclick="openInspectorForm('${ahjId}')">+ Add</button>
+    </div>${rows}</div>`;
+}
+function openInspectorForm(ahjId, inspId){
+  const ahj=getAHJs().find(a=>a.id===ahjId); const ex=inspId?getInspector(inspId):null; const v=(x)=>x?escHtml(x):'';
+  const body=`
+    <input type="hidden" id="insp-ahj" value="${escHtml(ahjId||'')}"><input type="hidden" id="insp-id" value="${escHtml(inspId||'')}">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Inspector name</label>
+    <input class="fi" id="insp-name" value="${v(ex&&ex.name)}" placeholder="e.g. John Smith" style="width:100%;margin-bottom:10px">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Mobile (for texting)</label>
+    <input class="fi" id="insp-phone" value="${v(ex&&ex.phone)}" placeholder="(804) 555-1212" oninput="if(typeof fmtPhone==='function')fmtPhone(this)" style="width:100%;margin-bottom:10px">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Email (optional)</label>
+    <input class="fi" id="insp-email" value="${v(ex&&ex.email)}" placeholder="name@county.gov" style="width:100%;margin-bottom:10px">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Notes (optional)</label>
+    <input class="fi" id="insp-notes" value="${v(ex&&ex.notes)}" placeholder="title, hours, etc." style="width:100%">`;
+  const foot=`${ex?`<button class="btn btn-g" style="color:var(--red)" onclick="_deleteInspectorConfirm('${inspId}')">Delete</button>`:''}<button class="btn btn-g" onclick="closeDrawer()">Cancel</button><button class="btn btn-p" onclick="saveInspectorForm()">Save</button>`;
+  openDrawer((ex?'Edit inspector':'Add inspector')+(ahj?(' — '+ahj.name):''), body, foot);
+}
+function saveInspectorForm(){
+  const ahjId=document.getElementById('insp-ahj').value; const id=document.getElementById('insp-id').value||('insp-'+Date.now());
+  const name=(document.getElementById('insp-name').value||'').trim();
+  if(!name){ toast('Enter a name','warning'); return; }
+  upsertInspector({ id, ahjId, name, phone:(document.getElementById('insp-phone').value||'').trim(), email:(document.getElementById('insp-email').value||'').trim(), notes:(document.getElementById('insp-notes').value||'').trim() });
+  closeDrawer(); toast('Inspector saved','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){}
+}
+function _deleteInspectorConfirm(id){ const i=getInspector(id); if(!i) return; if(!confirm('Remove inspector "'+(i.name||'')+'"?')) return; deleteInspector(id); closeDrawer(); toast('Inspector removed','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){} }
+
+let _inspSmsId=null, _inspSmsPoll=null, _inspSelPhotos={}, _inspPickJob=null;
+function openInspectorSMS(inspId, preJobId){
+  const insp=getInspector(inspId); if(!insp){ toast('Inspector not found','error'); return; }
+  if(typeof _smsConfigured!=='function' || !_smsConfigured()){ toast('Texting is not configured','warning'); return; }
+  if(!insp.phone){ toast('Add a mobile number for this inspector first','warning'); openInspectorForm(insp.ahjId, inspId); return; }
+  _inspSmsId=inspId; _inspSelPhotos={}; _inspPickJob=preJobId||null;
+  const ahj=getAHJs().find(a=>a.id===insp.ahjId); const key='insp-'+inspId;
+  let m=document.getElementById('inspector-sms-modal');
+  if(!m){ m=document.createElement('div'); m.id='inspector-sms-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2000'; document.body.appendChild(m); }
+  m.innerHTML=`<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;max-width:560px;width:94%;max-height:90vh;overflow:auto;padding:16px;box-shadow:var(--shadow-drop)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div><div style="font-weight:600;font-size:15px">${escHtml(insp.name)}</div><div style="font-size:12px;color:var(--text-muted)">${escHtml(insp.phone)}${ahj?(' · '+escHtml(ahj.name)):''}</div></div>
+      <button class="btn btn-g" style="padding:4px 10px" onclick="closeInspectorSMS()">✕</button>
+    </div>
+    <div id="sms-thread-${key}" style="max-height:280px;overflow-y:auto;padding:4px 2px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px"></div>
+    <div id="insp-attachbar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px"></div>
+    <textarea id="insp-sms-body" placeholder="Message to the inspector…" style="width:100%;min-height:52px;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-size:13px;resize:vertical;box-sizing:border-box"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn btn-g" style="font-size:12px" onclick="_inspTogglePicker()">📎 Attach job photos</button>
+      <button class="btn btn-p" style="flex:1;min-width:100px" onclick="sendInspectorSMS(this)">Send</button>
+    </div>
+    <div id="insp-picker" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>`;
+  m.style.display='flex';
+  try{ renderSMSThread(key); }catch(e){}
+  _renderInspAttachBar();
+  if(_inspSmsPoll) clearInterval(_inspSmsPoll);
+  _inspSmsPoll=setInterval(()=>{ const mm=document.getElementById('inspector-sms-modal'); if(mm&&mm.style.display==='flex'){ try{ renderSMSThread(key,true); }catch(e){} } },7000);
+  if(preJobId) _inspTogglePicker(true);
+}
+function closeInspectorSMS(){ const m=document.getElementById('inspector-sms-modal'); if(m) m.style.display='none'; if(_inspSmsPoll){ clearInterval(_inspSmsPoll); _inspSmsPoll=null; } _inspSmsId=null; _inspSelPhotos={}; }
+function _renderInspAttachBar(){
+  const bar=document.getElementById('insp-attachbar'); if(!bar) return; const ks=Object.keys(_inspSelPhotos);
+  bar.innerHTML = ks.length ? (`<span style="font-size:11px;color:var(--text-muted);align-self:center">Attached:</span>`+ks.map(k=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:2px 8px;font-size:11px">📷 ${escHtml((_inspSelPhotos[k].name||'photo').slice(0,18))}<span style="cursor:pointer;color:var(--red)" onclick="_inspUnpick('${k}')">✕</span></span>`).join('')) : '';
+}
+function _inspUnpick(k){ delete _inspSelPhotos[k]; _renderInspAttachBar(); _renderInspPhotoGrid(); }
+function _inspTogglePicker(forceOpen){
+  const p=document.getElementById('insp-picker'); if(!p) return; const open = forceOpen || p.style.display==='none'; p.style.display = open?'block':'none';
+  if(open){
+    const jobs=_awaitingInspectionJobs();
+    const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(nm)} — ${escHtml(l.id)}</option>`; }).join('');
+    p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection, then tap photos to attach.</div>
+      <select class="fsel" id="insp-pick-job" style="width:100%;margin-bottom:8px" onchange="_inspSetPickJob(this.value)"><option value="">— Select a job —</option>${opts}</select>
+      <div id="insp-photo-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;max-height:240px;overflow:auto"></div>`;
+    if(_inspPickJob) _renderInspPhotoGrid();
+  }
+}
+function _inspSetPickJob(jid){ _inspPickJob=jid||null; _renderInspPhotoGrid(); }
+function _awaitingInspectionJobs(){
+  return getLeads().filter(l=>{ const ms=l.milestones||{}; if(ms.finalInspPassed&&ms.finalInspPassed.done) return false; return l.stage==='final-inspection' || (ms.installScheduled&&ms.installScheduled.date && ['scheduled','installation','post-install-docs','final-inspection'].includes(l.stage)); });
+}
+function _renderInspPhotoGrid(){
+  const grid=document.getElementById('insp-photo-grid'); if(!grid) return; const jid=_inspPickJob; if(!jid){ grid.innerHTML=''; return; }
+  const imgs=(typeof getJobFiles==='function'?getJobFiles(jid):[]).filter(f=>(f.mimeType||'').indexOf('image/')===0 && (f.downloadUrl||f.dataUrl||f.spUrl));
+  if(!imgs.length){ grid.innerHTML=`<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">No photos on this job yet. They auto-pull from SharePoint when the job is opened.</div>`; return; }
+  grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=(typeof _imgSrc==='function'?_imgSrc(f):'')||f.downloadUrl||f.dataUrl||'';
+    return `<div onclick="_inspTogglePhoto('${f.id}')" title="${escHtml(f.name||'')}" style="cursor:pointer;border:2px solid ${sel?'var(--green)':'transparent'};border-radius:6px;overflow:hidden;position:relative">
+      <img src="${src}" style="width:100%;height:70px;object-fit:cover;display:block" loading="lazy">${sel?`<div style="position:absolute;top:2px;right:2px;background:var(--green);color:#fff;border-radius:50%;width:16px;height:16px;font-size:11px;text-align:center;line-height:16px">✓</div>`:''}</div>`;
+  }).join('');
+}
+function _inspTogglePhoto(fileId){
+  if(_inspSelPhotos[fileId]) delete _inspSelPhotos[fileId];
+  else { const f=getJobFiles(_inspPickJob).find(x=>x.id===fileId); if(f) _inspSelPhotos[fileId]={ url:(f.downloadUrl||f.dataUrl||f.spUrl), name:f.name }; }
+  _renderInspPhotoGrid(); _renderInspAttachBar();
+}
+async function sendInspectorSMS(btn){
+  const insp=getInspector(_inspSmsId); if(!insp) return;
+  const ta=document.getElementById('insp-sms-body'); const body=((ta&&ta.value)||'').trim(); const photos=Object.values(_inspSelPhotos);
+  if(!body && !photos.length){ toast('Type a message or attach a photo','warning'); return; }
+  if(btn) btn.disabled=true;
+  try{
+    const token=await _acquireSMSToken(); const key='insp-'+insp.id; const url=SMS_WORKER_URL.replace(/\/$/,'')+'/sms/send';
+    const post=(payload)=>fetch(url,{ method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body:JSON.stringify(payload) });
+    if(photos.length){ for(let i=0;i<photos.length;i++){ await post({ leadId:key, to:insp.phone, message:(i===0?body:''), mediaUrl:photos[i].url }); } }
+    else { await post({ leadId:key, to:insp.phone, message:body }); }
+    if(ta) ta.value=''; _inspSelPhotos={}; _renderInspAttachBar();
+    const p=document.getElementById('insp-picker'); if(p&&p.style.display!=='none') _renderInspPhotoGrid();
+    setTimeout(()=>{ try{ renderSMSThread(key); }catch(e){} }, 700);
+    toast('Sent to '+insp.name,'success');
+  }catch(e){ console.warn('[GK] inspector SMS send failed:',e); toast('Send failed: '+(e.message||e),'error'); }
+  finally{ if(btn) btn.disabled=false; }
+}
+function textInspectorForJob(leadId){
+  const lead=getLead(leadId); if(!lead) return; const ahjs=getAHJs(); const j=(lead.jurisdiction||lead.siteCity||'').toLowerCase();
+  let ahj = j ? ahjs.find(a=>{ const an=(a.name||'').toLowerCase(); return an.includes(j) || j.includes(an.replace(/ county| city/,'').trim()); }) : null;
+  const insps = ahj ? inspectorsForAHJ(ahj.id) : [];
+  if(ahj && insps.length===1){ openInspectorSMS(insps[0].id, leadId); return; }
+  const all = (ahj && insps.length) ? insps : getInspectors().filter(i=>!i.deleted);
+  if(!all.length){ toast('No inspectors on file'+(ahj?(' for '+ahj.name):'')+'. Add one in Permitting → AHJ Directory.','warning'); return; }
+  const body = `<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">Pick the inspector to text${ahj?(' for '+escHtml(ahj.name)):''}. This job is pre-loaded so you can attach its photos.</div>`+
+    all.map(i=>{ const a=getAHJs().find(x=>x.id===i.ahjId); return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:13px">${escHtml(i.name)}</div><div style="font-size:11.5px;color:var(--text-muted)">${escHtml(i.phone||'no number')}${a?(' · '+escHtml(a.name)):''}</div></div><button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="closeDrawer();openInspectorSMS('${i.id}','${leadId}')">💬 Text</button></div>`; }).join('');
+  openDrawer('Text inspector', body, `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button>`);
+}
+
 // ── PERMITTING PAGE RENDER ──
 let _permitTab = 'active'; // 'active' | 'directory'
 
@@ -15048,6 +15231,7 @@ function renderAHJDirectory(isAdmin) {
         </div>
         ${contactHtml ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${contactHtml}</div>` : ''}
         ${notesHtml}
+        ${typeof _ahjInspectorsHTML==='function'?_ahjInspectorsHTML(a.id):''}
       </div>
     </div>`;
   }).join('');
@@ -18794,7 +18978,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -19102,7 +19286,7 @@ async function _spEnsureDrive() {
 // can no longer be clobbered by a stale device. Material ids are stable
 // (m-###, m-ce-<CEid>); add/edit/import now stamp updatedAt so price edits win
 // across devices by recency.
-const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials'];
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors'];
 function _mergeArrayByIdAndTs(localArr, remoteArr) {
   if (!Array.isArray(localArr)) localArr = [];
   if (!Array.isArray(remoteArr)) remoteArr = [];
@@ -23883,6 +24067,8 @@ async function init() {
   try { initMaterials(); } catch (e) { console.warn('[GK] initMaterials failed:', e); }
   // Seed B2B referrer customer records (AF1 etc.) on every boot — idempotent.
   try { seedReferrerCustomers(); } catch (e) { console.warn('[GK] seedReferrerCustomers failed:', e); }
+  // One-time seed of inspectors from the Inspector Phone List (runs once AHJs exist).
+  try { _seedInspectorsOnce(); } catch (e) { console.warn('[GK] _seedInspectorsOnce failed:', e); }
   // Login is now Microsoft 365 only — no password inputs to wire up.
 
   // Try MSAL auto-login first (resumes existing Microsoft session)
