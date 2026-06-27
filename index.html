@@ -14997,9 +14997,9 @@ function saveInspectorForm(){
   const name=(document.getElementById('insp-name').value||'').trim();
   if(!name){ toast('Enter a name','warning'); return; }
   upsertInspector({ id, ahjId, name, phone:(document.getElementById('insp-phone').value||'').trim(), email:(document.getElementById('insp-email').value||'').trim(), notes:(document.getElementById('insp-notes').value||'').trim() });
-  closeDrawer(); toast('Inspector saved','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){}
+  closeDrawer(); toast('Inspector saved','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){} try{ if(typeof _refreshAHJDetail==='function') _refreshAHJDetail(); }catch(e){}
 }
-function _deleteInspectorConfirm(id){ const i=getInspector(id); if(!i) return; if(!confirm('Remove inspector "'+(i.name||'')+'"?')) return; deleteInspector(id); closeDrawer(); toast('Inspector removed','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){} }
+function _deleteInspectorConfirm(id){ const i=getInspector(id); if(!i) return; if(!confirm('Remove inspector "'+(i.name||'')+'"?')) return; deleteInspector(id); closeDrawer(); toast('Inspector removed','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){} try{ if(typeof _refreshAHJDetail==='function') _refreshAHJDetail(); }catch(e){} }
 
 let _inspSmsId=null, _inspSmsPoll=null, _inspSelPhotos={}, _inspPickJob=null;
 function openInspectorSMS(inspId, preJobId){
@@ -15265,49 +15265,61 @@ function renderAHJDirectory(isAdmin) {
     </div>`;
   }
 
-  const cards = ahjs.map(a => {
+  // Compact launcher grid — every AHJ visible on one screen; click a tile to
+  // open its full detail (contacts, portal, inspectors) in a window.
+  const tiles = ahjs.map(a => {
     const isOnline = a.portalType === 'online';
-    const typeChipHtml = isOnline
-      ? `<span class="chip" style="background:var(--green-dim);color:var(--green);font-size:10.5px">🌐 Online Portal</span>`
-      : `<span class="chip" style="background:var(--amber-dim);color:var(--amber);font-size:10.5px">📄 Paper / Email</span>`;
-    const feeFlag = a.fee >= 500 ? `<span class="chip chip-flag" style="font-size:10.5px">$${a.fee} Permit Fee</span>` : '';
-    const linkBtn = a.url
-      ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="btn btn-p" style="padding:5px 14px;font-size:12.5px;text-decoration:none;display:inline-flex;align-items:center;gap:6px">
-           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9M9 1h6v6M7 9L14 2"/></svg>
-           Open Portal
-         </a>`
-      : `<span style="font-size:12px;color:var(--text-muted);font-style:italic">No URL set</span>`;
-
-    const contactHtml = [
-      a.phone ? `<span style="font-size:12px;color:var(--text-secondary)">📞 ${escHtml(a.phone)}</span>` : '',
-      a.email ? `<a href="mailto:${escHtml(a.email)}" style="font-size:12px;color:var(--blue)">${escHtml(a.email)}</a>` : ''
-    ].filter(Boolean).join('<span style="color:var(--border);margin:0 6px">|</span>');
-
-    const platformBadge = a.platform ? `<span style="font-size:11px;color:var(--text-muted);font-style:italic">${escHtml(a.platform)}</span>` : '';
-    const notesHtml = a.notes ? `<div style="font-size:12.5px;color:var(--text-secondary);line-height:1.5;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${escHtml(a.notes)}</div>` : '';
-    const editBtn = isAdmin ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="openAHJForm('${a.id}')">✎ Edit</button>` : '';
-
-    return `<div class="jd-sec" style="margin-bottom:14px">
-      <div class="jd-sb">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div>
-            <div style="font-size:15px;font-weight:600;margin-bottom:6px">${escHtml(a.name)}</div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              ${typeChipHtml}${feeFlag}${platformBadge}
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-            ${linkBtn}${editBtn}
-          </div>
-        </div>
-        ${contactHtml ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${contactHtml}</div>` : ''}
-        ${notesHtml}
-        ${typeof _ahjInspectorsHTML==='function'?_ahjInspectorsHTML(a.id):''}
+    const icon = isOnline ? '🌐' : '📄';
+    const inspCount = (typeof inspectorsForAHJ==='function') ? inspectorsForAHJ(a.id).length : 0;
+    const meta = [a.state||'', isOnline?'Online portal':'Paper / email'].filter(Boolean).join(' · ');
+    return `<button onclick="openAHJDetail('${a.id}')" style="text-align:left;background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px" onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:16px">${icon}</span><span style="font-weight:600;font-size:14px;line-height:1.25">${escHtml(a.name)}</span></div>
+      <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(meta)}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">
+        ${a.fee>=500?`<span class="chip chip-flag" style="font-size:10px">$${a.fee} fee</span>`:''}
+        <span class="chip" style="font-size:10px;background:var(--bg-elevated);color:var(--text-secondary)">👤 ${inspCount} inspector${inspCount===1?'':'s'}</span>
       </div>
-    </div>`;
+    </button>`;
   }).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px">${tiles}</div>`;
+}
 
-  return `<div>${cards}</div>`;
+let _ahjDetailId = null;
+function closeAHJDetail(){ const m=document.getElementById('ahj-detail-modal'); if(m) m.style.display='none'; _ahjDetailId=null; }
+function _refreshAHJDetail(){ const m=document.getElementById('ahj-detail-modal'); if(m && m.style.display!=='none' && _ahjDetailId) openAHJDetail(_ahjDetailId); }
+function openAHJDetail(id){
+  const a = getAHJs().find(x=>x.id===id); if(!a) return;
+  _ahjDetailId = id;
+  const isAdmin = S.user?.role === 'admin';
+  const isOnline = a.portalType === 'online';
+  const typeChipHtml = isOnline
+    ? `<span class="chip" style="background:var(--green-dim);color:var(--green);font-size:10.5px">🌐 Online Portal</span>`
+    : `<span class="chip" style="background:var(--amber-dim);color:var(--amber);font-size:10.5px">📄 Paper / Email</span>`;
+  const feeFlag = a.fee >= 500 ? `<span class="chip chip-flag" style="font-size:10.5px">$${a.fee} Permit Fee</span>` : '';
+  const platformBadge = a.platform ? `<span style="font-size:11px;color:var(--text-muted);font-style:italic">${escHtml(a.platform)}</span>` : '';
+  const linkBtn = a.url
+    ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" class="btn btn-p" style="padding:5px 14px;font-size:12.5px;text-decoration:none;display:inline-flex;align-items:center;gap:6px"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9M9 1h6v6M7 9L14 2"/></svg> Open Portal</a>`
+    : `<span style="font-size:12px;color:var(--text-muted);font-style:italic">No URL set</span>`;
+  const contactHtml = [
+    a.phone ? `<span style="font-size:12.5px;color:var(--text-secondary)">📞 ${escHtml(a.phone)}</span>` : '',
+    a.email ? `<a href="mailto:${escHtml(a.email)}" style="font-size:12.5px;color:var(--blue)">${escHtml(a.email)}</a>` : ''
+  ].filter(Boolean).join('<span style="color:var(--border);margin:0 6px">|</span>');
+  const notesHtml = a.notes ? `<div style="font-size:12.5px;color:var(--text-secondary);line-height:1.5;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${escHtml(a.notes)}</div>` : '';
+  const editBtn = isAdmin ? `<button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="closeAHJDetail();openAHJForm('${a.id}')">✎ Edit</button>` : '';
+  let m=document.getElementById('ahj-detail-modal');
+  if(!m){ m=document.createElement('div'); m.id='ahj-detail-modal'; m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;z-index:580;padding:40px 16px;box-sizing:border-box;overflow:auto'; m.onclick=function(e){ if(e.target===m) closeAHJDetail(); }; document.body.appendChild(m); }
+  m.innerHTML=`<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;max-width:560px;width:100%;max-height:88vh;overflow:auto;padding:18px;box-shadow:var(--shadow-drop)">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700;line-height:1.2">${escHtml(a.name)}</div>
+      <button class="btn btn-g" style="padding:4px 10px;flex-shrink:0" onclick="closeAHJDetail()">✕</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px">${typeChipHtml}${feeFlag}${platformBadge}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">${linkBtn}${editBtn}</div>
+    ${contactHtml?`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${contactHtml}</div>`:''}
+    ${notesHtml}
+    ${typeof _ahjInspectorsHTML==='function'?_ahjInspectorsHTML(a.id):''}
+  </div>`;
+  m.style.display='flex';
 }
 
 // ── AHJ FORM (Admin) ──
