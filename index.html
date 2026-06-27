@@ -10284,6 +10284,16 @@ function openJobDetail(id) {
           }
         }).catch(e => console.warn('[GK] Job-folder hydrate on open failed:', e));
       }
+      // Also pull the job's "NEEDS INSPECTION COMPLETED" Operations folder (the
+      // Completion pics + inspection reports) for scheduled-or-later jobs. Strictly
+      // read-only; does nothing until Sherri has moved the folder into that bucket.
+      if (typeof _hydrateOpsFolderFromSP === 'function') {
+        _hydrateOpsFolderFromSP(id).then(r => {
+          if (r && (r.added > 0 || r.refreshed > 0) && S.jobDetailId === id) {
+            try { renderJobDetail(id); } catch(_){}
+          }
+        }).catch(e => console.warn('[GK] Ops-folder hydrate on open failed:', e));
+      }
     } catch(_){}
   }, 200);
 }
@@ -20167,6 +20177,90 @@ async function _hydratePhotosFromSP(jobId) {
     console.warn('[GK] _hydratePhotosFromSP failed:', e);
     return { added: 0, skipped: 0, error: e.message };
   }
+}
+
+// Auto-pull the job's "NEEDS INSPECTION COMPLETED" folder into the CRM so the
+// Completion pics + inspection reports / AHJ correspondence are already here when
+// we text an inspector. Workflow (Sherri, manual — do NOT change it): scheduled
+// jobs move S&M → Operations dated folders → and once an inspection is set, into
+// Operations/Active Projects/NEEDS INSPECTION COMPLETED, where she appends
+// "-SCHEDULED <date>" / "-FAILED" to the folder name. So we match by BASE NAME as
+// a PREFIX, and only scan for jobs that are scheduled-or-later.
+//   *** STRICTLY READ-ONLY *** — only GETs/lists; NEVER creates a SharePoint
+//   folder or file. If the job isn't in this bucket yet (no matching folder), it
+//   does NOTHING. Completion-pics images → 'install', other images → 'site',
+//   non-images → 'documents'. Deduped by spDriveItemId / name+jobId; throttled.
+const SP_NEEDS_INSPECTION_PATH = 'Operations/Active Projects/NEEDS INSPECTION COMPLETED';
+const _opsFolderPullAt = {};
+async function _hydrateOpsFolderFromSP(jobId, force){
+  if (!_gToken || !_spDrive || !jobId) return { added: 0 };
+  const lead = getLead(jobId); if (!lead) return { added: 0 };
+  const _si = STAGES.findIndex(s=>s.id==='scheduled');
+  const _li = STAGES.findIndex(s=>s.id===lead.stage);
+  if (_si<0 || _li<0 || _li < _si) return { added: 0, skipped:'early-stage' };   // not scheduled yet → skip
+  if (!force && (Date.now() - (_opsFolderPullAt[jobId] || 0)) < 120000) return { added: 0, throttled: true };
+  _opsFolderPullAt[jobId] = Date.now();
+  try {
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const baseName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
+    if (!baseName) return { added: 0 };
+    // READ-ONLY: resolve the bucket; if it's missing or we lack access, do nothing.
+    const bResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(SP_NEEDS_INSPECTION_PATH)}`, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+    if (!bResp.ok) return { added: 0 };
+    const bucket = await bResp.json();
+    // Prefix-match the job's base name among the bucket's child folders.
+    const matches = [];
+    let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${bucket.id}/children?$top=200`;
+    while (next){
+      const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+      if (!r.ok) break;
+      const data = await r.json();
+      for (const it of (data.value||[])){
+        if (it.folder && it.name && (it.name===baseName || it.name.startsWith(baseName))) matches.push(it);
+      }
+      next = data['@odata.nextLink'] || null;
+    }
+    if (!matches.length) return { added: 0 };   // job not in this bucket yet — do NOTHING
+    // Walk matched folders; flag files inside a "Completion pics" subfolder.
+    const filesFound = [];
+    async function _walk(itemId, inCompletion){
+      let n = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
+      while (n){
+        const r = await fetch(n, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+        if (!r.ok) break;
+        const data = await r.json();
+        for (const it of (data.value||[])){
+          if (it.folder) await _walk(it.id, inCompletion || /^completion\s*pics$/i.test(it.name||''));
+          else if (it.file) filesFound.push({ item: it, inCompletion });
+        }
+        n = data['@odata.nextLink'] || null;
+      }
+    }
+    for (const m of matches) await _walk(m.id, false);
+    const existingByDriveId = new Map(); const existingByNameJob = new Map();
+    for (const f of _filesCache){ if (f.spDriveItemId) existingByDriveId.set(f.spDriveItemId, f); if (f.name && f.jobId) existingByNameJob.set(f.jobId+'|'+f.name, f); }
+    const URL_FRESH_MS = 50*60*1000;
+    async function _dlUrl(item){
+      if (item['@microsoft.graph.downloadUrl']) return item['@microsoft.graph.downloadUrl'];
+      try{ const r=await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${item.id}`, { headers:{ 'Authorization':'Bearer '+_gToken } }); if(!r.ok) return ''; const full=await r.json(); return full['@microsoft.graph.downloadUrl']||''; }catch(_){ return ''; }
+    }
+    let added=0, refreshed=0;
+    for (const { item, inCompletion } of filesFound){
+      const isImg = /^image\//i.test((item.file && item.file.mimeType) || '');
+      const category = inCompletion ? 'install' : (isImg ? 'site' : 'documents');
+      const freshUrl = await _dlUrl(item);
+      const existing = existingByDriveId.get(item.id) || existingByNameJob.get(jobId+'|'+item.name);
+      if (existing){
+        const stale = !existing.downloadUrl || (Date.now() - (existing.downloadUrlFetchedAt||0)) > URL_FRESH_MS;
+        if (stale && freshUrl){ existing.downloadUrl=freshUrl; existing.downloadUrlFetchedAt=Date.now(); if(!existing.spDriveItemId) existing.spDriveItemId=item.id; if(!existing.spUrl) existing.spUrl=item.webUrl||''; try{ await _idbPut(existing); }catch(_){} refreshed++; }
+        continue;
+      }
+      const rec = { id:'sp-'+item.id, jobId, category, name:item.name, size:item.size||0, mimeType:(item.file&&item.file.mimeType)||'application/octet-stream', uploadedBy:'SharePoint (Operations)', uploadedAt:item.lastModifiedDateTime||new Date().toISOString(), spDriveItemId:item.id, spUrl:item.webUrl||'', downloadUrl:freshUrl, downloadUrlFetchedAt:Date.now(), dataUrl:null };
+      _filesCache.push(rec); try{ await _idbPut(rec); }catch(_){} added++;
+    }
+    if (added||refreshed) console.log(`[GK] Ops/NeedsInspection hydrate (${jobId}): added=${added} refreshed=${refreshed}`);
+    return { added, refreshed };
+  } catch(e){ console.warn('[GK] _hydrateOpsFolderFromSP failed:', e); return { added:0, error:e.message }; }
 }
 
 // Auto-pull the job's Active Leads SharePoint folder (Sales and Marketing/
