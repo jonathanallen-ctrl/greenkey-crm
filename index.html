@@ -159,6 +159,13 @@
      transparent to avoid the gray flash; everything else is browser default. */
   .tech-scroll{
     overflow:visible;
+    /* iOS fix: a finger-drag starting on selectable text gets captured as a
+       text-selection gesture and won't scroll. Making read-only tech content
+       non-selectable means every drag scrolls. Inputs are re-enabled below. */
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
+  .tech-scroll input, .tech-scroll textarea, .tech-scroll [contenteditable]{
+    -webkit-user-select:text; user-select:text;
   }
   .tech-scroll a{
     -webkit-tap-highlight-color:transparent;
@@ -16658,7 +16665,7 @@ function _renderTechModeLanding(pg) {
   pg.innerHTML = `<div class="tech-scroll" style="max-width:640px;margin:0 auto;padding:4px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">
     ${escapeLink}
     <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Tech Mode <span style="color:var(--green);font-weight:500">· build 2026-06-29a</span></div>
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Tech Mode <span style="color:var(--green);font-weight:500">· build 2026-06-29b</span></div>
       <div style="font-size:22px;font-weight:600;margin-top:4px;line-height:1.2">${_searchTerm ? 'Search' : 'My Jobs Today'}</div>
       <div style="font-size:13px;color:var(--text-muted);margin-top:4px">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}</div>
     </div>
