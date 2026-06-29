@@ -2,7 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<!-- ===== Home-screen standalone app tags (no effect on desktop) ===== -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GreenKey CRM">
+<meta name="theme-color" content="#0f1117">
+<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22GreenKey%20CRM%22%2C%22short_name%22%3A%22GreenKey%22%2C%22start_url%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f1117%22%2C%22theme_color%22%3A%22%230f1117%22%7D">
+<!-- ===== END home-screen tags ===== -->
 <title>GreenKey CRM</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!-- MSAL loaded dynamically inside initMSAL() -->
@@ -211,6 +219,12 @@
   .stitle{font-size:15px;font-weight:600;margin-bottom:4px;letter-spacing:-0.3px}
   .sdesc{font-size:13px;color:var(--text-muted);margin-bottom:20px}
   .srow{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);gap:16px}
+  /* ===== Mobile scroll perf: skip painting/decoding off-screen list rows + photos ===== */
+  .srow{content-visibility:auto;contain-intrinsic-size:0 56px}
+  .cust-card{content-visibility:auto;contain-intrinsic-size:0 132px}
+  /* Photo thumbnails: defer decode of off-screen images (huge on the tech job page) */
+  .gk-photocell{content-visibility:auto;contain-intrinsic-size:84px 84px}
+  /* ===== END mobile scroll perf ===== */
   .srow:last-child{border-bottom:none}
   .srl{font-size:13.5px}
   .srd{font-size:12px;color:var(--text-muted);margin-top:2px}
@@ -16418,16 +16432,16 @@ function renderTechPage(leadId) {
 
   const siteGrid = sitePhotos.length
     ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
-        ${sitePhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','site',${sitePhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
-          <img src="${_imgSrc(f)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">
+        ${sitePhotos.map((f,i)=>`<div class="gk-photocell" onclick="openLightbox('${leadId}','site',${sitePhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
+          <img src="${_imgSrc(f)}" alt="" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover">
         </div>`).join('')}
       </div>`
     : `<div style="font-size:12px;color:var(--text-muted);padding:8px 0">No site photos on file.</div>`;
 
   const installGrid = installPhotos.length
     ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;margin-top:10px">
-        ${installPhotos.map((f,i)=>`<div onclick="openLightbox('${leadId}','install',${installPhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
-          <img src="${_imgSrc(f)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">
+        ${installPhotos.map((f,i)=>`<div class="gk-photocell" onclick="openLightbox('${leadId}','install',${installPhotos.indexOf(f)})" style="aspect-ratio:1;border-radius:6px;overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--bg-elevated)">
+          <img src="${_imgSrc(f)}" alt="" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover">
         </div>`).join('')}
       </div>`
     : '';
@@ -16644,7 +16658,7 @@ function _renderTechModeLanding(pg) {
   pg.innerHTML = `<div class="tech-scroll" style="max-width:640px;margin:0 auto;padding:4px;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain">
     ${escapeLink}
     <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Tech Mode</div>
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Tech Mode <span style="color:var(--green);font-weight:500">· build 2026-06-29a</span></div>
       <div style="font-size:22px;font-weight:600;margin-top:4px;line-height:1.2">${_searchTerm ? 'Search' : 'My Jobs Today'}</div>
       <div style="font-size:13px;color:var(--text-muted);margin-top:4px">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}</div>
     </div>
