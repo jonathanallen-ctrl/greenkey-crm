@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GreenKey Field">
+<meta name="theme-color" content="#0f1117">
+<link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22GreenKey%20Field%22%2C%22short_name%22%3A%22Field%22%2C%22start_url%22%3A%22./field.html%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f1117%22%2C%22theme_color%22%3A%22%230f1117%22%7D">
+<title>GreenKey Field</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%;font-size:16px;line-height:1.4}
+  /* Read-only text is non-selectable so a finger-drag always scrolls; inputs re-enabled. */
+  body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;padding-bottom:calc(env(safe-area-inset-bottom) + 20px)}
+  input,textarea{-webkit-user-select:text;user-select:text}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:640px;margin:0 auto;padding:12px}
+  .muted{color:#8b93a1}
+  .top{position:sticky;top:0;z-index:5;background:#0f1117;padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;border-bottom:1px solid #1d222c}
+  .top .ttl{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .brand{font-size:13px;font-weight:700;letter-spacing:.3px}
+  .brand .b2{color:#36c777}
+  .build{font-size:10px;color:#5d6675}
+  h1{font-size:22px;font-weight:700;margin:8px 0 2px}
+  .srch{width:100%;margin-top:10px;padding:11px 12px;border:1px solid #262b36;border-radius:10px;background:#171a21;color:#e8eaed;font-size:15px;outline:none}
+  .sec{margin:18px 0 6px;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#8b93a1}
+  .card{display:block;background:#171a21;border:1px solid #262b36;border-radius:12px;padding:14px;margin-bottom:10px;content-visibility:auto;contain-intrinsic-size:0 92px}
+  .card:active{background:#1c2027}
+  .jrow{display:flex;align-items:center;gap:10px}
+  .jname{font-size:16px;font-weight:600;line-height:1.25}
+  .jaddr{font-size:13px;color:#aeb4bf;margin-top:2px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:11px;padding:3px 8px;border-radius:20px;background:#0f1117;border:1px solid #2a313d;color:#aeb4bf}
+  .chip.blue{background:rgba(54,140,255,.14);border-color:transparent;color:#6db0ff}
+  .chip.amber{background:rgba(255,176,32,.14);border-color:transparent;color:#ffc861}
+  .chev{margin-left:auto;color:#5d6675;flex-shrink:0}
+  .btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;border-radius:12px;font-size:16px;font-weight:600;border:none;width:100%;cursor:pointer}
+  .btn.green{background:#36c777;color:#08130c}
+  .btn.ghost{background:#171a21;color:#e8eaed;border:1px solid #2a313d}
+  .row2{display:flex;gap:10px;margin:12px 0}
+  .row2 a{flex:1}
+  .back{display:inline-flex;align-items:center;gap:6px;font-size:15px;color:#aeb4bf;padding:6px 0;margin-bottom:4px}
+  .lab{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#8b93a1;margin-bottom:6px}
+  .scope{font-size:15px;line-height:1.55;white-space:pre-wrap;color:#dfe3e9}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+  .pcell{aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid #262b36;background:#11141a;content-visibility:auto;contain-intrinsic-size:96px 96px}
+  .pcell img{width:100%;height:100%;object-fit:cover;display:block}
+  .pay{background:linear-gradient(135deg,rgba(54,199,119,.16),rgba(54,199,119,.05));border:1px solid #2f6b46;border-radius:12px;padding:14px;margin-bottom:12px}
+  .center{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;text-align:center;padding:24px;gap:14px}
+  .spin{width:34px;height:34px;border:3px solid #262b36;border-top-color:#36c777;border-radius:50%;animation:sp 0.8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:#ff8a8a;font-size:14px}
+  .empty{color:#8b93a1;text-align:center;padding:40px 12px;font-size:14px}
+</style>
+</head>
+<body>
+<div id="app"><div class="center"><div class="spin"></div><div class="muted">Connecting…</div></div></div>
+
+<script>
+// ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
+const BUILD = '2026-06-29 field-1';
+const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
+const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
+const FIELD_URL       = location.origin + location.pathname; // this page (for reference)
+// Use the ALREADY-REGISTERED root as the MSAL redirect so your phone (already
+// signed into the main CRM) gets a token silently with NO Azure change. For a
+// cold device (a tech who never opened the main CRM), register field.html as a
+// redirect URI in Azure and switch AUTH_REDIRECT to FIELD_URL — that's Phase 2.
+const AUTH_REDIRECT   = 'https://jonathanallen-ctrl.github.io/greenkey-crm/';
+const SP_HOSTNAME     = 'greenkeyusa.sharepoint.com';
+const SP_LIST_NAME    = 'GreenKeyCRM_Data';
+const SP_PHOTO_LIB    = 'CEO/CRM software/GreenKeyCRM_Photos';
+const GRAPH_SCOPES    = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read'];
+const ZELLE_EMAIL     = 'jonathan.allen@greenkey-usa.com';
+const PLATFORMS       = ['Qmerit','Electrum','Treehouse'];
+
+let _msal=null,_gToken=null,_spSite=null,_spList=null,_spDrive=null;
+const $app = ()=>document.getElementById('app');
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- data (shared localStorage with the main CRM) ----------
+function getLeads(){ try{return JSON.parse(localStorage.getItem('gk_leads')||'[]')}catch(e){return[]} }
+function getCustomers(){ try{return JSON.parse(localStorage.getItem('gk_customers')||'[]')}catch(e){return[]} }
+function getCustomer(id){ return getCustomers().find(c=>c.id===id)||null; }
+function custName(l){ const c=l.customerId?getCustomer(l.customerId):null; if(c){ const n=((c.firstName||'')+' '+(c.lastName||'')).trim(); return n||c.businessName||l.customerName||l.id; } return l.customerName||((l.customerFirstName||'')+' '+(l.customerLastName||'')).trim()||l.id; }
+function leadAddr(l){ return [l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '); }
+function leadPhone(l){ const c=l.customerId?getCustomer(l.customerId):null; return (c&&c.phone)||l.customerPhone||''; }
+function prettyType(t){ if(!t) return ''; return String(t).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase()); }
+function schedDate(l){ return (l.milestones&&l.milestones.installScheduled&&l.milestones.installScheduled.date)||l.scheduleAt||''; }
+function isDirect(l){ return !PLATFORMS.includes(l.source); }
+function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-won','closed-lost','not-won'].includes(l.stage) && !(l.lostInfo&&l.lostInfo.isLost)); }
+
+// ---------- auth ----------
+async function loadMsal(){ const m = await import('https://esm.sh/@azure/msal-browser@2'); window.msal = m; return m; }
+async function initAuth(){
+  await loadMsal();
+  _msal = new msal.PublicClientApplication({
+    auth:{ clientId:AZURE_CLIENT_ID, authority:'https://login.microsoftonline.com/'+AZURE_TENANT_ID, redirectUri:AUTH_REDIRECT },
+    cache:{ cacheLocation:'localStorage', storeAuthStateInCookie:false }
+  });
+  let resp=null; try{ resp = await _msal.handleRedirectPromise(); }catch(e){ console.warn('[field] redirect promise', e); }
+  let account = (resp&&resp.account) || (_msal.getAllAccounts()[0]) || null;
+  if(account) _msal.setActiveAccount(account);
+  return account;
+}
+async function getTokenSilent(){
+  const a=_msal.getAllAccounts()[0]; if(!a) return null;
+  try{ const tr=await _msal.acquireTokenSilent({account:a,scopes:GRAPH_SCOPES}); _gToken=tr.accessToken; return _gToken; }
+  catch(e){ console.warn('[field] silent token failed', e); return null; }
+}
+function signIn(){ _msal.loginRedirect({scopes:GRAPH_SCOPES}); }
+function signOut(){ try{ localStorage.removeItem('gk_session'); }catch(e){} _msal.logoutRedirect({postLogoutRedirectUri:AUTH_REDIRECT}); }
+
+// ---------- graph + sharepoint read ----------
+async function graphFetch(path){
+  const url = path.startsWith('https://') ? path : 'https://graph.microsoft.com/v1.0'+path;
+  const go = ()=>fetch(url,{headers:{Authorization:'Bearer '+_gToken}});
+  let r=await go();
+  if(r.status===401){ const a=_msal.getAllAccounts()[0]; if(a){ try{ const tr=await _msal.acquireTokenSilent({account:a,scopes:GRAPH_SCOPES,forceRefresh:true}); _gToken=tr.accessToken; r=await go(); }catch(e){} } }
+  if(!r.ok) throw new Error('Graph '+r.status);
+  return r.json();
+}
+async function spInit(){
+  if(_spSite) return;
+  const site = await graphFetch('/sites/'+SP_HOSTNAME); _spSite=site.id;
+  const lists = await graphFetch('/sites/'+_spSite+'/lists?$select=id,name,displayName&$top=100');
+  const l = (lists.value||[]).find(x=>x.displayName===SP_LIST_NAME||x.name===SP_LIST_NAME);
+  _spList = l?l.id:null;
+  try{ const dr = await graphFetch('/sites/'+_spSite+'/drive'); _spDrive = dr.id; }catch(e){ console.warn('[field] drive', e); }
+}
+async function syncFromSP(){
+  if(!_spList) throw new Error('CRM data list not found');
+  let next='/sites/'+_spSite+'/lists/'+_spList+'/items?$expand=fields&$top=200'; const got={};
+  while(next){ const res=await graphFetch(next); for(const it of (res.value||[])){ const k=it.fields&&it.fields.Title, v=it.fields&&it.fields.DataValue; if(k&&v) got[k]=v; } next=res['@odata.nextLink']||null; }
+  // Read-only: overwrite the keys this tool needs.
+  ['gk_leads','gk_customers','gk_quotes'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
+}
+async function loadJobPhotos(jobId){
+  if(!_spDrive) return [];
+  let cats=[]; try{ const c=await graphFetch('/drives/'+_spDrive+'/root:/'+encodeURI(SP_PHOTO_LIB+'/'+jobId)+':/children'); cats=c.value||[]; }
+  catch(e){ return []; }
+  const out=[];
+  for(const cat of cats){ if(!cat.folder) continue;
+    try{ const f=await graphFetch('/drives/'+_spDrive+'/items/'+cat.id+'/children');
+      for(const it of (f.value||[])){ if(it.file && /^image\//.test(it.file.mimeType||'') && it['@microsoft.graph.downloadUrl']) out.push({name:it.name,url:it['@microsoft.graph.downloadUrl'],cat:cat.name}); }
+    }catch(e){}
+  }
+  return out;
+}
+
+// ---------- views ----------
+function loading(msg){ $app().innerHTML = '<div class="center"><div class="spin"></div><div class="muted">'+esc(msg||'Loading…')+'</div></div>'; }
+function renderLogin(){
+  $app().innerHTML =
+    '<div class="center">'
+    + '<div class="brand" style="font-size:20px">Green<span class="b2">Key</span> Field</div>'
+    + '<div class="muted" style="max-width:280px">Your jobs for the day — fast, in your pocket.</div>'
+    + '<button class="btn green" style="max-width:280px" onclick="signIn()">Sign in with Microsoft</button>'
+    + '<div class="build muted" style="margin-top:8px">'+esc(BUILD)+'</div>'
+    + '</div>';
+}
+function header(title){
+  return '<div class="top"><div class="ttl"><div class="brand">Green<span class="b2">Key</span> Field <span class="muted" style="font-weight:500">'+esc(BUILD)+'</span></div>'
+    + '<div><button class="chip" onclick="refresh()" style="margin-right:6px">↻</button><button class="chip" onclick="signOut()">Sign out</button></div></div>'
+    + '<h1>'+esc(title)+'</h1></div>';
+}
+let _search='';
+function renderJobs(){
+  const today=new Date(); today.setHours(0,0,0,0); const todayStr=today.toISOString().slice(0,10);
+  const leads=activeLeads();
+  let body='';
+  if(_search.trim()){
+    const q=_search.toLowerCase(); const dig=q.replace(/\D/g,'');
+    const hits=leads.filter(l=>{ const hay=(custName(l)+' '+leadAddr(l)+' '+l.id).toLowerCase(); const ph=leadPhone(l).replace(/\D/g,''); return hay.includes(q) || (dig.length>=3 && ph.includes(dig)); });
+    body = '<div class="sec">Search results ('+hits.length+')</div>' + (hits.length?hits.map(jobCard).join(''):'<div class="empty">No matches.</div>');
+  } else {
+    const todayJobs=leads.filter(l=>schedDate(l).slice(0,10)===todayStr);
+    const upcoming=leads.filter(l=>{ const d=schedDate(l).slice(0,10); if(!d||d===todayStr) return false; const dt=new Date(d); if(isNaN(dt))return false; const days=Math.round((dt-today)/86400000); return days>0&&days<=7; });
+    const other=leads.filter(l=>l.stage==='installation' && !todayJobs.includes(l) && !upcoming.includes(l));
+    const sec=(t,arr)=> arr.length? '<div class="sec">'+t+' ('+arr.length+')</div>'+arr.map(jobCard).join('') : '';
+    body = sec('Today',todayJobs)+sec('Next 7 days',upcoming)+sec('In progress',other);
+    if(!body) body='<div class="empty">No scheduled or in-progress jobs.<br>Use search to find any job.</div>';
+  }
+  $app().innerHTML = header('My Jobs')
+    + '<div class="wrap">'
+    + '<input class="srch" placeholder="Search name, address, phone…" value="'+esc(_search)+'" oninput="_search=this.value;renderJobs()" '+(_search?'autofocus':'')+'>'
+    + body + '</div>';
+  if(_search){ const i=$app().querySelector('.srch'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
+}
+function jobCard(l){
+  const t=prettyType(l.jobType); const d=schedDate(l).slice(0,10);
+  return '<a class="card" onclick="openJob(\''+esc(l.id)+'\')">'
+    + '<div class="jrow"><div style="flex:1;min-width:0">'
+    + '<div class="jname">'+esc(custName(l))+'</div>'
+    + (leadAddr(l)?'<div class="jaddr">'+esc(leadAddr(l))+'</div>':'')
+    + '<div class="chips">'+(t?'<span class="chip blue">'+esc(t)+'</span>':'')
+    + (l.source?'<span class="chip">'+esc(l.source)+'</span>':'')
+    + (d?'<span class="chip amber">📅 '+esc(d)+'</span>':'')+'</div>'
+    + '</div><div class="chev">›</div></div></a>';
+}
+function openJob(id){ location.hash='#job='+encodeURIComponent(id); renderDetail(id); }
+function renderDetail(id){
+  const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
+  if(!l){ $app().innerHTML=header('Job')+'<div class="wrap"><a class="back" onclick="goJobs()">‹ Back</a><div class="empty">Job not found.</div></div>'; return; }
+  const phone=leadPhone(l), addr=leadAddr(l);
+  const tel = phone? 'tel:'+phone.replace(/[^0-9+]/g,'') : '';
+  const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
+  const payCard = isDirect(l)
+    ? '<div class="pay"><div class="lab" style="color:#7fe0a6">Collect Payment (direct customer)</div>'
+      + '<div style="font-size:14px">Zelle to <b>'+esc(ZELLE_EMAIL)+'</b></div>'
+      + '<div class="muted" style="font-size:12.5px;margin-top:4px">Have the customer send via their bank’s Zelle. Confirm before leaving.</div></div>'
+    : '<div class="card"><div class="lab">Payment</div><div class="muted" style="font-size:14px">'+esc(l.source||'Platform')+' invoices the customer — do not collect on site.</div></div>';
+  $app().innerHTML = header('Job')
+    + '<div class="wrap">'
+    + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
+    + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
+    + (addr?'<div class="jaddr" style="font-size:14px;margin-bottom:6px">'+esc(addr)+'</div>':'')
+    + '<div class="chips" style="margin-bottom:4px">'+(l.jobType?'<span class="chip blue">'+esc(prettyType(l.jobType))+'</span>':'')+(l.source?'<span class="chip">'+esc(l.source)+'</span>':'')+(schedDate(l)?'<span class="chip amber">📅 '+esc(schedDate(l).slice(0,10))+'</span>':'')+'</div>'
+    + '<div class="row2">'
+    + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
+    + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
+    + '</div>'
+    + payCard
+    + (l.scopeOfWork?'<div class="card"><div class="lab">Scope of Work</div><div class="scope">'+esc(l.scopeOfWork)+'</div></div>':'')
+    + '<div class="card"><div class="lab">Photos</div><div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div></div>'
+    + '</div>';
+  loadJobPhotos(l.id).then(ph=>{
+    const el=document.getElementById('photos'); if(!el) return;
+    if(!ph.length){ el.innerHTML='<div class="muted" style="font-size:13px">No photos on this job yet.</div>'; return; }
+    el.innerHTML='<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>';
+  }).catch(()=>{ const el=document.getElementById('photos'); if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn’t load photos.</div>'; });
+  window.scrollTo(0,0);
+}
+function goJobs(){ location.hash=''; renderJobs(); }
+async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
+function route(){ const m=/#job=([^&]+)/.exec(location.hash); if(m) renderDetail(decodeURIComponent(m[1])); else renderJobs(); }
+window.addEventListener('hashchange', route);
+
+// ---------- boot ----------
+(async function boot(){
+  try{
+    const account = await initAuth();
+    if(!account){ renderLogin(); return; }
+    const tok = await getTokenSilent();
+    if(!tok){ renderLogin(); return; }
+    const hadData = getLeads().length>0;
+    if(!hadData) loading('Loading your jobs…');
+    try{ await spInit(); await syncFromSP(); }
+    catch(e){ console.warn('[field] sync', e); if(!hadData){ $app().innerHTML='<div class="center"><div class="err">Could not load jobs.</div><div class="muted" style="font-size:13px;max-width:300px">'+esc(e.message||e)+'</div><button class="btn ghost" style="max-width:240px" onclick="location.reload()">Retry</button><button class="btn ghost" style="max-width:240px" onclick="signOut()">Sign out</button></div>'; return; } }
+    route();
+  }catch(e){
+    console.error('[field] boot', e);
+    $app().innerHTML='<div class="center"><div class="err">Sign-in problem</div><div class="muted" style="font-size:13px;max-width:300px">'+esc(e.message||e)+'</div><button class="btn green" style="max-width:240px" onclick="signIn()">Sign in with Microsoft</button></div>';
+  }
+})();
+</script>
+</body>
+</html>
