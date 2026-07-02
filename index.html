@@ -2044,7 +2044,13 @@ function upsertLead(data) {
     setTimeout(() => {
       try {
         if (typeof _ensureSPLeadFolderForLead === 'function') {
-          _ensureSPLeadFolderForLead(returnedId);
+          // Mark success on the lead so the retry sweep knows it's done. A
+          // failure here (not signed in yet, transient Graph error — the
+          // Scott Lemler case, 2026-07-02) leaves the mark absent and
+          // _spFolderRetrySweep creates the folder on a later poll.
+          _ensureSPLeadFolderForLead(returnedId).then(r => {
+            if (r && typeof _markLeadSPFolderDone === 'function') _markLeadSPFolderDone(returnedId);
+          }).catch(() => {});
         }
       } catch (e) { console.warn('[GK] Auto SP folder failed:', e); }
     }, 250);
@@ -13441,6 +13447,7 @@ function renderFMJobSummary(jobId) {
     <div class="jd-sh">
       <div class="jd-st">Files &amp; Photos <span style="font-size:10px;font-weight:400;color:var(--text-muted)">${allFiles.length} file${allFiles.length!==1?'s':''}</span></div>
       <div style="display:flex;gap:6px">
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="pullInstallPicsNow('${jobId}')" title="Re-check the job's NEEDS INSPECTION COMPLETED folder right now and pull any Completion pics / inspection docs that weren't there on the last pass.">⬇ Pull install pics</button>
         <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="refreshPhotosFromSP('${jobId}')" title="Pull latest photos from SharePoint AND refresh expired image links. Click here if a photo says 'Cannot display'.">↻ Sync</button>
         <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="fmSetJob('${jobId}');navigate('files')">Full View →</button>
       </div>
@@ -13714,7 +13721,8 @@ function getNotification(id) { return getNotifications().find(n=>n.id===id)||nul
 // approvals) by their `type`, so each surface stays focused.
 const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
-  'cust-quote-accepted', 'cust-quote-declined'
+  'cust-quote-accepted', 'cust-quote-declined',
+  'web-lead'
 ]);
 function isCustomerNotif(n) { return !!(n && CUST_NOTIF_TYPES.has(n.type)); }
 function getPendingCustomerNotifs() {
@@ -19954,6 +19962,53 @@ async function _ensureSPLeadFolderForLead(leadId) {
   }
 }
 
+// Mark a lead's auto SP folder as confirmed (synced flag, so any device knows).
+function _markLeadSPFolderDone(leadId) {
+  try {
+    const arr = getLeads();
+    const idx = arr.findIndex(l => l.id === leadId);
+    if (idx < 0 || arr[idx].spFolderDone) return;
+    arr[idx].spFolderDone = true;
+    arr[idx].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+  } catch (_) {}
+}
+
+// ── SP folder retry sweep (safety net for the auto-created Active Leads folder) ──
+// Root cause of the 2026-07-02 "Scott Lemler" miss: folder creation fires once,
+// 250ms after lead save, and a transient failure (Graph not signed in yet, one
+// flaky API call) was silent with NO retry. This sweep rides the bell timer:
+// any lead from the last 7 days without a confirmed folder gets one more
+// _ensureSPLeadFolderForLead pass (a no-op if the folder exists). Deliberately
+// scoped to RECENT leads only — never touches historical/archived leads, so it
+// can't create surprise folders for pre-auto-folder-era jobs.
+const SP_FOLDER_RETRY_WINDOW_MS = 7 * 24 * 3600 * 1000;
+let _spFolderSweepLastAt = 0;
+let _spFolderSweepBusy = false;
+async function _spFolderRetrySweep() {
+  if (_spFolderSweepBusy) return;
+  if (Date.now() - _spFolderSweepLastAt < 5 * 60 * 1000) return;
+  if (typeof _gToken === 'undefined' || !_gToken || !_spDrive) return;
+  _spFolderSweepBusy = true;
+  _spFolderSweepLastAt = Date.now();
+  try {
+    const cutoff = Date.now() - SP_FOLDER_RETRY_WINDOW_MS;
+    const candidates = getLeads().filter(l =>
+      !l.spFolderDone && !l.deleted &&
+      l.createdAt && new Date(l.createdAt).getTime() > cutoff
+    ).slice(0, 10);
+    for (const l of candidates) {
+      try {
+        const r = await _ensureSPLeadFolderForLead(l.id);
+        if (r) {
+          _markLeadSPFolderDone(l.id);
+          if (r.created) console.log('[GK] SP folder retry-created:', l.id);
+        }
+      } catch (_) {}
+    }
+  } finally { _spFolderSweepBusy = false; }
+}
+
 // Small helper for full name that doesn't crash if custFullName isn't defined yet
 function customFullNameSafe(c) {
   if (!c) return '';
@@ -20549,6 +20604,91 @@ async function _hydrateOpsFolderFromSP(jobId, force){
     if (added||refreshed) console.log(`[GK] Ops/NeedsInspection hydrate (${jobId}): added=${added} refreshed=${refreshed}`);
     return { added, refreshed };
   } catch(e){ console.warn('[GK] _hydrateOpsFolderFromSP failed:', e); return { added:0, error:e.message }; }
+}
+
+// ── NEEDS INSPECTION background sweep (2026-07-02, per Jonathan) ──
+// Previously completion pics only pulled when the job was OPENED. Now the
+// trigger is the folder MOVE itself: this sweep (riding the bell timer, 10-min
+// throttle) lists the NEEDS INSPECTION COMPLETED bucket once, matches its
+// child folders to jobs by the same base-name prefix rule, and runs the
+// existing read-only per-job hydrate for each match — so pics are already in
+// the CRM before anyone opens the job. Scoped to active pipeline stages
+// (scheduled → invoiced); never touches archived jobs. STRICTLY READ-ONLY,
+// same as the per-job hydrate it drives.
+const OPS_SWEEP_MIN_INTERVAL_MS = 10 * 60 * 1000;
+let _opsSweepLastAt = 0;
+let _opsSweepBusy = false;
+async function _opsInspectionSweep() {
+  if (_opsSweepBusy) return;
+  if (Date.now() - _opsSweepLastAt < OPS_SWEEP_MIN_INTERVAL_MS) return;
+  if (typeof _gToken === 'undefined' || !_gToken || !_spDrive) return;
+  _opsSweepBusy = true;
+  _opsSweepLastAt = Date.now();
+  try {
+    // List the bucket's child folder names once.
+    const bResp = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(SP_NEEDS_INSPECTION_PATH)}`,
+      { headers: { 'Authorization': `Bearer ${_gToken}` } }
+    );
+    if (!bResp.ok) return;
+    const bucket = await bResp.json();
+    const folderNames = [];
+    let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${bucket.id}/children?$top=200`;
+    while (next) {
+      const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+      if (!r.ok) break;
+      const data = await r.json();
+      for (const it of (data.value || [])) {
+        if (it.folder && it.name) folderNames.push(it.name);
+      }
+      next = data['@odata.nextLink'] || null;
+    }
+    if (!folderNames.length) return;
+
+    // Match bucket folders to active-pipeline jobs by base-name prefix.
+    const schedIdx = STAGES.findIndex(s => s.id === 'scheduled');
+    const invIdx   = STAGES.findIndex(s => s.id === 'invoiced');
+    const jobsToPull = [];
+    for (const lead of getLeads()) {
+      if (lead.deleted) continue;
+      const li = STAGES.findIndex(s => s.id === lead.stage);
+      if (li < schedIdx || (invIdx >= 0 && li > invIdx)) continue;
+      const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+      const baseName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
+      if (!baseName) continue;
+      if (folderNames.some(n => n === baseName || n.startsWith(baseName))) jobsToPull.push(lead.id);
+    }
+    for (const jobId of jobsToPull) {
+      try {
+        const r = await _hydrateOpsFolderFromSP(jobId);
+        if (r && r.added > 0) {
+          console.log('[GK] Inspection sweep pulled', r.added, 'file(s) for', jobId);
+          if (S.jobDetailId === jobId) { try { renderJobDetail(jobId); } catch (_) {} }
+        }
+      } catch (_) {}
+    }
+  } catch (e) { console.warn('[GK] _opsInspectionSweep failed:', e); }
+  finally { _opsSweepBusy = false; }
+}
+
+// Manual "Pull install pics" — for when the pics weren't uploaded to SharePoint
+// yet at the moment the auto-pull ran. Bypasses the per-job throttle.
+async function pullInstallPicsNow(jobId) {
+  try {
+    toast('Pulling install pics from SharePoint…');
+    const r = await _hydrateOpsFolderFromSP(jobId, true);
+    if (r && r.skipped === 'early-stage') {
+      toast('This job isn\'t at Scheduling stage or later yet — the inspection folder pull only applies to scheduled jobs.', 'warning');
+      return;
+    }
+    if (r && r.error) { toast('Pull failed: ' + r.error, 'error'); return; }
+    const n = (r && r.added) || 0;
+    toast(n
+      ? n + ' new file' + (n > 1 ? 's' : '') + ' pulled from the inspection folder'
+      : 'No new files found — check that the job folder is in NEEDS INSPECTION COMPLETED and the pics are uploaded.',
+      n ? 'success' : 'warning');
+    if (S.jobDetailId === jobId) { try { renderJobDetail(jobId); } catch (_) {} }
+  } catch (e) { toast('Pull failed — see console', 'error'); }
 }
 
 // Auto-pull the job's Active Leads SharePoint folder (Sales and Marketing/
@@ -21380,6 +21520,245 @@ function _activityOsNotify(notifs) {
   else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p==='granted') fire(); });
 }
 
+// ── Website lead inbox poller ──────────────────────────────────────────────
+//
+// Pulls new website form submissions from the Worker's leads_inbox
+// (GET /lead/pending), creates the customer + lead locally (deduping by
+// phone/email), files any uploaded photos through the normal SharePoint
+// photo pipeline, mirrors SMS consent when the TCPA box was checked (the
+// Worker already wrote the immutable consent_records audit row with IP/UA
+// at submit time), drops a bell notification, then acks (POST /lead/ack)
+// so the row is never re-imported. Same "the CRM pulls" pattern as
+// _activityPollOnce. Riding the bell timer (30s) with its own 60s throttle.
+//
+// Race note: two signed-in machines polling in the same window could both
+// import before either acks — rare, and harmless: the webInboxId guard
+// catches it once sync has run, and any survivor is a visible duplicate
+// fixable with the customer Merge tool. Failed imports are NOT acked, so
+// they retry on the next poll; photos stay safe in D1 for ~30 days.
+
+const LEAD_INBOX_MIN_INTERVAL_MS = 60000;
+let _leadInboxLastPoll = 0;
+let _leadInboxBusy = false;
+
+// Website service_type → CRM jobType. Solar/commercial map to 'custom' until
+// they get first-class job types.
+const _WEB_SERVICE_TO_JOBTYPE = {
+  'ev':         'ev-residential',
+  'battery':    'battery-system',
+  'generator':  'generator',
+  'solar':      'custom',
+  'commercial': 'custom',
+  'other':      'custom'
+};
+
+async function _leadInboxPollOnce() {
+  if (_leadInboxBusy) return;
+  if (Date.now() - _leadInboxLastPoll < LEAD_INBOX_MIN_INTERVAL_MS) return;
+  if (typeof _msal === 'undefined' || !_msal) return;
+  if (typeof SMS_WORKER_URL === 'undefined' || !SMS_WORKER_URL) return;
+  _leadInboxBusy = true;
+  _leadInboxLastPoll = Date.now();
+  try {
+    const token = await _acquireSMSToken();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/lead/pending',
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json().catch(() => ({}));
+    const rows = Array.isArray(data.leads) ? data.leads : [];
+    if (!rows.length) return;
+    for (const row of rows) {
+      try {
+        const imported = _importWebLead(row);
+        // Ack right after local creation so other devices don't re-import.
+        // The map lets the worker re-key its auto-texts + consent records
+        // from 'webform:<inboxId>' to the real lead/customer ids and seed
+        // phone_lead_map — so the customer's replies land in this job's
+        // SMS thread and a later email opt-in flips the consent banner.
+        const ackBody = { ids: [row.id] };
+        if (imported) ackBody.map = { [row.id]: { leadId: imported.leadId, customerId: imported.custId } };
+        await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/lead/ack', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(ackBody)
+        });
+        // Photos file in the background after the ack — they remain in D1
+        // even if this fails, and the SP-hydrate passes pick up strays.
+        if (imported) _fileWebLeadPhotos(imported.leadId, row, token);
+      } catch (e) {
+        console.warn('[GK] web lead import failed:', row && row.id, e);
+        // No ack on failure — the row stays pending and retries next poll.
+      }
+    }
+    if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
+  } catch (_) { /* silent — polling failures shouldn't toast */ }
+  finally { _leadInboxBusy = false; }
+}
+
+// Create the customer + lead from one leads_inbox row. Returns
+// { leadId, custId }, or null if already imported (webInboxId guard).
+function _importWebLead(row) {
+  if (getLeads().some(l => l.webInboxId === row.id)) return null;
+
+  const fn = row.first_name || '';
+  const ln = row.last_name || '';
+  const name = (fn + ' ' + ln).trim() || 'Website lead';
+  const email = row.email || '';
+  const phone = row.phone || '';
+  const digits = String(phone).replace(/\D/g, '').slice(-10);
+
+  // Dedupe customer by phone digits first, then email.
+  let cust = null;
+  const custs = getCustomers().filter(c => !c.mergedInto && !c.deleted);
+  if (digits) {
+    cust = custs.find(c => String(c.phone || '').replace(/\D/g, '').slice(-10) === digits) || null;
+  }
+  if (!cust && email) {
+    cust = custs.find(c => String(c.email || '').toLowerCase() === email.toLowerCase()) || null;
+  }
+
+  let custId;
+  if (cust) {
+    custId = cust.id;
+    // Fill blanks only — never overwrite what the office already has.
+    upsertCustomer({
+      ...cust,
+      email: cust.email || email,
+      phone: cust.phone || phone,
+      street: cust.street || row.address || '',
+      city:   cust.city   || row.city    || '',
+      state:  cust.state  || row.state   || 'VA',
+      zip:    cust.zip    || row.postal_code || ''
+    });
+  } else {
+    custId = upsertCustomer({
+      id: 'cust-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      firstName: fn || name.split(' ')[0],
+      lastName:  ln || (name.includes(' ') ? name.split(' ').slice(1).join(' ') : ''),
+      email, phone,
+      street: row.address || '',
+      city: row.city || '',
+      state: row.state || 'VA',
+      zip: row.postal_code || '',
+      propertyType: row.source === 'commercial' ? 'commercial' : 'residential'
+    });
+  }
+
+  // Mirror SMS consent onto the customer so texting unblocks immediately.
+  // The immutable audit row (with IP/UA) was written server-side at submit.
+  if (row.consent_sms) {
+    try {
+      setConsentSms(custId, {
+        status: CONSENT_STATUSES.WEB_FORM,
+        source: 'web_form',
+        notes: 'Checked TCPA consent box on ' + (row.page || 'greenkey-usa.com') + ' web form',
+        evidence: {
+          consentText: row.consent_text || '',
+          page: row.page || '',
+          inboxId: row.id,
+          capturedVia: 'website-intake'
+        }
+      });
+    } catch (e) { console.warn('[GK] web lead consent capture failed:', e); }
+  }
+
+  // Build the lead — mirrors saveLead()'s shape.
+  const jobType = _WEB_SERVICE_TO_JOBTYPE[String(row.service_type || '').toLowerCase()] || 'ev-residential';
+  const city = row.city || '';
+  const j = (typeof checkJurisdiction === 'function') ? checkJurisdiction(city) : null;
+  let custom = {};
+  try { custom = row.custom_json ? JSON.parse(row.custom_json) : {}; } catch (_) {}
+  let utm = null;
+  try { utm = row.utm_json ? JSON.parse(row.utm_json) : null; } catch (_) {}
+  const descBits = [];
+  if (row.message) descBits.push(row.message);
+  const customText = Object.entries(custom).map(([k, v]) => k + ': ' + v).join(' · ');
+  if (customText) descBits.push(customText);
+
+  const leadId = upsertLead({
+    id: null,
+    customerId: custId,
+    customerName: name,
+    customerFirstName: fn,
+    customerLastName: ln,
+    customerEmail: email,
+    customerPhone: phone,
+    source: 'Website',
+    jobType,
+    description: descBits.join('\n'),
+    siteStreet: row.address || '',
+    siteCity: city,
+    siteState: row.state || 'VA',
+    siteZip: row.postal_code || '',
+    stage: 'lead-received',
+    specialJurisdiction: !!j,
+    jurisdiction: j ? j.name : '',
+    permitFee: (typeof defaultPermitFee === 'function')
+      ? defaultPermitFee({ jobType, source: 'Website', specialJurisdiction: !!j })
+      : undefined,
+    inspectionRequired: !!j,
+    webInboxId: row.id,
+    webForm: row.source,               // which form: residential | commercial | contact
+    webUtm: utm,
+    webReferrer: row.referrer || '',
+    webPage: row.page || '',
+    webSubmittedAt: row.created_at
+  });
+
+  const formLabel = row.source === 'residential' ? 'Residential EV form'
+                  : row.source === 'commercial'  ? 'Commercial form'
+                  : 'Contact form';
+  upsertNotification({
+    id: 'web-lead-' + row.id,
+    type: 'web-lead',
+    title: 'New website lead',
+    description: name + ' — ' + formLabel + (phone ? (' · ' + phone) : ''),
+    jobId: leadId
+  });
+  try {
+    if (typeof _activityOsNotify === 'function') {
+      _activityOsNotify([{ id: 'web-lead-' + row.id, title: 'New website lead', description: name + ' — ' + formLabel, jobId: leadId }]);
+    }
+  } catch (_) {}
+  try { if (typeof updateLeadsBadge === 'function') updateLeadsBadge(); } catch (_) {}
+  return { leadId: leadId, custId: custId };
+}
+
+// Pull each uploaded photo's bytes from the Worker (MSAL-auth) and file it
+// through the standard pipeline — shows in the job's Pictures and uploads to
+// the SharePoint Photo Library, exactly like a texted-in or dragged-in photo.
+async function _fileWebLeadPhotos(leadId, row, token) {
+  let metas = [];
+  try { metas = row.photos_json ? JSON.parse(row.photos_json) : []; } catch (_) {}
+  if (!Array.isArray(metas) || !metas.length) return;
+  for (const m of metas) {
+    try {
+      const resp = await fetch(
+        SMS_WORKER_URL.replace(/\/$/,'') + '/lead/media/' + m.id,
+        { headers: { 'Authorization': 'Bearer ' + token } }
+      );
+      if (!resp.ok) continue;
+      const blob = await resp.blob();
+      const ext = ((m.contentType || 'image/jpeg').split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      const label = m.label || 'photo';
+      const file = new File(
+        [blob],
+        'Web form ' + label + ' ' + new Date().toLocaleDateString('en-US').replace(/\//g, '-') + '.' + ext,
+        { type: m.contentType || 'image/jpeg' }
+      );
+      const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
+      });
+      addFileRecord(leadId, 'site', null, file, dataUrl);
+    } catch (e) { console.warn('[GK] web lead photo filing failed:', m && m.id, e); }
+  }
+}
+
 // ── Desktop push notifications for inbound texts ──────────────────────────
 //
 // Requests Notification permission once (on first inbound message or on
@@ -21483,6 +21862,7 @@ function _bellTypeMeta(type) {
     case 'cust-quote-accepted':   return { ico:'📝', accent:'var(--green,#22c55e)' };
     case 'cust-quote-declined':   return { ico:'❌', accent:'var(--red,#dc2626)' };
     case 'cust-sms':              return { ico:'💬', accent:'var(--blue,#3498db)' };
+    case 'web-lead':              return { ico:'🌐', accent:'var(--green,#22c55e)' };
     default:                      return { ico:'🔔', accent:'var(--text-muted)' };
   }
 }
@@ -21585,8 +21965,15 @@ function _bellStartPolling() {
   _bellRequestPermission();
   _bellPollOnce();
   _activityPollOnce();
+  _leadInboxPollOnce();
+  try { _spFolderRetrySweep(); } catch(_){}
+  try { _opsInspectionSweep(); } catch(_){}
   _bellPollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') { _bellPollOnce(); _activityPollOnce(); }
+    if (document.visibilityState === 'visible') {
+      _bellPollOnce(); _activityPollOnce(); _leadInboxPollOnce();
+      try { _spFolderRetrySweep(); } catch(_){}
+      try { _opsInspectionSweep(); } catch(_){}
+    }
   }, BELL_POLL_INTERVAL_MS);
 }
 function _bellStopPolling() {
