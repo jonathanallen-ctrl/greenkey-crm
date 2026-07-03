@@ -7875,7 +7875,10 @@ function isUtilityDelayedJob(q) {
 function calcDepositSchedule(q) {
   if (!quoteRequiresDeposit(q)) return [];
   const totals = calcQuoteTotals(q);
-  const total = totals.quoteTotal || 0;
+  // Payment schedule is built on the NO-FEE (cash/Zelle/check) total so it
+  // sums to the headline price the customer was quoted (2026-07-02). Card/ACH
+  // surcharges apply per-payment at invoicing, not in this schedule.
+  const total = (totals.cashTotal != null ? totals.cashTotal : totals.quoteTotal) || 0;
   const deposit = calcDepositAmount(total);
   if (total <= 0) return [];
 
@@ -7982,7 +7985,7 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   if((totals.paymentProcessingFee||0) > 0){
     rows.push(`<div class="tot-row"><span>Payment Processing (${totals.paymentBuffer}%)</span><span class="tot-num">${fmt$(totals.paymentProcessingFee)}</span></div>`);
   }
-  rows.push(`<div class="tot-row total"><span>Quote Total</span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
+  rows.push(`<div class="tot-row total"><span>Quote Total <span style="font-size:10px;color:var(--text-muted)">(card price — customer sees the no-fee total as headline)</span></span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
   // Payment options: non-card discount (from settings, default 2%)
   // 3-tier payment options box. Only shown when at least one tier differs
   // from the headline (CC) price — otherwise there's nothing to choose.
@@ -8003,10 +8006,10 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     const _cashSavings = _ccBox - _cashBox;
     payHtml = `<div style="margin-top:10px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:6px">
       <div style="font-size:10.5px;font-weight:600;letter-spacing:0.4px;color:var(--green);text-transform:uppercase;margin-bottom:6px">Payment Options</div>
-      ${_row(`By credit card${_ccPctBox?` (+${_ccPctBox}%)`:''}`, _ccBox, true, false)}
-      ${_achBox  !== _ccBox ? _row(`By ACH${_achPctBox?` (+${_achPctBox}%)`:''}`, _achBox, false, _cashBox === _achBox ? false : false) : ''}
-      ${_cashBox !== _ccBox ? _row(`By cash, Zelle, or check${_cashPctBox?` (+${_cashPctBox}%)`:''}`, _cashBox, false, true) : ''}
-      ${_cashSavings > 0 ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Save ${fmt$(_cashSavings)} by paying via cash, Zelle, or check</div>` : ''}
+      ${_row(`By cash, Zelle, or check — CUSTOMER HEADLINE`, _cashBox, false, true)}
+      ${_achBox  !== _cashBox ? _row(`By ACH${_achPctBox?` (+${_achPctBox}%)`:''}`, _achBox, false, false) : ''}
+      ${_ccBox   !== _cashBox ? _row(`By credit card${_ccPctBox?` (+${_ccPctBox}%)`:''}`, _ccBox, true, false) : ''}
+      ${_cashSavings > 0 ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Customer PDF/email lead with the cash price; card/ACH surcharges shown as options</div>` : ''}
     </div>`;
   }
   return `<div class="tot-box">${rows.join('')}${payHtml}</div>`;
@@ -8157,7 +8160,11 @@ async function emailQuote(qid){
         || 'there'
       )
     : ((cust?.firstName) || (lead?.customerName?.split(' ')[0]) || 'there');
-  const total=fmt$(q.quoteTotal||0);
+  // 2026-07-02 (Jonathan): the customer-facing headline total is the NO-FEE
+  // (cash/Zelle/check) price so it matches verbal quotes. Card +3% / ACH +1%
+  // appear as payment options on the attached PDF. Platform/referrer quotes
+  // have no tiers, so net === quoteTotal there and nothing changes.
+  const total=fmt$((typeof _quoteNet==='function' ? _quoteNet(q) : (q.quoteTotal||0)));
   const addr=lead?.siteStreet?`${lead.siteStreet}, ${lead.siteCity||''}`:'your property';
   // Project phrase derived from job type — used throughout the email copy so
   // platform jobs that aren't EV chargers (HVAC, panel replacement, etc.)
@@ -9723,29 +9730,27 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const _pdfRows = [{desc:_lmLabel,amt:_lmPDF}];
   if((_totalsPDF.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(_totalsPDF.veteranDiscount||0)});
   _pdfRows.push({desc:'Permitting',amt:_totalsPDF.permitFee||0});
-  if((_totalsPDF.paymentProcessingFee||0) > 0){
-    _pdfRows.push({desc:`Payment Processing (${_totalsPDF.paymentBuffer}%)`,amt:_totalsPDF.paymentProcessingFee});
-  }
-  y=pdfTable(doc,y,W,_pdfRows,'TOTAL',_totalsPDF.quoteTotal||0);
-  // 3-tier payment options block — only shown when at least one non-CC tier
-  // differs from the CC price. Suppressed for platform/referrer flows where
-  // every tier collapses to the same price.
+  // 2026-07-02 (Jonathan): the headline TOTAL is now the NO-FEE (cash/Zelle/
+  // check) price — matches verbal quotes. The processing fee no longer appears
+  // as a summary line item; card/ACH surcharges live in PAYMENT OPTIONS below.
   const _ccPDF   = _totalsPDF.ccTotal   != null ? _totalsPDF.ccTotal   : (_totalsPDF.quoteTotal||0);
   const _achPDF  = _totalsPDF.achTotal  != null ? _totalsPDF.achTotal  : _ccPDF;
   const _cashPDF = _totalsPDF.cashTotal != null ? _totalsPDF.cashTotal : _ccPDF;
   const _ccBufPct  = _totalsPDF.ccBufferPct  || 0;
   const _achBufPct = _totalsPDF.achBufferPct || 0;
-  const _cashBufPct= _totalsPDF.cashBufferPct|| 0;
   const _hasTiersPDF = (_ccPDF > 0) && (_ccPDF !== _achPDF || _ccPDF !== _cashPDF);
+  y=pdfTable(doc,y,W,_pdfRows,'TOTAL',_cashPDF||_totalsPDF.quoteTotal||0);
+  // 3-tier payment options block — cash first (it IS the total), surcharged
+  // options after. Only shown when a tier differs; suppressed for platform/
+  // referrer flows where every tier collapses to the same price.
   if (_hasTiersPDF) {
     // Each tier line is ~15pt; 14pt header padding top, ~14pt footnote at end.
     const _tierLines = [
-      { label: `By credit card${_ccBufPct?` (+${_ccBufPct}%)`:''}`,    amt: _ccPDF,   bold: false, color: 'dark' },
-      ...(_achPDF  !== _ccPDF ? [{ label: `By ACH${_achBufPct?` (+${_achBufPct}%)`:''}`,                          amt: _achPDF,  bold: false, color: 'dark' }] : []),
-      ...(_cashPDF !== _ccPDF ? [{ label: `By cash, Zelle, or check${_cashBufPct?` (+${_cashBufPct}%)`:''}`,      amt: _cashPDF, bold: true,  color: 'green' }] : [])
+      { label: 'By cash, Zelle, or check',                                                                   amt: _cashPDF, bold: true,  color: 'green' },
+      ...(_achPDF !== _cashPDF ? [{ label: `By ACH${_achBufPct?` (+${_achBufPct}% processing)`:''}`,         amt: _achPDF,  bold: false, color: 'dark' }] : []),
+      ...(_ccPDF  !== _cashPDF ? [{ label: `By credit card${_ccBufPct?` (+${_ccBufPct}% processing)`:''}`,   amt: _ccPDF,   bold: false, color: 'dark' }] : [])
     ];
-    const _bestSavings = _ccPDF - Math.min(_achPDF, _cashPDF);
-    const _footnote = _bestSavings > 0 ? `Save ${fmt$(_bestSavings)} by paying via cash, Zelle, or check` : '';
+    const _footnote = 'Total above is the cash / Zelle / check price. Card and ACH add the surcharge shown.';
     const _boxH = 22 + _tierLines.length * 15 + (_footnote ? 14 : 4);
     doc.setFillColor(235,250,225);
     doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
@@ -22629,7 +22634,7 @@ async function _mintQuoteActionToken(q) {
       customerId:    q.customerId || lead?.customerId || '',
       customerName:  cust ? custFullName(cust) : '',
       leadId:        q.leadId || '',
-      quoteTotal:    totals.quoteTotal || 0,
+      quoteTotal:    (typeof _quoteNet === 'function' ? _quoteNet(q) : (totals.quoteTotal || 0)),
       projectPhrase,
       isContingent:  !!q.contingentOnUtility
     })
