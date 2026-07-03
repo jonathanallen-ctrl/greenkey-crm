@@ -7982,10 +7982,12 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   if((totals.permitFee||0) > 0) {
     rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
   }
-  if((totals.paymentProcessingFee||0) > 0){
-    rows.push(`<div class="tot-row"><span>Payment Processing (${totals.paymentBuffer}%)</span><span class="tot-num">${fmt$(totals.paymentProcessingFee)}</span></div>`);
-  }
-  rows.push(`<div class="tot-row total"><span>Quote Total <span style="font-size:10px;color:var(--text-muted)">(card price — customer sees the no-fee total as headline)</span></span><span class="tot-num" style="color:var(--green)">${fmt$(totals.quoteTotal)}</span></div>`);
+  // 2026-07-02 (Jonathan): the sidebar matches the customer view — headline
+  // Quote Total is the NO-FEE (cash/Zelle/check) price; the card/ACH
+  // surcharge shows ONLY in the Payment Options box below. Display only:
+  // stored quoteTotal/royalty/margin math unchanged.
+  const _cashHead = totals.cashTotal != null ? totals.cashTotal : (totals.quoteTotal||0);
+  rows.push(`<div class="tot-row total"><span>Quote Total</span><span class="tot-num" style="color:var(--green)">${fmt$(_cashHead)}</span></div>`);
   // Payment options: non-card discount (from settings, default 2%)
   // 3-tier payment options box. Only shown when at least one tier differs
   // from the headline (CC) price — otherwise there's nothing to choose.
@@ -8006,10 +8008,10 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     const _cashSavings = _ccBox - _cashBox;
     payHtml = `<div style="margin-top:10px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:6px">
       <div style="font-size:10.5px;font-weight:600;letter-spacing:0.4px;color:var(--green);text-transform:uppercase;margin-bottom:6px">Payment Options</div>
-      ${_row(`By cash, Zelle, or check — CUSTOMER HEADLINE`, _cashBox, false, true)}
+      ${_row(`By cash, Zelle, or check`, _cashBox, false, true)}
       ${_achBox  !== _cashBox ? _row(`By ACH${_achPctBox?` (+${_achPctBox}%)`:''}`, _achBox, false, false) : ''}
       ${_ccBox   !== _cashBox ? _row(`By credit card${_ccPctBox?` (+${_ccPctBox}%)`:''}`, _ccBox, true, false) : ''}
-      ${_cashSavings > 0 ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Customer PDF/email lead with the cash price; card/ACH surcharges shown as options</div>` : ''}
+      ${_cashSavings > 0 ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">Surcharge applies only if the customer pays by that method</div>` : ''}
     </div>`;
   }
   return `<div class="tot-box">${rows.join('')}${payHtml}</div>`;
