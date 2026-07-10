@@ -7736,8 +7736,26 @@ function calcQuoteTotals(q){
   const _prefs = (typeof getPrefs === 'function') ? getPrefs() : {};
   const achBufferPct  = _zeroBuf ? 0 : ((typeof _prefs.achBuffer  === 'number') ? _prefs.achBuffer  : 1);
   const cashBufferPct = _zeroBuf ? 0 : ((typeof _prefs.cashBuffer === 'number') ? _prefs.cashBuffer : 0);
-  const lmAfterDiscount = (q.laborAndMaterials||0) - (q.veteranDiscount||0);
-  const preProcessingTotal = Math.round(lmAfterDiscount + (q.qmeritFee||0) + (q.permitFee||0));  // whole dollars
+  // Round every component to whole dollars up front, then derive the total from
+  // the ROUNDED parts — so the summary lines the customer sees (Labor &
+  // Materials, Permitting, etc.) always add up to the printed TOTAL. Previously
+  // only the total was rounded, leaving cents on the line items (e.g. $2,689.57
+  // + $200 that read as $2,890). Display/aggregate only — stored quote fields
+  // and margin math are unaffected.
+  const rMat    = Math.round(q.matSubtotal||0);
+  const rAllow  = Math.round(q.matAllowance||0);
+  const rLabor  = Math.round(q.laborTotal||0);
+  const rRental = Math.round(q.rentalTotal||0);
+  const rVet    = Math.round(q.veteranDiscount||0);
+  const rQmerit = Math.round(q.qmeritFee||0);
+  const rPermit = Math.round(q.permitFee||0);
+  // For detailed quotes L&M is the sum of its shown parts (so the breakdown
+  // reconciles to the subtotal line); for quick quotes it's the pre-engineered
+  // value. Round either way.
+  const _partsSum = rMat + rAllow + rLabor + rRental;
+  const rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.round(q.laborAndMaterials||0);
+  const lmAfterDiscount = rLM - rVet;
+  const preProcessingTotal = lmAfterDiscount + rQmerit + rPermit;  // whole dollars, reconciles with the shown lines
   const _round2 = (x) => Math.round(x * 100) / 100;
   // Per-tier processing fees — each computed independently from the base, so
   // the math is exact (avoids the "discount-off-discounted-price" rounding
@@ -7753,15 +7771,15 @@ function calcQuoteTotals(q){
   // off. ACH/cash are surfaced as savings options.
   const finalTotal = ccTotal;
   return {
-    matSubtotal:q.matSubtotal||0,
-    matAllowance:q.matAllowance||0,
-    matTotal:q.matTotal||0,
-    laborTotal:q.laborTotal||0,
-    rentalTotal:q.rentalTotal||0,
-    laborAndMaterials:q.laborAndMaterials||0,
-    veteranDiscount:q.veteranDiscount||0,
-    qmeritFee:q.qmeritFee||0,
-    permitFee:q.permitFee||0,
+    matSubtotal:rMat,
+    matAllowance:rAllow,
+    matTotal:Math.round(q.matTotal||0),
+    laborTotal:rLabor,
+    rentalTotal:rRental,
+    laborAndMaterials:rLM,
+    veteranDiscount:rVet,
+    qmeritFee:rQmerit,
+    permitFee:rPermit,
     preProcessingTotal,
     paymentBuffer: ccBufferPct,
     paymentProcessingFee: ccFee,
@@ -8656,6 +8674,31 @@ async function sendQuoteEmail(){
           if (_qd) saveQuotes(_qarr);
         }
       } catch (e) { console.warn('[GK] mark-delivered after send failed:', e); }
+      // 2026-07-02 (Jonathan): emailing a quote also advances the JOB to
+      // "Awaiting Customer" (quote-delivered) automatically. ADVANCE-ONLY:
+      // jobs already at quote-delivered or beyond (approved, permits,
+      // scheduled, ...) are never moved backward. Courtesy emails with no
+      // quote attached don't trigger this (the set below is empty there).
+      try {
+        const _stgQuotes = new Set(checkedIds);
+        if (_isDirectQuote && _qidForButtons) _stgQuotes.add(_qidForButtons);
+        const _qdIdx = STAGES.findIndex(s => s.id === 'quote-delivered');
+        const _stgLeads = new Set();
+        for (const id of _stgQuotes) {
+          const _q = getQuote(id);
+          if (_q && _q.leadId) _stgLeads.add(_q.leadId);
+        }
+        for (const lid of _stgLeads) {
+          const _l = getLead(lid);
+          if (!_l) continue;
+          const _ci = STAGES.findIndex(s => s.id === _l.stage);
+          if (_ci >= 0 && _qdIdx >= 0 && _ci < _qdIdx) {
+            upsertLead({ id: lid, stage: 'quote-delivered', stageAt: new Date().toISOString() });
+            toast('Job moved to Awaiting Customer', 'success');
+            if (S.jobDetailId === lid) { try { renderJobDetail(lid); } catch (_) {} }
+          }
+        }
+      } catch (e) { console.warn('[GK] auto stage-advance after quote send failed:', e); }
       // Fire-and-forget: also save each quote PDF to the customer's SharePoint
       // folder under Sales and Marketing/Active Leads/{Prefix} - {LastName}
       // Project/. Gives Sherri the PDF without asking her to use the CRM.
