@@ -67,8 +67,8 @@
   .meas-tot-row{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;padding:3px 0}
   #sel-props{border:1px solid var(--ada);border-radius:8px;padding:10px;margin-top:10px;display:none;background:#f7faff}
   #sel-props .sp-title{font-size:12px;font-weight:700;color:var(--ada);margin-bottom:6px}
-  #pricing-modal{position:fixed;inset:0;background:rgba(20,25,35,.5);z-index:50;display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:24px}
-  #pricing-modal.open{display:flex}
+  #pricing-modal,#scope-modal,#estimate-modal{position:fixed;inset:0;background:rgba(20,25,35,.5);z-index:50;display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:24px}
+  #pricing-modal.open,#scope-modal.open,#estimate-modal.open{display:flex}
   .pm-card{background:var(--surface);border-radius:12px;width:min(980px,96vw);box-shadow:0 10px 40px rgba(0,0,0,.3);margin:auto}
   .pm-head{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);border-radius:12px 12px 0 0;z-index:2}
   .pm-head h2{font-size:16px;color:var(--green)}
