@@ -11457,10 +11457,11 @@ function _renderJobRail(lead){
   const mapsUrl  = addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : '';
   const propSec = `<div class="jd-sec"><div class="jd-sh"><div class="jd-st">Property</div></div><div class="jd-sb" style="padding:12px 14px">
     <div id="jd-shopdist-${id}" title="Driving distance and time from the shop (Home Base in Settings → Scheduling) to this site" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;display:none"></div>
-    <img id="jd-aerial-${id}" alt="Aerial view of the property" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:10px">
+    <img id="jd-aerial-${id}" alt="Aerial view of the property" title="Click for high-res satellite (Google Maps)" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:10px">
     <div style="display:flex;flex-wrap:wrap;gap:6px">
-      <a id="jd-streetview-${id}" href="${mapsUrl||'#'}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🛣️ Street View</a>
-      ${earthUrl?`<a href="${earthUrl}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🌎 Google Earth</a>`:''}
+      <a id="jd-streetview-${id}" href="${mapsUrl||'#'}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none" title="Opens Street View aimed at the house (once the address geocodes)">🛣️ Street View</a>
+      ${earthUrl?`<a id="jd-earth-${id}" href="${earthUrl}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🌎 Google Earth</a>`:''}
+      <a id="jd-earthchrome-${id}" href="#" rel="noopener" class="btn btn-g" style="display:none;padding:5px 10px;font-size:11.5px;text-decoration:none" title="Safari can't run web Earth — this opens it in the Chrome app instead">🌎 Earth (Chrome)</a>
       <button class="btn btn-g" style="padding:5px 10px;font-size:11.5px" onclick="openSiteViewModal('${id}')">📐 Site View</button>
     </div>
     ${addr?'':'<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Add a site address to enable map views.</div>'}
@@ -11501,9 +11502,53 @@ async function _loadJobRailMap(leadId){
   let c=null; try{ c=await geocodeOne(addr, leadId); }catch(_){}
   if(!c) return;
   const img=document.getElementById('jd-aerial-'+leadId);
-  if(img){ img.src=`https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/${c.lon},${c.lat},17,0/320x150@2x?access_token=${MAPBOX_TOKEN}`; img.style.display='block'; }
+  if(img){
+    img.src=`https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/${c.lon},${c.lat},17,0/320x150@2x?access_token=${MAPBOX_TOKEN}`;
+    img.style.display='block';
+    // One click → HIGH-RES Google satellite centered on the property (Mapbox
+    // imagery tops out too low to spot meters etc. — Jonathan, 2026-07-11).
+    img.style.cursor='zoom-in';
+    img.onclick=()=>window.open(`https://www.google.com/maps/@${c.lat},${c.lon},60m/data=!3m1!1e3`,'_blank');
+  }
+  // Google Earth: coordinate URL (no address search — loads straight to the
+  // property). Plus an "Earth (Chrome)" variant on iPhone/iPad, where web
+  // Earth won't run in Safari (googlechromes:// opens the Chrome app).
+  try{
+    const _earthPath=`@${c.lat},${c.lon},0a,120d,35y,0h,0t,0r`;
+    const earthEl=document.getElementById('jd-earth-'+leadId);
+    if(earthEl) earthEl.href='https://earth.google.com/web/'+_earthPath;
+    const ua=navigator.userAgent||'';
+    const isIOS=/iPhone|iPad|iPod/.test(ua)||((navigator.platform==='MacIntel')&&(navigator.maxTouchPoints||0)>1);
+    const ec=document.getElementById('jd-earthchrome-'+leadId);
+    if(ec && isIOS){ ec.href='googlechromes://earth.google.com/web/'+_earthPath; ec.style.display=''; }
+  }catch(_){}
   const sv=document.getElementById('jd-streetview-'+leadId);
   if(sv) sv.href=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lon}`;
+  // Street View FACING THE PROPERTY (was opening looking down the street —
+  // Jonathan, 2026-07-11): snap the address to the nearest road via Mapbox
+  // Directions (waypoint snap), then aim the panorama camera from that road
+  // point toward the house (compass bearing). Falls back to the plain
+  // viewpoint link above if anything here fails.
+  (async()=>{
+    try{
+      if(!sv) return;
+      const off=0.00012; // ~13 m second coordinate — Directions needs two points
+      const r=await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${c.lon},${c.lat};${c.lon+off},${c.lat}?overview=false&access_token=${MAPBOX_TOKEN}`);
+      if(!r.ok) return;
+      const d=await r.json();
+      const w=d&&d.waypoints&&d.waypoints[0]&&d.waypoints[0].location;
+      if(!w) return;
+      const rlon=w[0], rlat=w[1];
+      // If the snap landed essentially on the property (rural/no road data),
+      // keep the fallback link.
+      if(Math.abs(rlon-c.lon)<0.00003 && Math.abs(rlat-c.lat)<0.00003) return;
+      const toRad=x=>x*Math.PI/180;
+      const y=Math.sin(toRad(c.lon-rlon))*Math.cos(toRad(c.lat));
+      const x2=Math.cos(toRad(rlat))*Math.sin(toRad(c.lat))-Math.sin(toRad(rlat))*Math.cos(toRad(c.lat))*Math.cos(toRad(c.lon-rlon));
+      const brg=Math.round((Math.atan2(y,x2)*180/Math.PI+360)%360);
+      sv.href=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${rlat},${rlon}&heading=${brg}&pitch=5&fov=80`;
+    }catch(_){}
+  })();
   // Distance from the shop (Home Base → site), shown in the Property card.
   try{
     const dEl=document.getElementById('jd-shopdist-'+leadId);
