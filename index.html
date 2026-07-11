@@ -6623,6 +6623,32 @@ function _calcAdditionalTask_HVAC(task) {
   return Math.round((labor + wireCost + disc + breakerCost) * 100) / 100;
 }
 
+// Short display label for an additional task (totals box + PDF scope lines).
+function _additionalTaskLabel(t) {
+  if (!t) return 'Additional task';
+  if (t.jobType === 'hvac-circuit') return 'Additional HVAC circuit';
+  if (t.jobType === 'ev-swap') return t.swapKind === 'different' ? 'Charger swap (different type)' : 'Charger swap (like-for-like)';
+  if (t.jobType === 'ev-existing') return 'Charger on existing circuit';
+  return 'Additional task';
+}
+// Per-scope breakdown rows for a quick quote with additional tasks: each task
+// rounded to whole dollars, primary = rounded combined L&M minus the rounded
+// tasks — so the lines always reconcile to the L&M total shown/printed.
+function _scopeBreakdownRows(q, combinedLM) {
+  const tasks = (q && q.type !== 'detailed' && Array.isArray(q.additionalTasks)) ? q.additionalTasks : [];
+  if (!tasks.length) return null;
+  const taskRows = tasks.map((t, i) => ({
+    desc: `Scope ${i + 2} — ${_additionalTaskLabel(t)}`,
+    amt: Math.round(_calcAdditionalTaskLM(t))
+  }));
+  const tasksSum = taskRows.reduce((s, r) => s + r.amt, 0);
+  const jt = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  return [
+    { desc: `Scope 1 — ${jt ? jt.label : 'Primary installation'}`, amt: Math.round(combinedLM) - tasksSum },
+    ...taskRows
+  ];
+}
+
 // Sum of all additional tasks on a quote
 function _additionalTasksLM(q) {
   if (!q || !Array.isArray(q.additionalTasks)) return 0;
@@ -8335,7 +8361,15 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     if(isAdmin) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ GreenKey L&amp;M <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
     if(isAdmin) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ Qmerit Admin Fee <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.qmeritFee)}</span></div>`);
   } else {
-    rows.push(`<div class="tot-row"><span>Labor &amp; Materials</span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
+    // Multi-scope quick quotes: itemize each scope so both prices are visible
+    // before they sum (Jonathan, 2026-07-11). Lines reconcile to the L&M total.
+    const _bk = (typeof _scopeBreakdownRows === 'function') ? _scopeBreakdownRows(q, totals.laborAndMaterials) : null;
+    if (_bk) {
+      _bk.forEach(r => rows.push(`<div class="tot-row" style="padding-left:4px;font-size:12px"><span>${escHtml(r.desc)}</span><span class="tot-num">${fmt$(r.amt)}</span></div>`));
+      rows.push(`<div class="tot-row"><span>Labor &amp; Materials <em style="font-size:10px;color:var(--text-muted)">(all scopes)</em></span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
+    } else {
+      rows.push(`<div class="tot-row"><span>Labor &amp; Materials</span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
+    }
   }
   if((totals.veteranDiscount||0)>0){
     rows.push(`<div class="tot-row" style="color:var(--green)"><span>− Military Veteran Discount</span><span class="tot-num">−${fmt$(totals.veteranDiscount)}</span></div>`);
@@ -10332,7 +10366,12 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const _isQmeritPDF = q.source==='Qmerit';
   const _lmPDF = _isQmeritPDF ? (_totalsPDF.laborAndMaterials||0)+(_totalsPDF.qmeritFee||0) : (_totalsPDF.laborAndMaterials||0);
   const _lmLabel = _isQmeritPDF ? 'Total Installation Services' : 'Labor & Materials';
-  const _pdfRows = [{desc:_lmLabel,amt:_lmPDF}];
+  // Multi-scope quick quotes itemize each scope's price before the combined
+  // L&M line (Jonathan, 2026-07-11). Skipped on Qmerit (fee baked into L&M).
+  const _bkPDF = (!_isQmeritPDF && typeof _scopeBreakdownRows === 'function') ? _scopeBreakdownRows(q, _totalsPDF.laborAndMaterials||0) : null;
+  const _pdfRows = _bkPDF
+    ? [..._bkPDF.map(r => ({desc:'   ' + r.desc, amt:r.amt})), {desc:_lmLabel + ' (all scopes)', amt:_lmPDF}]
+    : [{desc:_lmLabel,amt:_lmPDF}];
   if((_totalsPDF.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(_totalsPDF.veteranDiscount||0)});
   _pdfRows.push({desc:'Permitting',amt:_totalsPDF.permitFee||0});
   // 2026-07-02 (Jonathan): the headline TOTAL is now the NO-FEE (cash/Zelle/
@@ -22772,19 +22811,38 @@ function toggleSmsBell() {
 // we navigate away; if there's no linked job, just acknowledge + close.
 function _bellSelectNotif(id, jobId) {
   try { acknowledgeNotif(id); } catch(_){}
-  if (jobId) { _bellOpenLead(jobId); }
+  // Fallback: notices created before the quote/lead synced may lack a jobId —
+  // try resolving through the notification's quoteId at click time.
+  if (!jobId) {
+    try {
+      const n = getNotification(id);
+      if (n && n.quoteId) jobId = (getQuote(n.quoteId) || {}).leadId || '';
+    } catch(_){}
+  }
+  if (jobId && typeof getLead === 'function' && getLead(jobId)) { _bellOpenLead(jobId); }
   else {
     if (typeof toggleSmsBell === 'function') toggleSmsBell();
-    if (typeof toast === 'function') toast('Acknowledged', 'success');
+    if (typeof toast === 'function') toast(jobId ? 'Acknowledged — the linked job hasn\'t synced to this machine yet' : 'Acknowledged — no job is linked to this notice (unmatched number)', 'success');
   }
 }
 
 function _bellOpenLead(leadId) {
   if (!leadId) return;
+  // Guard: an unresolvable id (e.g. 'unrouted' texts) must not open a blank
+  // detail page — acknowledge-only with an honest toast instead.
+  if (typeof getLead === 'function' && !getLead(leadId)) {
+    toggleSmsBell();
+    if (typeof toast === 'function') toast('No matching job found for this notice', 'warning');
+    return;
+  }
   // Close the dropdown and navigate to the lead's detail page so the user
-  // can see the full SMS thread context.
+  // can see the full SMS thread context. openLeadDetail handles cross-page
+  // navigation (bell is global) — a bare openJobDetail only swaps views
+  // WITHIN the Jobs page, so clicking a notice from Dashboard/Quotes/etc.
+  // silently went nowhere (fixed 2026-07-11).
   toggleSmsBell();
-  if (typeof openJobDetail === 'function')      openJobDetail(leadId);
+  if (typeof openLeadDetail === 'function')       openLeadDetail(leadId);
+  else if (typeof openJobDetail === 'function')   openJobDetail(leadId);
   else if (typeof renderJobDetail === 'function') renderJobDetail(leadId);
   else if (typeof navigate === 'function')        navigate('jobs');
 }
