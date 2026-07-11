@@ -2522,12 +2522,19 @@ function showPage(page) {
   if (page==='dashboard') updateDashboardWidget();
   else if (page==='leads') renderLeadsPage();
   else if (page==='jobs') {
+    // If the pipeline is ALREADY on screen (sidebar re-click), capture its
+    // current position first — otherwise we'd restore a stale spot from the
+    // last job visit. If we're coming FROM a job, the pipe view is hidden,
+    // capture returns null, and the position saved at openJobDetail() wins.
+    try { const cur=_pipeCaptureScroll(); if(cur) _pipeSavedScroll=cur; } catch(_){}
     S.jobDetailId=null;
     const pv=document.getElementById('jobs-pipe-view');
     const dv=document.getElementById('jobs-detail-view');
     if(pv)pv.style.display='';
     if(dv)dv.style.display='none';
-    populateTechFilter('pf-tech'); renderPipeline();
+    populateTechFilter('pf-tech');
+    _pipeRestorePending = true;   // returning to the pipeline resumes position
+    renderPipeline();
   }
   else if (page==='customers') { S.custView=null; document.getElementById('cust-list-view').style.display=''; document.getElementById('cust-detail-view').style.display='none'; renderCustomersPage(); }
   else if (page==='quotes') { S.quoteId=null; const lv=document.getElementById('quotes-list-view'),bv=document.getElementById('quotes-builder-view'); if(lv)lv.style.display=''; if(bv)bv.style.display='none'; renderQuotesPage(); }
@@ -2589,7 +2596,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Text Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Text Templates','Email Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2958,6 +2965,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
   } else if (sec==='Text Templates') {
     document.getElementById('spanel').innerHTML = renderSMSTemplateSettings();
+  } else if (sec==='Email Templates') {
+    document.getElementById('spanel').innerHTML = renderEmailTemplateSettings();
   } else if (sec==='Skills') {
     document.getElementById('spanel').innerHTML = renderSkillsSettings();
   } else if (sec==='Scheduling') {
@@ -3491,6 +3500,57 @@ function populateTechFilter(selId) {
     getUsers().map(u=>`<option value="${u.id}"${u.id===cur?' selected':''}>${u.name}</option>`).join('');
 }
 
+// ── PIPELINE SCROLL MEMORY (2026-07-11, Jonathan) ──
+// Drilling into a job and coming back used to reset the pipeline to the top.
+// _pipeSavedScroll is captured when a job is opened (openJobDetail) and
+// restored on the way back (closeJobDetail / showPage('jobs') set
+// _pipeRestorePending). Re-renders WHILE on the pipeline (filters, drag-drop,
+// stage advance) self-capture so they keep position too.
+let _pipeSavedScroll = null;
+let _pipeRestorePending = false;
+function _pipeCaptureScroll() {
+  try {
+    const pv = document.getElementById('jobs-pipe-view');
+    if (!pv || pv.style.display === 'none') return null;
+    const kb = document.getElementById('pipe-kanban');
+    const cols = {};
+    if (kb) kb.querySelectorAll('.kcol').forEach(col => {
+      const body = col.querySelector('.kcol-body');
+      const st = (body && body.scrollTop) || col.scrollTop || 0;
+      if (st) cols[col.dataset.stageId] = st;
+    });
+    const list = document.getElementById('pipe-list');
+    return {
+      left: kb ? (kb.scrollLeft || 0) : 0,
+      cols,
+      listTop: list ? (list.scrollTop || 0) : 0,
+      winY: window.scrollY || 0
+    };
+  } catch (_) { return null; }
+}
+function _pipeApplyScroll(s) {
+  if (!s) return;
+  try {
+    const kb = document.getElementById('pipe-kanban');
+    if (kb && s.left) kb.scrollLeft = s.left;
+    if (kb && s.cols) kb.querySelectorAll('.kcol').forEach(col => {
+      const st = s.cols[col.dataset.stageId];
+      if (!st) return;
+      const body = col.querySelector('.kcol-body');
+      if (body && body.scrollHeight > body.clientHeight) body.scrollTop = st;
+      else col.scrollTop = st;
+    });
+    const list = document.getElementById('pipe-list');
+    if (list && s.listTop) list.scrollTop = s.listTop;
+    if (s.winY) window.scrollTo(0, s.winY);
+  } catch (_) {}
+}
+// Called at the END of renderKanban/renderPipeList: restore the right state.
+function _pipeAfterRender(liveCapture) {
+  const target = _pipeRestorePending ? (_pipeSavedScroll || liveCapture) : liveCapture;
+  _pipeRestorePending = false;
+  if (target) requestAnimationFrame(() => _pipeApplyScroll(target));
+}
 function renderPipeline() {
   populateTechFilter('pf-tech');
   const src  = (document.getElementById('pf-source')||{}).value||'';
@@ -3505,6 +3565,7 @@ function renderPipeline() {
 }
 
 function renderKanban(leads) {
+  const _liveScroll = _pipeRestorePending ? null : _pipeCaptureScroll();
   const custs = getCustomers();
   const _kbQuotes = getQuotes(); // fetched once — chip helpers run per card
   const wrap = document.getElementById('pipe-kanban');
@@ -3545,14 +3606,17 @@ function renderKanban(leads) {
     </div>`;
   }).join('');
   setupKanbanDnd();
+  _pipeAfterRender(_liveScroll);
 }
 
 function renderPipeList(leads) {
+  const _liveScroll = _pipeRestorePending ? null : _pipeCaptureScroll();
   const custs = getCustomers();
   const wrap = document.getElementById('pipe-list');
   if (!wrap) return;
   if (!leads.length) {
     wrap.innerHTML = `<div class="empty" style="padding:60px 0"><div class="etitle">No active jobs</div><div class="edesc">Create a new lead to get started.</div></div>`;
+    _pipeRestorePending = false;   // nothing to restore onto
     return;
   }
   const sortMode = (document.getElementById('pf-sort')||{}).value||'stage';
@@ -3590,6 +3654,7 @@ function renderPipeList(leads) {
     </tr>`;
   }).join('')}
   </tbody></table></div>`;
+  _pipeAfterRender(_liveScroll);
 }
 
 // ── LEADS PAGE ──
@@ -8319,24 +8384,16 @@ async function emailQuote(qid){
   const isJ1772   = plugType === 'J1772';
   const isBoth    = plugType === 'Both' || !plugType;
 
-  let chargerRecs = '';
-  if (isNACS || isBoth) {
-    chargerRecs += `FOR NACS CONNECTOR (Tesla, and Ford/GM/Rivian/Hyundai/Kia and most new 2025+ EVs):
-  • Tesla Wall Connector (Hardwired)
-    https://shop.tesla.com/product/wall-connector\n\n`;
-  }
-  if (isJ1772 || isBoth) {
-    chargerRecs += `FOR J1772 CONNECTOR (most EVs sold before 2025):
-  • ChargePoint Home Flex (Hardwired, 50-amp)
-    https://www.chargepoint.com/drivers/home/chargepoint-home-flex/
-  • Emporia Classic (Hardwired, 48-amp)
-    https://www.emporiaenergy.com/\n\n`;
-  }
-  chargerRecs += `FOR HOUSEHOLDS WITH MULTIPLE EVs (or want future-proofing):
-  • Tesla Universal Wall Connector — works with both NACS and J1772 vehicles
-    https://shop.tesla.com/product/universal-wall-connector\n\n`;
-  chargerRecs += `Not sure which connector your vehicle uses? Just reply to this email with your EV's year, make, and model and we'll confirm.\n\n`;
-  chargerRecs += `⚠ IMPORTANT: When ordering, please select the HARDWIRED version of whichever charger you choose — that is what our installation and permit are designed for.`;
+  // Assembled from the editable snippets (Settings → Email Templates), by
+  // the customer's connector type. Order: NACS → J1772 → multi-EV → not-sure
+  // → hardwired warning, joined by blank lines.
+  const chargerRecs = [
+    (isNACS || isBoth)  ? _emailTplText('chargerNACS', {})  : '',
+    (isJ1772 || isBoth) ? _emailTplText('chargerJ1772', {}) : '',
+    _emailTplText('chargerMulti', {}),
+    _emailTplText('chargerNotSure', {}),
+    _emailTplText('chargerHardwired', {})
+  ].filter(Boolean).join('\n\n');
 
   // Platform-lead path: Qmerit / Electrum / Treehouse customers get a courtesy
   // email with NO quote PDF attached — the platform handles delivering the
@@ -8346,104 +8403,18 @@ async function emailQuote(qid){
   const isPlatform = PLATFORM_SOURCES.includes(q.source);
 
   let subject, body;
-  if (q.source === 'Qmerit') {
-    subject = `Update on your GreenKey installation via Qmerit — ${q.id}`;
-    body = `Hi ${custFirst},
-
-I wanted to personally let you know that we've prepared the quote for your ${projectPhrase} and uploaded it to Qmerit. Qmerit will send the quote to you through their platform shortly.
-
-Property: ${addr}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT HAPPENS NEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Here's what to expect from here:
-
-  1. QMERIT WILL SEND YOU THE QUOTE
-     All pricing, approval, payment, and paperwork for the installation itself goes through Qmerit's platform. Please follow their instructions to review and accept the quote.
-
-  2. WE APPLY FOR YOUR PERMIT
-     Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-
-  3. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
-
-Total timeline from approval to install: typically 2–4 weeks.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For questions about pricing, approval, or the Qmerit process, Qmerit's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
-
-Best regards,
-Jonathan Allen
-Cofounder & President | GreenKey
-Class A Electrical Contractor | Licensed & Insured
-(804) 770-2210 | (804) 310-5368
-jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
-  } else if (q.source === 'Electrum') {
-    subject = `Update on your GreenKey installation via Electrum — ${q.id}`;
-    body = `Hi ${custFirst},
-
-I wanted to let you know that we've completed our pricing for your ${projectPhrase} directly on the Electrum platform. Electrum will present the quote to you through their system.
-
-Property: ${addr}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT HAPPENS NEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Here's what to expect from here:
-
-  1. REVIEW YOUR QUOTE ON ELECTRUM
-     All pricing, approval, and payment for the installation is handled through Electrum's platform. Please follow their instructions to review and accept the quote.
-
-  2. WE APPLY FOR YOUR PERMIT
-     Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-
-  3. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
-
-Total timeline from approval to install: typically 2–4 weeks.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For questions about pricing or approval, Electrum's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
-
-Best regards,
-Jonathan Allen
-Cofounder & President | GreenKey
-Class A Electrical Contractor | Licensed & Insured
-(804) 770-2210 | (804) 310-5368
-jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
-  } else if (q.source === 'Treehouse') {
-    subject = `Confirming your GreenKey ${projectPhrase} via Treehouse — ${q.id}`;
-    body = `Hi ${custFirst},
-
-I wanted to let you know that we've accepted your ${projectPhrase} job through Treehouse and are ready to get started. All pricing and paperwork for the installation are handled through Treehouse directly.
-
-Property: ${addr}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT HAPPENS NEXT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  1. WE APPLY FOR YOUR PERMIT
-     We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-
-  2. WE SCHEDULE YOUR INSTALLATION
-     Once the permit is in hand${isEVProject?' (and your charger has arrived, if you\'re supplying one)':''}, we'll reach out directly to get you on the calendar for installation day.
-
-Total timeline from here to install: typically 2–4 weeks.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For questions about the installation work itself, please reach out to me directly — I'm always happy to help. Anything related to Treehouse's end of the process is best directed to their support team.
-
-Best regards,
-Jonathan Allen
-Cofounder & President | GreenKey
-Class A Electrical Contractor | Licensed & Insured
-(804) 770-2210 | (804) 310-5368
-jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+  if (isPlatform) {
+    // Platform courtesy emails — editable in Settings → Email Templates.
+    const tplKey = q.source === 'Qmerit' ? 'platformQmerit'
+                 : q.source === 'Electrum' ? 'platformElectrum'
+                 : 'platformTreehouse';
+    const pctx = {
+      firstName: custFirst, projectPhrase, quoteId: q.id, address: addr,
+      chargerArrivedSuffix: isEVProject ? _emailTplText('chargerArrivedSuffix', {}) : '',
+      signoff: _emailSignoffText()
+    };
+    subject = _emailTplSubject(tplKey, pctx);
+    body    = _emailTplText(tplKey, pctx);
   } else {
     // Direct-customer email — body and subject are project-specific.
     const _direct = _buildDirectQuoteEmail({ q, lead, cust, projectPhrase, total, addr, custFirst, isEVProject, chargerRecs });
@@ -8491,7 +8462,9 @@ jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
       const checked = (!isPlatform && x.id === qid) ? 'checked' : '';
       const labelTxt = x.label ? x.label : `Quote ${x.id}`;
       const when = (x.updatedAt||x.createdAt||'').slice(0,10);
-      const amt = fmt$(x.quoteTotal||0);
+      // NET (no-fee) price — matches the Total line in the email body and the
+      // PDF headline (Jonathan 2026-07-11; was showing the fee-included total).
+      const amt = fmt$((typeof _quoteNet==='function') ? _quoteNet(x) : (x.quoteTotal||0));
       const isPrimary = x.id === qid ? ' <span style="color:var(--green);font-weight:600;margin-left:4px">(primary)</span>' : '';
       return `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;color:var(--text-primary)">
         <input type="checkbox" class="em-attach-cb" data-qid="${x.id}" ${checked} onchange="updateEmailAttachCount()" style="margin:0">
@@ -8550,7 +8523,8 @@ function emailModalWriteCustom() {
   // Keep the sign-off visible in the compose box (Jonathan, 2026-07-11 — a
   // bare "Hi Chris," made it look like the email would go out unsigned; the
   // branded signature block is ALSO auto-appended at send, same as templates).
-  const signoff = (typeof _DIRECT_QUOTE_SIGNOFF !== 'undefined') ? `\n\n${_DIRECT_QUOTE_SIGNOFF}` : '';
+  const signoff = (typeof _emailSignoffText === 'function') ? `\n\n${_emailSignoffText()}`
+                : (typeof _DIRECT_QUOTE_SIGNOFF !== 'undefined') ? `\n\n${_DIRECT_QUOTE_SIGNOFF}` : '';
   document.getElementById('em-body').value = greeting + signoff;
 
   // Cursor between greeting and sign-off so the user types in the right spot.
@@ -8633,7 +8607,7 @@ async function sendQuoteEmail(){
           ? ((tq.label||'').trim() || ('Option ' + String.fromCharCode(65 + ti)))
           : '';
         const hdrSuffix = _multi
-          ? ` — ${optName.toUpperCase()} ($${Math.round(tq.quoteTotal||0).toLocaleString()})`
+          ? ` — ${optName.toUpperCase()} ($${Math.round((typeof _quoteNet==='function') ? _quoteNet(tq) : (tq.quoteTotal||0)).toLocaleString()})`
           : ' — ONE-CLICK';
         const _acceptLabel = tq.contingentOnUtility
           ? (_multi ? `Accept ${optName} (contingent)` : 'Accept (contingent)')
@@ -8985,14 +8959,7 @@ function openCustomEmailModal(leadId){
   const subject = 'Message from GreenKey';
   const body = `Hi ${custFirst},
 
-
-
-Best regards,
-Jonathan Allen
-Cofounder & President | GreenKey
-Class A Electrical Contractor | Licensed & Insured
-(804) 770-2210 | (804) 310-5368
-jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
+` + '\n\n' + ((typeof _emailSignoffText === 'function') ? _emailSignoffText() : _DIRECT_QUOTE_SIGNOFF);
 
   _pendingEmail = {
     qid: null,
@@ -9575,7 +9542,8 @@ function _buildPaymentScheduleText(q) {
   return txt;
 }
 
-// Standard sign-off used across all direct emails.
+// Standard sign-off used across all direct emails (stock wording — the live
+// value is the editable 'signoff' entry in EMAIL_TEMPLATES_DEFAULT below).
 const _DIRECT_QUOTE_SIGNOFF = `Best regards,
 Jonathan Allen
 Cofounder & President | GreenKey
@@ -9583,41 +9551,84 @@ Class A Electrical Contractor | Licensed & Insured
 (804) 770-2210 | (804) 310-5368
 jonathan.allen@greenkey-usa.com | greenkey-usa.com`;
 
-// EV charger / NEMA 14-50 — original 4-step flow that Jonathan likes.
-function _buildEVStyleQuoteEmail({ q, custFirst, projectPhrase, total, addr, isEVProject, chargerRecs }) {
-  const subject = `Your GreenKey Quote — ${q.id}`;
-  const evChargerBlock = (q.jobType === 'ev-residential') ? `
+// ── EDITABLE EMAIL TEMPLATES (Settings → Email Templates, 2026-07-11) ──
+// Every piece of customer-facing email PROSE lives here so wording changes
+// (charger recommendations, process steps, sign-off…) are a Settings edit,
+// not a code change. Dynamic content is injected via {tokens} — the CRM
+// still computes those (scope, totals, payment schedule, accept buttons).
+// Overrides live in localStorage['gk_email_templates'] (synced via
+// SYNC_KEYS). ⚠ Blank lines and leading/trailing newlines in these strings
+// are SIGNIFICANT — the editor preserves them exactly.
+const EMAIL_TEMPLATES_DEFAULT = {
+  signoff: { group:'Building blocks', label:'Sign-off (all emails)',
+    body: _DIRECT_QUOTE_SIGNOFF },
+  chargerSection: { group:'Building blocks', label:'EV: "About your charger" section',
+    body: `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ABOUT YOUR EV CHARGER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Your quote covers the electrical installation only — the EV charger itself is purchased separately by you. The good news is there are some great options at every price point! Here are our top recommendations:
 
-${chargerRecs}
-` : '';
-  const orderStep = (q.jobType === 'ev-residential') ? `
+{chargerRecs}
+` },
+  chargerNACS: { group:'Building blocks', label:'Charger recs — NACS connector',
+    body: `FOR NACS CONNECTOR (Tesla, and Ford/GM/Rivian/Hyundai/Kia and most new 2025+ EVs):
+  • Tesla Wall Connector (Hardwired)
+    https://shop.tesla.com/product/wall-connector` },
+  chargerJ1772: { group:'Building blocks', label:'Charger recs — J1772 connector',
+    body: `FOR J1772 CONNECTOR (most EVs sold before 2025):
+  • ChargePoint Home Flex (Hardwired, 50-amp)
+    https://www.chargepoint.com/drivers/home/chargepoint-home-flex/
+  • Emporia Classic (Hardwired, 48-amp)
+    https://www.emporiaenergy.com/` },
+  chargerMulti: { group:'Building blocks', label:'Charger recs — multiple EVs / future-proofing',
+    body: `FOR HOUSEHOLDS WITH MULTIPLE EVs (or want future-proofing):
+  • Tesla Universal Wall Connector — works with both NACS and J1772 vehicles
+    https://shop.tesla.com/product/universal-wall-connector` },
+  chargerNotSure: { group:'Building blocks', label:'Charger recs — "not sure" line',
+    body: `Not sure which connector your vehicle uses? Just reply to this email with your EV's year, make, and model and we'll confirm.` },
+  chargerHardwired: { group:'Building blocks', label:'Charger recs — hardwired warning',
+    body: `⚠ IMPORTANT: When ordering, please select the HARDWIRED version of whichever charger you choose — that is what our installation and permit are designed for.` },
+  chargerArrivedSuffix: { group:'Building blocks', label:'Platform emails — "charger arrived" scheduling aside',
+    body: ` (and your charger has arrived, if you're supplying one)` },
+  evOrderSteps: { group:'Building blocks', label:'EV quote — steps 3–4 (order charger, schedule)',
+    body: `
   3. YOU ORDER YOUR CHARGER
      While we're waiting on the permit, go ahead and order your charger using
      one of the recommendations above. Remember — hardwired version!
 
   4. WE GET YOU SCHEDULED
      Once we have your permit in hand AND you've received your charger,
-     we'll get you on the calendar for installation day.` : `
+     we'll get you on the calendar for installation day.` },
+  stdOrderStep: { group:'Building blocks', label:'Non-EV quote — step 3 (schedule)',
+    body: `
   3. WE GET YOU SCHEDULED
      Once the permit is in hand, we'll reach out to get you on the calendar
-     for installation day.`;
-  const body = `Hi ${custFirst},
+     for installation day.` },
+  noteHvac:          { group:'Job-type notes', label:'HVAC circuit note',        body:`We coordinate directly with your HVAC contractor on equipment placement and timing.` },
+  notePanel:         { group:'Job-type notes', label:'Panel replacement note',   body:`Includes the new panel, main breaker, ground bar kit, and re-termination of all existing branch circuits per current code.` },
+  notePermitOther:   { group:'Job-type notes', label:'Other permit-job note',    body:`All work performed to NEC standards with permits and inspections.` },
+  noteCircuitRepl:   { group:'Job-type notes', label:'Circuit replacement note', body:`This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.` },
+  noteEnergyMgmt:    { group:'Job-type notes', label:'Energy-management note',   body:`No permit is required for this device install — permitting for this is covered by the EV charger installation itself.` },
+  noteNoPermitOther: { group:'Job-type notes', label:'Other no-permit note',     body:`No permit is required for this scope of work.` },
+  noteBattery:       { group:'Job-type notes', label:'Battery lead-time note',   body:`Battery systems involve equipment lead times — typically 2–6 weeks depending on brand availability (Powerwall, Enphase, FranklinWH, Generac PWRcell).` },
+  noteV2H:           { group:'Job-type notes', label:'V2H lead-time note',       body:`V2H systems are still relatively new equipment — lead times can be 4–8 weeks depending on the bidirectional charger brand.` },
+  noteGenerator:     { group:'Job-type notes', label:'Generator lead-time note', body:`Standby generator equipment typically has a 2–4 week lead time depending on size and configuration.` },
+  evStyle: { group:'Quote emails', label:'EV charger / NEMA 14-50 quote',
+    subject: `Your GreenKey Quote — {quoteId}`,
+    body: `Hi {firstName},
 
-Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
+Thank you for choosing GreenKey! Please find your quote for your {projectPhrase} attached.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total}
 
 This quote is valid for 30 days.
-${_buildScopeText(q)}${evChargerBlock}${_buildPaymentScheduleText(q)}
+{scopeBlock}{chargerBlock}{paymentBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9629,7 +9640,7 @@ Here's exactly how the process works once you're ready to go:
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
      Permit approval typically takes 1–2 weeks.
-${orderStep}
+{orderSteps}
 
 Total timeline from start to finish: typically 2–4 weeks.
 
@@ -9639,33 +9650,24 @@ We'll keep you updated every step of the way!
 
 If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-  return { subject, body };
-}
+{signoff}` },
+  permitStandard: { group:'Quote emails', label:'Permit-required quote (HVAC, panel, …)',
+    subject: `Your GreenKey Quote — {quoteId}`,
+    body: `Hi {firstName},
 
-// HVAC circuit / panel replacement — permit required, no equipment to deliver.
-function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr }) {
-  const subject = `Your GreenKey Quote — ${q.id}`;
-  const projectNote = (q.jobType === 'hvac-circuit') ?
-    `We coordinate directly with your HVAC contractor on equipment placement and timing.` :
-    (q.jobType === 'panel-replacement') ?
-    `Includes the new panel, main breaker, ground bar kit, and re-termination of all existing branch circuits per current code.` :
-    `All work performed to NEC standards with permits and inspections.`;
-  const body = `Hi ${custFirst},
+Thank you for choosing GreenKey! Please find your quote for your {projectPhrase} attached.
 
-Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
-
-${projectNote}
+{jobTypeNote}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total}
 
 This quote is valid for 30 days.
-${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
+{scopeBlock}{paymentBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9688,36 +9690,24 @@ Total timeline from start to finish: typically 2–3 weeks.
 
 If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-  return { subject, body };
-}
+{signoff}` },
+  noPermit: { group:'Quote emails', label:'No-permit quote (circuit replacement, …)',
+    subject: `Your GreenKey Quote — {quoteId}`,
+    body: `Hi {firstName},
 
-// Circuit replacement — no permit, fast turnaround.
-function _buildNoPermitEmail({ q, custFirst, projectPhrase, total, addr }) {
-  const subject = `Your GreenKey Quote — ${q.id}`;
-  // Job-type-specific opener line — circuit replacement explains the
-  // like-for-like rationale; energy-management / custom just note that no
-  // permit is needed, with no copy that doesn't apply.
-  const noPermitNote = (q.jobType === 'circuit-replacement')
-    ? 'This is a like-for-like replacement of an existing circuit — no permit is required since the original circuit was previously inspected.'
-    : (q.jobType === 'energy-management')
-      ? 'No permit is required for this device install — permitting for this is covered by the EV charger installation itself.'
-      : 'No permit is required for this scope of work.';
-  const body = `Hi ${custFirst},
+Thank you for choosing GreenKey! Please find your quote for your {projectPhrase} attached.
 
-Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
-
-${noPermitNote}
+{jobTypeNote}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total}
 
 This quote is valid for 30 days.
-${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
+{scopeBlock}{paymentBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9732,33 +9722,24 @@ Total timeline: typically 1 week or less.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-  return { subject, body };
-}
+{signoff}` },
+  equipmentRequired: { group:'Quote emails', label:'Equipment quote (battery, V2H, generator)',
+    subject: `Your GreenKey Quote — {quoteId}`,
+    body: `Hi {firstName},
 
-// Battery / V2H / generator — equipment delivery is a gating step.
-function _buildEquipmentRequiredEmail({ q, custFirst, projectPhrase, total, addr }) {
-  const subject = `Your GreenKey Quote — ${q.id}`;
-  const equipNote = (q.jobType === 'battery-system') ?
-    `Battery systems involve equipment lead times — typically 2–6 weeks depending on brand availability (Powerwall, Enphase, FranklinWH, Generac PWRcell).` :
-    (q.jobType === 'v2h-system') ?
-    `V2H systems are still relatively new equipment — lead times can be 4–8 weeks depending on the bidirectional charger brand.` :
-    `Standby generator equipment typically has a 2–4 week lead time depending on size and configuration.`;
-  const body = `Hi ${custFirst},
+Thank you for choosing GreenKey! Please find your quote for your {projectPhrase} attached.
 
-Thank you for choosing GreenKey! Please find your quote for your ${projectPhrase} attached.
-
-${equipNote}
+{jobTypeNote}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total}
 
 This quote is valid for 30 days.
-${_buildScopeText(q)}${_buildPaymentScheduleText(q)}
+{scopeBlock}{paymentBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9782,32 +9763,24 @@ Total timeline from start to finish: typically 4–8 weeks.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-  return { subject, body };
-}
+{signoff}` },
+  utilityContingent: { group:'Quote emails', label:'Utility-coordinated quote (contingent)',
+    subject: `Your GreenKey Quote (contingent) — {quoteId}`,
+    body: `Hi {firstName},
 
-// New service / service upgrade / any quote flagged contingent on utility.
-// Customer accepts contingently, pays $200 utility coordination fee, GreenKey
-// gets utility cost, then issues final non-contingent quote.
-function _buildUtilityCoordinatedEmail({ q, custFirst, projectPhrase, total, addr }) {
-  const isContingent = q.contingentOnUtility !== false; // default true for utility-delayed jobs
-  if (isContingent) {
-    const subject = `Your GreenKey Quote (contingent) — ${q.id}`;
-    const body = `Hi ${custFirst},
-
-Thank you for choosing GreenKey for your ${projectPhrase}! Please find the attached quote.
+Thank you for choosing GreenKey for your {projectPhrase}! Please find the attached quote.
 
 A quick note on the process — because this work involves the utility company, a small portion of the cost is unknown until we coordinate with them directly. Here's how it works:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY (contingent on utility cost)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total} (GreenKey work — utility company cost separate)
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total} (GreenKey work — utility company cost separate)
 
 This quote is valid for 30 days.
-${_buildScopeText(q)}
+{scopeBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HOW WE PROCEED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9846,24 +9819,22 @@ Total timeline from start to finish: typically 6–10 weeks (most of which is ut
 
 If you have any questions at all, please don't hesitate to reach out — we're always happy to help!
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-    return { subject, body };
-  }
-  // Final (non-contingent) quote after utility cost is known
-  const subject = `Updated Quote — Utility Cost Confirmed — ${q.id}`;
-  const body = `Hi ${custFirst},
+{signoff}` },
+  utilityFinal: { group:'Quote emails', label:'Utility-coordinated quote (final, cost confirmed)',
+    subject: `Updated Quote — Utility Cost Confirmed — {quoteId}`,
+    body: `Hi {firstName},
 
-Thanks for your patience while we coordinated with the utility. Here is your final quote for your ${projectPhrase}.
+Thanks for your patience while we coordinated with the utility. Here is your final quote for your {projectPhrase}.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUOTE SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quote #:   ${q.id}
-Property:  ${addr}
-Total:     ${total}
+Quote #:   {quoteId}
+Property:  {address}
+Total:     {total}
 
 This quote is valid for 30 days. Utility coordination fee already paid is credited on the attached PDF.
-${_buildPaymentScheduleText(q)}
+{paymentBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -9887,8 +9858,283 @@ WHAT HAPPENS NEXT
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-${_DIRECT_QUOTE_SIGNOFF}`;
-  return { subject, body };
+{signoff}` },
+  platformQmerit: { group:'Platform courtesy emails', label:'Qmerit',
+    subject: `Update on your GreenKey installation via Qmerit — {quoteId}`,
+    body: `Hi {firstName},
+
+I wanted to personally let you know that we've prepared the quote for your {projectPhrase} and uploaded it to Qmerit. Qmerit will send the quote to you through their platform shortly.
+
+Property: {address}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's what to expect from here:
+
+  1. QMERIT WILL SEND YOU THE QUOTE
+     All pricing, approval, payment, and paperwork for the installation itself goes through Qmerit's platform. Please follow their instructions to review and accept the quote.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  3. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from approval to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about pricing, approval, or the Qmerit process, Qmerit's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
+
+{signoff}` },
+  platformElectrum: { group:'Platform courtesy emails', label:'Electrum',
+    subject: `Update on your GreenKey installation via Electrum — {quoteId}`,
+    body: `Hi {firstName},
+
+I wanted to let you know that we've completed our pricing for your {projectPhrase} directly on the Electrum platform. Electrum will present the quote to you through their system.
+
+Property: {address}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's what to expect from here:
+
+  1. REVIEW YOUR QUOTE ON ELECTRUM
+     All pricing, approval, and payment for the installation is handled through Electrum's platform. Please follow their instructions to review and accept the quote.
+
+  2. WE APPLY FOR YOUR PERMIT
+     Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  3. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from approval to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about pricing or approval, Electrum's support team is your best contact. For questions about the installation work itself, please reach out to me directly — I'm always happy to help.
+
+{signoff}` },
+  platformTreehouse: { group:'Platform courtesy emails', label:'Treehouse',
+    subject: `Confirming your GreenKey {projectPhrase} via Treehouse — {quoteId}`,
+    body: `Hi {firstName},
+
+I wanted to let you know that we've accepted your {projectPhrase} job through Treehouse and are ready to get started. All pricing and paperwork for the installation are handled through Treehouse directly.
+
+Property: {address}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT HAPPENS NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. WE APPLY FOR YOUR PERMIT
+     We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+
+  2. WE SCHEDULE YOUR INSTALLATION
+     Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
+
+Total timeline from here to install: typically 2–4 weeks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For questions about the installation work itself, please reach out to me directly — I'm always happy to help. Anything related to Treehouse's end of the process is best directed to their support team.
+
+{signoff}` }
+};
+
+// Merged view (stock + overrides), deep-merged per key like the SMS templates.
+function getEmailTemplates() {
+  const out = {};
+  for (const k of Object.keys(EMAIL_TEMPLATES_DEFAULT)) out[k] = { ...EMAIL_TEMPLATES_DEFAULT[k] };
+  try {
+    const saved = JSON.parse(localStorage.getItem('gk_email_templates') || 'null');
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(saved)) {
+        if (!saved[k] || typeof saved[k] !== 'object' || !EMAIL_TEMPLATES_DEFAULT[k]) continue;
+        out[k] = { ...out[k], ...saved[k] };
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+// {token} substitution. Function-replacement (not string) so customer content
+// containing '$' can never corrupt the output; unknown tokens are left
+// visible so a typo in an edited template is noticeable, not silent.
+function _emailSubTokens(text, ctx) {
+  return String(text == null ? '' : text).replace(/\{(\w+)\}/g,
+    (mm, k) => (ctx && ctx[k] !== undefined && ctx[k] !== null) ? String(ctx[k]) : mm);
+}
+function _emailTplText(key, ctx) {
+  const t = getEmailTemplates()[key];
+  return _emailSubTokens(t ? t.body : '', ctx || {});
+}
+function _emailTplSubject(key, ctx) {
+  const t = getEmailTemplates()[key];
+  return _emailSubTokens((t && t.subject) || '', ctx || {});
+}
+function _emailSignoffText() { return _emailTplText('signoff', {}); }
+
+// ── Settings → Email Templates editor ──
+function _emailTplOverrides() {
+  try { return JSON.parse(localStorage.getItem('gk_email_templates') || '{}') || {}; }
+  catch (_) { return {}; }
+}
+function _emailTplSaveOverrides(o) {
+  localStorage.setItem('gk_email_templates', JSON.stringify(o));
+  try { queueSPSync(); } catch(_){}
+}
+function _emailTplRefreshPanel() {
+  const p = document.getElementById('spanel');
+  if (p) p.innerHTML = renderEmailTemplateSettings();
+}
+function renderEmailTemplateSettings() {
+  const merged = getEmailTemplates();
+  const overrides = _emailTplOverrides();
+  const groups = ['Building blocks', 'Job-type notes', 'Quote emails', 'Platform courtesy emails'];
+  const cards = groups.map(g => {
+    const keys = Object.keys(EMAIL_TEMPLATES_DEFAULT).filter(k => EMAIL_TEMPLATES_DEFAULT[k].group === g);
+    const rows = keys.map(k => {
+      const t = merged[k];
+      const isModified = !!overrides[k];
+      const hasSubject = EMAIL_TEMPLATES_DEFAULT[k].subject !== undefined;
+      const isBig = g === 'Quote emails' || g === 'Platform courtesy emails';
+      return `<div class="card" style="padding:12px 14px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div style="flex:1;font-size:13px;font-weight:600;color:var(--text-primary)">${escHtml(t.label || k)}</div>
+          ${isModified ? `<span class="chip" style="font-size:10px;flex-shrink:0">edited</span>` : ''}
+        </div>
+        ${hasSubject ? `<input id="etpl-subject-${k}" type="text" value="${escHtml(t.subject || '')}" placeholder="Subject"
+          style="width:100%;margin-bottom:6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">` : ''}
+        <textarea id="etpl-body-${k}" rows="${isBig ? 14 : 4}" spellcheck="false"
+          style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.5;white-space:pre">${escHtml(t.body || '')}</textarea>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-p" style="padding:4px 12px;font-size:11.5px" onclick="saveEmailTemplate('${k}')">Save</button>
+          ${isModified ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="resetEmailTemplate('${k}')" title="Discard your edits and restore the stock wording">↩ Reset to stock</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div style="margin:18px 0 6px;font-size:12px;font-weight:600;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">${g}</div>${rows}`;
+  }).join('');
+  return `<div class="stitle">Email Templates</div>
+    <div class="sdesc">Every piece of wording in customer-facing emails — charger recommendations, process steps, the sign-off, full quote-email bodies. Changes sync to every machine and apply to the next email sent. The CRM still fills in the dynamic parts via the placeholders below.</div>
+    <div style="margin:10px 0 4px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-size:12px;color:var(--text-secondary);line-height:1.6">
+      <strong>Placeholders</strong> (auto-filled when the email is generated):
+      <code>{firstName}</code> · <code>{projectPhrase}</code> project description · <code>{quoteId}</code> · <code>{address}</code> ·
+      <code>{total}</code> · <code>{scopeBlock}</code> scope-of-work section · <code>{paymentBlock}</code> payment schedule ·
+      <code>{chargerBlock}</code> EV charger section · <code>{chargerRecs}</code> assembled recommendations ·
+      <code>{orderSteps}</code> steps 3+ · <code>{jobTypeNote}</code> per-job-type note · <code>{chargerArrivedSuffix}</code> ·
+      <code>{signoff}</code>. The Accept/Decline buttons are appended automatically after the body.<br>
+      <strong>⚠ Blank lines matter</strong> — they control the email's spacing. Edit wording freely, but keep the placeholders you want filled.
+    </div>
+    ${cards}`;
+}
+function saveEmailTemplate(k) {
+  const stock = EMAIL_TEMPLATES_DEFAULT[k];
+  if (!stock) return;
+  const bodyEl = document.getElementById('etpl-body-' + k);
+  const subjEl = document.getElementById('etpl-subject-' + k);
+  if (!bodyEl) return;
+  const body = bodyEl.value;                              // NOT trimmed — whitespace is significant
+  const subject = subjEl ? subjEl.value : undefined;
+  const o = _emailTplOverrides();
+  const sameAsStock = body === stock.body && (subjEl ? subject === (stock.subject || '') : true);
+  if (sameAsStock) delete o[k];
+  else {
+    o[k] = { body };
+    if (subjEl && subject !== (stock.subject || '')) o[k].subject = subject;
+    else if (subjEl) o[k].subject = undefined;
+  }
+  _emailTplSaveOverrides(o);
+  toast('Email template saved', 'success');
+  _emailTplRefreshPanel();
+}
+function resetEmailTemplate(k) {
+  if (!EMAIL_TEMPLATES_DEFAULT[k]) return;
+  if (!confirm('Discard your edits and restore the stock wording?')) return;
+  const o = _emailTplOverrides();
+  delete o[k];
+  _emailTplSaveOverrides(o);
+  toast('Restored stock wording', 'success');
+  _emailTplRefreshPanel();
+}
+
+// EV charger / NEMA 14-50 — original 4-step flow that Jonathan likes.
+// (All builders below now render from the editable EMAIL_TEMPLATES_DEFAULT
+// entries — Settings → Email Templates. Stock output is byte-identical to
+// the previous hard-coded strings.)
+function _buildEVStyleQuoteEmail({ q, custFirst, projectPhrase, total, addr, isEVProject, chargerRecs }) {
+  const isEV = (q.jobType === 'ev-residential');
+  const ctx = {
+    firstName: custFirst, projectPhrase, quoteId: q.id, address: addr, total,
+    scopeBlock: _buildScopeText(q),
+    chargerBlock: isEV ? _emailTplText('chargerSection', { chargerRecs }) : '',
+    paymentBlock: _buildPaymentScheduleText(q),
+    orderSteps: _emailTplText(isEV ? 'evOrderSteps' : 'stdOrderStep', {}),
+    signoff: _emailSignoffText()
+  };
+  return { subject: _emailTplSubject('evStyle', ctx), body: _emailTplText('evStyle', ctx) };
+}
+
+// HVAC circuit / panel replacement — permit required, no equipment to deliver.
+function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const noteKey = (q.jobType === 'hvac-circuit') ? 'noteHvac'
+               : (q.jobType === 'panel-replacement') ? 'notePanel'
+               : 'notePermitOther';
+  const ctx = {
+    firstName: custFirst, projectPhrase, quoteId: q.id, address: addr, total,
+    jobTypeNote: _emailTplText(noteKey, {}),
+    scopeBlock: _buildScopeText(q),
+    paymentBlock: _buildPaymentScheduleText(q),
+    signoff: _emailSignoffText()
+  };
+  return { subject: _emailTplSubject('permitStandard', ctx), body: _emailTplText('permitStandard', ctx) };
+}
+
+// Circuit replacement — no permit, fast turnaround.
+function _buildNoPermitEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const noteKey = (q.jobType === 'circuit-replacement') ? 'noteCircuitRepl'
+               : (q.jobType === 'energy-management') ? 'noteEnergyMgmt'
+               : 'noteNoPermitOther';
+  const ctx = {
+    firstName: custFirst, projectPhrase, quoteId: q.id, address: addr, total,
+    jobTypeNote: _emailTplText(noteKey, {}),
+    scopeBlock: _buildScopeText(q),
+    paymentBlock: _buildPaymentScheduleText(q),
+    signoff: _emailSignoffText()
+  };
+  return { subject: _emailTplSubject('noPermit', ctx), body: _emailTplText('noPermit', ctx) };
+}
+
+// Battery / V2H / generator — equipment delivery is a gating step.
+function _buildEquipmentRequiredEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const noteKey = (q.jobType === 'battery-system') ? 'noteBattery'
+               : (q.jobType === 'v2h-system') ? 'noteV2H'
+               : 'noteGenerator';
+  const ctx = {
+    firstName: custFirst, projectPhrase, quoteId: q.id, address: addr, total,
+    jobTypeNote: _emailTplText(noteKey, {}),
+    scopeBlock: _buildScopeText(q),
+    paymentBlock: _buildPaymentScheduleText(q),
+    signoff: _emailSignoffText()
+  };
+  return { subject: _emailTplSubject('equipmentRequired', ctx), body: _emailTplText('equipmentRequired', ctx) };
+}
+
+// New service / service upgrade / any quote flagged contingent on utility.
+// Customer accepts contingently, pays $200 utility coordination fee, GreenKey
+// gets utility cost, then issues final non-contingent quote.
+function _buildUtilityCoordinatedEmail({ q, custFirst, projectPhrase, total, addr }) {
+  const isContingent = q.contingentOnUtility !== false; // default true for utility-delayed jobs
+  const ctx = {
+    firstName: custFirst, projectPhrase, quoteId: q.id, address: addr, total,
+    scopeBlock: _buildScopeText(q),
+    paymentBlock: _buildPaymentScheduleText(q),
+    signoff: _emailSignoffText()
+  };
+  const key = isContingent ? 'utilityContingent' : 'utilityFinal';
+  return { subject: _emailTplSubject(key, ctx), body: _emailTplText(key, ctx) };
 }
 
 function generateQuotePDF(q,cust,lead,returnDataUrl=false){
@@ -10464,6 +10710,9 @@ function commitMaterialImport(){
 // ══════════════════════════════════════════════════════
 
 function openJobDetail(id) {
+  // Remember where the pipeline was scrolled so "back" returns to the same
+  // spot (capture only works while the pipe view is still visible).
+  try { const s = _pipeCaptureScroll(); if (s) _pipeSavedScroll = s; } catch(_){}
   S.jobDetailId = id;
   const pv = document.getElementById('jobs-pipe-view');
   const dv = document.getElementById('jobs-detail-view');
@@ -10535,6 +10784,7 @@ function closeJobDetail() {
   if (pv) pv.style.display = '';
   if (dv) dv.style.display = 'none';
   populateTechFilter('pf-tech');
+  _pipeRestorePending = true;   // put the user back where they were
   renderPipeline();
 }
 
@@ -12745,17 +12995,45 @@ function renderJobDetail(id) {
   try { _loadJobRailMap(id); } catch (e) { console.warn('[GK] rail map load failed:', e); }
 }
 
-// Helper: open new quote pre-linked to a specific job
+// Helper: open new quote pre-linked to a specific job. Coming FROM a job
+// page, the job is known — show it as a locked card instead of the full
+// 117-job picker (Jonathan, 2026-07-11: "default to the job that was the
+// source of the request"). A small "change" link reveals the picker for the
+// rare cross-job case; the hidden picker still carries the selection so
+// startQuoteBuilder() reads #qt-lead-sel exactly as before.
+function nqChangeJob(){
+  const card=document.getElementById('nq-job-locked');
+  const pick=document.getElementById('nq-job-picker');
+  if(card) card.style.display='none';
+  if(pick) pick.style.display='';
+}
 function openNewQuote_ForJob(leadId) {
   navigate('quotes');
   setTimeout(()=>{
     const leads=getLeads().filter(l=>l.stage!=='archived');
     const custs=getCustomers();
     if(!leads.length){toast('No active jobs found — create a lead first','warning');return;}
-    const body=`
+    const srcLead=leads.find(l=>l.id===leadId);
+    const srcCust=srcLead?custs.find(c=>c.id===srcLead.customerId):null;
+    const srcName=srcCust?custFullName(srcCust):(srcLead?.customerName||'Unknown');
+    const jobSection=srcLead?`
+      <div class="fsec"><div class="fsec-title">Job</div>
+        <div id="nq-job-locked" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:1px solid var(--green);background:var(--green-dim);border-radius:var(--r)">
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:600;color:var(--text-primary)">${escHtml(srcName)}</div>
+            <div style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono)">${escHtml(srcLead.id)}${srcLead.siteCity?' · '+escHtml(srcLead.siteCity):''}</div>
+          </div>
+          <a onclick="nqChangeJob()" style="font-size:11.5px;color:var(--green);cursor:pointer;text-decoration:underline;flex-shrink:0" title="Attach this quote to a different job instead">change</a>
+        </div>
+        <div id="nq-job-picker" style="display:none;margin-top:8px">
+          ${_leadSearchUI(leads,custs,leadId)}
+        </div>
+      </div>`:`
       <div class="fsec"><div class="fsec-title">Select Job</div>
         ${_leadSearchUI(leads,custs,leadId)}
-      </div>
+      </div>`;
+    const body=`
+      ${jobSection}
       <div class="fsec"><div class="fsec-title">Quote Type</div>
         <div style="display:flex;gap:12px;flex-direction:column">
           <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" id="qt-opt-quick" onclick="selectQTType('quick')">
@@ -19331,7 +19609,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates'];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates'];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -24892,10 +25170,17 @@ async function renderSMSThread(leadId, quiet) {
       el.scrollTop = el.scrollHeight;
     }
   } catch (e) {
+    // Transient worker/D1 blips ("D1_ERROR: Network connection lost" etc.)
+    // self-heal in seconds. Clear the fingerprint so the NEXT successful
+    // poll repaints even if the messages haven't changed — otherwise the
+    // error text stayed on screen indefinitely (Jonathan, 2026-07-11) —
+    // and schedule a quiet retry so recovery doesn't wait for the poller.
+    try { delete _smsThreadFingerprint[leadId]; } catch(_){}
     if (!quiet) {
-      el.innerHTML = `<div style="font-size:12.5px;color:#e74c3c;padding:4px 0">Failed to load thread: ${escHtml(e.message)}</div>`;
+      el.innerHTML = `<div style="font-size:12.5px;color:#e74c3c;padding:4px 0">Couldn't load messages — temporary connection hiccup, retrying automatically… <span style="color:var(--text-muted)">(${escHtml(e.message)})</span></div>`;
+      setTimeout(() => { try { renderSMSThread(leadId, true); } catch(_){} }, 2500);
     }
-    // On a quiet (background) failure, leave the existing thread on screen.
+    // On a quiet (background) failure, leave the existing content on screen.
   }
 }
 
