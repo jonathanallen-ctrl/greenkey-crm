@@ -2589,7 +2589,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Text Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2956,6 +2956,8 @@ function showSec(el, sec) {
     document.getElementById('spanel').innerHTML = renderUsersAccessSettings();
   } else if (sec==='Charger Support') {
     document.getElementById('spanel').innerHTML = renderChargerSupportSettings();
+  } else if (sec==='Text Templates') {
+    document.getElementById('spanel').innerHTML = renderSMSTemplateSettings();
   } else if (sec==='Skills') {
     document.getElementById('spanel').innerHTML = renderSkillsSettings();
   } else if (sec==='Scheduling') {
@@ -4607,8 +4609,22 @@ function getQQPricing(){
   };
 }
 
-function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
-function saveQuotes(a){localStorage.setItem(QK,JSON.stringify(a));queueSPSync();}
+// Deleted quotes are TOMBSTONED (deleted:true stays in storage) — quotes sync
+// by union-merge across machines, so a hard remove just resurrects on the
+// next pull (the bug Jonathan hit repeatedly before 2026-07-11). getQuotes()
+// hides tombstones from every caller (lists, revenue, pollers); saveQuotes()
+// re-attaches any tombstones a caller couldn't see, so load-modify-save
+// cycles can never drop them.
+function getQuotes(){try{return JSON.parse(localStorage.getItem(QK)||'[]').filter(q=>q&&!q.deleted);}catch{return[];}}
+function _getQuotesRaw(){try{return JSON.parse(localStorage.getItem(QK)||'[]');}catch{return[];}}
+function saveQuotes(a){
+  try{
+    const ids=new Set((a||[]).map(q=>q&&q.id));
+    const tombs=_getQuotesRaw().filter(q=>q&&q.deleted&&!ids.has(q.id));
+    if(tombs.length) a=(a||[]).concat(tombs);
+  }catch(_){ }
+  localStorage.setItem(QK,JSON.stringify(a));queueSPSync();
+}
 function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 function upsertQuote(data){
   const a=getQuotes(),idx=a.findIndex(q=>q.id===data.id),now=new Date().toISOString();
@@ -4869,20 +4885,85 @@ function _autoCreatePreInstallTasks(quote) {
 // this is destructive and irreversible. Refuses to delete approved or
 // invoiced quotes (those represent commitments — go un-set the status first
 // if you really need to remove the record).
-function deleteQuoteFromJobDetail(quoteId, leadId) {
-  const arr = getQuotes();
-  const q = arr.find(x => x.id === quoteId);
+// Shared delete used by the job-detail Quotes list, the Active Quotes rail,
+// and the quote builder header. TOMBSTONES the quote (survives sync — see
+// getQuotes/saveQuotes) and cleans up its saved PDFs from the job's Documents
+// AND the customer's SharePoint folder (otherwise the folder auto-pull would
+// just re-import them).
+function _confirmAndDeleteQuote(quoteId, leadId, fromBuilder) {
+  const q = getQuote(quoteId);
   if (!q) { toast('Quote not found', 'error'); return; }
   if (q.status === 'approved' || q.status === 'invoiced' || q.status === 'contingent-approved') {
     toast('Cannot delete an approved/invoiced quote. Change its status first.', 'warning');
     return;
   }
-  if (!confirm(`Delete quote ${quoteId} (${fmt$(q.quoteTotal)})?\n\nThis cannot be undone. The job and customer records are not affected.`)) return;
-  saveQuotes(arr.filter(x => x.id !== quoteId));
+  const lbl = (q.label||'').trim();
+  if (!confirm(`Delete quote ${quoteId}${lbl ? ' — "'+lbl+'"' : ''} (${fmt$(q.quoteTotal)})?\n\nIts saved quote PDFs are removed from Documents and the customer's SharePoint folder too (recoverable ~93 days from the SharePoint recycle bin). The job and customer records are not affected.`)) return;
+  const effLeadId = leadId || q.leadId;
+  // Tombstone in the raw store (NOT a hard remove — sync-safe).
+  const raw = _getQuotesRaw();
+  const idx = raw.findIndex(x => x && x.id === quoteId);
+  if (idx < 0) { toast('Quote not found', 'error'); return; }
+  const now = new Date().toISOString();
+  raw[idx].deleted = true;
+  raw[idx].deletedAt = now;
+  raw[idx].deletedBy = S.user?.id || '';
+  raw[idx].updatedAt = now;
+  localStorage.setItem(QK, JSON.stringify(raw));
+  queueSPSync();
   toast('Quote deleted', 'success');
-  // Re-render the active job detail so the row disappears.
-  if (S.jobDetailId === leadId) renderJobDetail(leadId);
+  // PDF cleanup runs in the background — failures never block the delete.
+  try { _deleteQuotePdfArtifacts(quoteId, effLeadId); } catch(_){}
+  // Route the user somewhere sensible.
+  if (fromBuilder) {
+    if (effLeadId && typeof openLeadDetail === 'function') { try { openLeadDetail(effLeadId); return; } catch(_){} }
+    closeQuoteBuilder();
+  } else if (S.jobDetailId === effLeadId) renderJobDetail(effLeadId);
   else if (S.page === 'quotes') renderQuotesPage();
+}
+function deleteQuoteFromJobDetail(quoteId, leadId) { _confirmAndDeleteQuote(quoteId, leadId, false); }
+function deleteQuoteFromBuilder(quoteId, leadId)   { _confirmAndDeleteQuote(quoteId, leadId, true); }
+
+// Remove a deleted quote's saved PDFs: (1) file records in the job's
+// Documents (they're named GreenKey_Quote_<quoteId>_… by generateQuotePDF),
+// (2) the copies in the customer's SharePoint folder — same path convention
+// as _saveQuotePDFToCustomerFolder. SharePoint's recycle bin keeps deleted
+// files ~93 days, so this is recoverable.
+async function _deleteQuotePdfArtifacts(quoteId, leadId) {
+  const prefix = 'GreenKey_Quote_' + quoteId;
+  let localN = 0, spN = 0;
+  // 1) Local Documents records
+  try {
+    const matches = (_filesCache || []).filter(f => f && f.jobId === leadId && (f.name||'').startsWith(prefix));
+    for (const f of matches) { try { deleteFileRecord(f.id); localN++; } catch(_){} }
+    if (localN && typeof renderFilesPage === 'function' && typeof fmState === 'function') {
+      try { const fm = fmState(); if (fm && fm.jobId === leadId) renderFilesPage(); } catch(_){}
+    }
+  } catch (e) { console.warn('[GK] quote PDF local cleanup failed:', e); }
+  // 2) SharePoint customer folder
+  try {
+    if (_gToken && _spDrive) {
+      const lead = getLead(leadId);
+      const customer = lead && lead.customerId ? getCustomer(lead.customerId) : null;
+      const folderName = (lead && customer && typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, customer) : '';
+      if (folderName) {
+        const folderPath = SP_ACTIVE_LEADS_PATH + '/' + folderName;
+        const listUrl = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${_spEncodePath(folderPath)}:/children?$select=id,name&$top=200`;
+        const r = await fetch(listUrl, { headers: { 'Authorization': 'Bearer ' + _gToken } });
+        if (r.ok) {
+          const kids = (await r.json()).value || [];
+          for (const k of kids) {
+            if (!k || !k.id || !(k.name||'').startsWith(prefix)) continue;
+            const dr = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${k.id}`, {
+              method: 'DELETE', headers: { 'Authorization': 'Bearer ' + _gToken }
+            });
+            if (dr.ok || dr.status === 204) spN++;
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn('[GK] quote PDF SharePoint cleanup failed:', e); }
+  if (localN || spN) toast(`Removed ${localN} saved PDF${localN===1?'':'s'} from Documents${spN ? `, ${spN} from SharePoint` : ''}`, 'success');
 }
 
 // ── BILL-TO HELPERS ──
@@ -5479,7 +5560,20 @@ function renderQuoteBuilder(qid){
         Back to Lead
       </button>`:''}
       <div style="font-size:17px;font-weight:600;letter-spacing:-0.4px;display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-        <span style="flex-shrink:0">${q.id}</span>
+        ${(() => {
+          // Quote switcher — every quote on this job in one dropdown, so
+          // working multiple options never means bouncing back to the list.
+          const sibs = getQuotes().filter(x => x.leadId === q.leadId)
+            .sort((a,b) => new Date(a.createdAt||0) - new Date(b.createdAt||0));
+          if (!q.leadId || sibs.length < 2) return `<span style="flex-shrink:0">${q.id}</span>`;
+          const opts = sibs.map(s => {
+            const nm = (s.label||'').trim() || (getJobType(s.jobType)?.label || s.jobType || 'Quote');
+            const txt = `${nm} — $${Math.round(s.quoteTotal||0).toLocaleString()} · ${s.status||'draft'} · ${s.id}`;
+            return `<option value="${s.id}"${s.id===q.id?' selected':''}>${escHtml(txt)}</option>`;
+          }).join('');
+          return `<select onchange="openQuoteBuilder(this.value)" title="Switch between this job's quotes"
+            style="flex-shrink:0;max-width:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--text-primary);outline:none;cursor:pointer">${opts}</select>`;
+        })()}
         <input type="text" id="qb-label" placeholder="Optional label — e.g. Option A: Level 2 in garage"
           value="${(q.label||'').replace(/"/g,'&quot;')}"
           onchange="updateQuoteLabel('${q.id}', this.value)"
@@ -5488,6 +5582,7 @@ function renderQuoteBuilder(qid){
       <span style="font-size:13px;color:var(--text-muted)">${custName}</span>
       ${lead?`<span class="chip chip-blue" style="font-size:11px">${lead.id}</span>`:''}
       ${quoteStatusChip(q.status)}
+      ${(q.status==='approved'||q.status==='invoiced'||q.status==='contingent-approved')?'':`<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;color:var(--red);flex-shrink:0" onclick="deleteQuoteFromBuilder('${q.id}','${q.leadId||''}')" title="Delete this quote (removes its saved PDFs too)">🗑 Delete</button>`}
     </div>
     ${revBanner}
     ${_renderPanelSuggestionBanner(q, lead)}
@@ -8452,12 +8547,16 @@ function emailModalWriteCustom() {
   } catch(_) {}
 
   const greeting = firstName ? `Hi ${firstName},\n\n` : `Hi,\n\n`;
-  document.getElementById('em-body').value = greeting;
+  // Keep the sign-off visible in the compose box (Jonathan, 2026-07-11 — a
+  // bare "Hi Chris," made it look like the email would go out unsigned; the
+  // branded signature block is ALSO auto-appended at send, same as templates).
+  const signoff = (typeof _DIRECT_QUOTE_SIGNOFF !== 'undefined') ? `\n\n${_DIRECT_QUOTE_SIGNOFF}` : '';
+  document.getElementById('em-body').value = greeting + signoff;
 
-  // Move cursor to end so the user can type immediately.
+  // Cursor between greeting and sign-off so the user types in the right spot.
   const ta = document.getElementById('em-body');
   ta.focus();
-  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.setSelectionRange(greeting.length, greeting.length);
 
   // Swap buttons.
   const cBtn = document.getElementById('em-custom-btn');
@@ -8500,36 +8599,57 @@ async function sendQuoteEmail(){
   const subject  = document.getElementById('em-subject').value;
   let   body     = document.getElementById('em-body').value;
 
-  // Mint Accept/Decline tokens for direct-customer emails and append URLs.
-  // Skipped for platform jobs (Qmerit / Electrum / Treehouse handle their own)
-  // and custom ad-hoc emails (no quote tied to it).
-  const _qidForButtons = _pendingEmail && _pendingEmail.qid;
-  const _qForButtons   = _qidForButtons ? getQuote(_qidForButtons) : null;
-  const _isDirectQuote = _qForButtons && !PLATFORM_PAY_SOURCES.includes(_qForButtons.source) && !_pendingEmail.isCustomEmail;
-  if (_isDirectQuote && typeof _smsConfigured === 'function' && _smsConfigured()) {
-    try {
-      const tokenBundle = await _mintQuoteActionToken(_qForButtons);
-      if (tokenBundle && tokenBundle.acceptUrl && tokenBundle.declineUrl) {
-        const _acceptLabel = _qForButtons.contingentOnUtility ? 'Accept (contingent)' : 'Accept Quote';
-        body += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACCEPT OR DECLINE — ONE-CLICK\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-        body += `  ✓ ${_acceptLabel}:    ${tokenBundle.acceptUrl}\n\n`;
-        body += `  ✗ Decline Quote:  ${tokenBundle.declineUrl}\n\n`;
-        body += `  These links are unique to your quote and expire in 30 days.\n`;
-        body += `  You'll see a confirmation page where you can review the scope before final confirmation.\n`;
-      }
-    } catch (e) {
-      // Non-fatal — send the email without buttons. We'll log so you can see
-      // it in the console, but the customer just gets a slightly older flow.
-      console.warn('[GK] Quote action token mint failed (sending without buttons):', e);
-    }
-  }
-
   if (!toEmail) { toast('Please enter a recipient email', 'warning'); return; }
 
   // Collect checked quote IDs and build the attachments array.
   const checkedIds = Array.from(document.querySelectorAll('.em-attach-cb'))
     .filter(c => c.checked)
     .map(c => c.dataset.qid);
+
+  // Mint Accept/Decline tokens for direct-customer emails and append URLs —
+  // ONE BLOCK PER ATTACHED QUOTE (2026-07-11), so a multi-option email lets
+  // the customer accept or decline each option independently. Accepting one
+  // option deliberately does NOT touch the others (multi-scope jobs often
+  // send several quotes that are all meant to be accepted). Skipped for
+  // platform jobs (Qmerit / Electrum / Treehouse handle their own) and
+  // custom ad-hoc emails (no quote tied to it).
+  const _qidForButtons = _pendingEmail && _pendingEmail.qid;
+  const _qForButtons   = _qidForButtons ? getQuote(_qidForButtons) : null;
+  const _isDirectQuote = _qForButtons && !PLATFORM_PAY_SOURCES.includes(_qForButtons.source) && !_pendingEmail.isCustomEmail;
+  if (!_pendingEmail.isCustomEmail && typeof _smsConfigured === 'function' && _smsConfigured()) {
+    const _tokenQuotes = checkedIds.map(id => getQuote(id))
+      .filter(tq => tq && !PLATFORM_PAY_SOURCES.includes(tq.source));
+    // Preserve the primary-quote fallback: a direct send with nothing checked
+    // (shouldn't happen, but belt-and-braces) still gets its buttons.
+    if (!_tokenQuotes.length && _isDirectQuote) _tokenQuotes.push(_qForButtons);
+    const _multi = _tokenQuotes.length > 1;
+    for (let ti = 0; ti < _tokenQuotes.length; ti++) {
+      const tq = _tokenQuotes[ti];
+      try {
+        const tokenBundle = await _mintQuoteActionToken(tq);
+        if (!(tokenBundle && tokenBundle.acceptUrl && tokenBundle.declineUrl)) continue;
+        // Option label: the quote's label if set, else "Option A/B/…".
+        const optName = _multi
+          ? ((tq.label||'').trim() || ('Option ' + String.fromCharCode(65 + ti)))
+          : '';
+        const hdrSuffix = _multi
+          ? ` — ${optName.toUpperCase()} ($${Math.round(tq.quoteTotal||0).toLocaleString()})`
+          : ' — ONE-CLICK';
+        const _acceptLabel = tq.contingentOnUtility
+          ? (_multi ? `Accept ${optName} (contingent)` : 'Accept (contingent)')
+          : (_multi ? `Accept ${optName}` : 'Accept Quote');
+        const _declineLabel = _multi ? `Decline ${optName}` : 'Decline Quote';
+        body += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACCEPT OR DECLINE${hdrSuffix}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        body += `  ✓ ${_acceptLabel}:    ${tokenBundle.acceptUrl}\n\n`;
+        body += `  ✗ ${_declineLabel}:  ${tokenBundle.declineUrl}\n\n`;
+        body += `  These links are unique to ${_multi ? 'this option' : 'your quote'} and expire in 30 days.\n`;
+        body += `  You'll see a confirmation page where you can review the scope before final confirmation.\n`;
+      } catch (e) {
+        // Non-fatal — send the email without buttons for this quote.
+        console.warn('[GK] Quote action token mint failed (sending without buttons):', tq && tq.id, e);
+      }
+    }
+  }
   // Platform leads (Qmerit/Electrum/Treehouse) send a courtesy email with no
   // PDF — the platform delivers the quote. Zero attachments is fine there.
   const isPlatformSend = !!(_pendingEmail && _pendingEmail.isPlatform);
@@ -9260,15 +9380,26 @@ function _buildHtmlEmail(plainBody) {
   // We match the whole region, lift out the two URLs (and optional accept
   // label override e.g. "Accept (contingent)"), build HTML buttons, and
   // continue with the remainder.
-  let buttonsHtml = '';
-  const blockRe = /━{5,}\s*\n\s*ACCEPT OR DECLINE[^\n]*\n━{5,}\s*\n[\s\S]*?(✓\s*([^:]+?):\s*(https?:\/\/\S+))[\s\S]*?(✗\s*[^:]+?:\s*(https?:\/\/\S+))[\s\S]*?(?=(\n[\S]|$))/;
-  const m = plainBody.match(blockRe);
-  if (m) {
-    const acceptLabel = (m[2] || 'Accept Quote').trim();
-    const acceptUrl   = m[3];
-    const declineUrl  = m[5];
-    buttonsHtml = `
-      <table cellpadding="0" cellspacing="0" border="0" style="margin:18px auto 6px;border-collapse:separate">
+  // (2026-07-11) Loops so MULTI-OPTION emails render one styled button pair
+  // per quote — previously only the first block became buttons and any later
+  // blocks leaked through as raw text. Each block may carry an option label
+  // in its header ("ACCEPT OR DECLINE — OPTION A ($773)"), rendered as a
+  // small heading above its buttons.
+  const blocksHtml = [];
+  const blockRe = /━{5,}\s*\n\s*ACCEPT OR DECLINE([^\n]*)\n━{5,}\s*\n[\s\S]*?(✓\s*([^:]+?):\s*(https?:\/\/\S+))[\s\S]*?(✗\s*([^:]+?):\s*(https?:\/\/\S+))[\s\S]*?(?=(\n[\S]|$))/;
+  let m;
+  while ((m = plainBody.match(blockRe))) {
+    const suffixRaw    = (m[1] || '').replace(/^[\s—–-]+/, '').trim();   // "OPTION A ($773)" | "ONE-CLICK" | ""
+    const acceptLabel  = (m[3] || 'Accept Quote').trim();
+    const acceptUrl    = m[4];
+    const declineLabel = (m[6] || 'Decline').trim();
+    const declineUrl   = m[7];
+    const isOptionHdr  = suffixRaw && suffixRaw.toUpperCase() !== 'ONE-CLICK';
+    const headingHtml  = isOptionHdr
+      ? `<p style="margin:16px 0 0;text-align:center;font-size:13px;font-weight:700;color:#2e7d32;letter-spacing:0.04em">${esc(suffixRaw)}</p>`
+      : '';
+    blocksHtml.push(`${headingHtml}
+      <table cellpadding="0" cellspacing="0" border="0" style="margin:${isOptionHdr?'8px':'18px'} auto 6px;border-collapse:separate">
         <tr>
           <td align="center">
             <a href="${acceptUrl}" target="_blank" rel="noopener"
@@ -9280,21 +9411,20 @@ function _buildHtmlEmail(plainBody) {
           <td align="center">
             <a href="${declineUrl}" target="_blank" rel="noopener"
                style="display:inline-block;padding:14px 32px;background:#ffffff;color:#5a6270;font-family:-apple-system,Segoe UI,Arial,sans-serif;font-weight:600;font-size:15px;text-decoration:none;border-radius:8px;border:1px solid #c8ccd2">
-              ✗ Decline
+              ✗ ${esc(declineLabel)}
             </a>
           </td>
         </tr>
       </table>
       <p style="margin:6px 0 2px;text-align:center;font-size:12px;color:#666">
-        These links are unique to your quote and expire in 30 days.
+        These links are unique to ${isOptionHdr ? 'this option' : 'your quote'} and expire in 30 days.
       </p>
       <p style="margin:0 0 14px;text-align:center;font-size:12px;color:#666">
         You'll see a confirmation page before anything is final.
-      </p>`;
-    // Strip the entire block from the plain text so the rest of the renderer
-    // doesn't re-emit raw URLs. We leave a single marker line so we can
-    // splice the buttonsHtml back in at the right spot below.
-    plainBody = plainBody.slice(0, m.index) + '\n[[__GK_QUOTE_BUTTONS__]]\n' + plainBody.slice(m.index + m[0].length);
+      </p>`);
+    // Strip the block from the plain text; leave an indexed marker so each
+    // button pair is spliced back exactly where its block sat.
+    plainBody = plainBody.slice(0, m.index) + `\n[[__GK_QUOTE_BUTTONS_${blocksHtml.length - 1}__]]\n` + plainBody.slice(m.index + m[0].length);
   }
 
   // Split into paragraphs/sections. ━━━ lines become visual dividers.
@@ -9302,8 +9432,9 @@ function _buildHtmlEmail(plainBody) {
   let html = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.trim() === '[[__GK_QUOTE_BUTTONS__]]') {
-      html += buttonsHtml;
+    const bm = line.trim().match(/^\[\[__GK_QUOTE_BUTTONS_(\d+)__\]\]$/);
+    if (bm) {
+      html += blocksHtml[+bm[1]] || '';
       continue;
     }
     if (/^━{5,}/.test(line)) {
@@ -10882,13 +11013,21 @@ function _renderJobRail(lead){
       ? `Outside / fixed-price quote (${escHtml(q.source||'external')}) — no 3% fee; counts as revenue. Click to edit.`
       : `Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${Math.round(q.quoteTotal||0).toLocaleString()} (fee included).`;
     const openAction = q.external ? `openExternalQuote('${id}','${q.id}')` : `openQuoteBuilder('${q.id}')`;
-    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+    const qLbl = (q.label||'').trim();
+    // With multi-option emails, make accepted-vs-open readable at a glance:
+    // the label leads the row, and once ANY quote on the job is accepted,
+    // sibling options still out with the customer say so.
+    const jobHasAccepted = quotes.some(x => (acceptedId===x.id) || x.status==='approved' || x.status==='contingent-approved');
+    const openHint = (!isAcc && jobHasAccepted && (q.status==='delivered'||q.status==='draft'))
+      ? ` · <span style="color:var(--amber,#f59e0b)">option still open</span>` : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)${isAcc?';border-left:3px solid var(--green);padding-left:7px':''}">
       <div style="min-width:0;cursor:pointer" onclick="${openAction}">
         <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')} (outside)</span>`:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary)" title="${titleTxt}">$${_quoteNet(q).toLocaleString()}</div>
-        <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${qLbl?escHtml(qLbl)+' · ':''}$${_quoteNet(q).toLocaleString()}</div>
+        <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
+      ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}
     </div>`;
   }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
   const quotesSec = `<div class="jd-sec"><div class="jd-sh" style="display:flex;align-items:center;justify-content:space-between"><div class="jd-st">Active Quotes</div><button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button></div><div class="jd-sb" style="padding:6px 14px 12px">${qRows}</div></div>`;
@@ -12084,6 +12223,7 @@ function renderJobDetail(id) {
       : '';
     return `<div class="qt-link-row">
       <span style="font-family:var(--mono);font-size:12px;color:var(--text-muted)">${q.id}</span>
+      ${(q.label||'').trim()?`<span style="font-size:12px;font-weight:600;color:var(--text-primary);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(q.label.trim())}">${escHtml(q.label.trim())}</span>`:''}
       <span style="font-size:11.5px;color:var(--text-muted)" title="${escHtml(fullTs)}">${created}</span>
       ${latestChip}
       ${quoteStatusChip(q.status)}
@@ -19191,7 +19331,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates'];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -21377,13 +21517,134 @@ const SMS_TEMPLATES_DEFAULT = {
 };
 
 function getSMSTemplates() {
+  // Per-key DEEP merge: an override may carry only {hidden:true} (or only a
+  // label), and must layer ON TOP of the stock entry — a shallow spread would
+  // replace the whole template and lose its wording.
+  const out = { ...SMS_TEMPLATES_DEFAULT };
   try {
     const saved = JSON.parse(localStorage.getItem('gk_sms_templates') || 'null');
     if (saved && typeof saved === 'object') {
-      return { ...SMS_TEMPLATES_DEFAULT, ...saved };
+      for (const k of Object.keys(saved)) {
+        if (!saved[k] || typeof saved[k] !== 'object') continue;
+        out[k] = { ...(SMS_TEMPLATES_DEFAULT[k] || {}), ...saved[k] };
+      }
     }
   } catch (_) { /* ignore corrupt storage */ }
-  return { ...SMS_TEMPLATES_DEFAULT };
+  return out;
+}
+
+// ── TEXT TEMPLATE EDITOR (Settings → Text Templates, 2026-07-11) ──
+// Overrides + custom templates live in localStorage['gk_sms_templates']
+// (synced via SYNC_KEYS, so edits reach every machine). Built-ins can be
+// edited, hidden from the composer dropdown, or reset to stock wording;
+// custom templates can be added and deleted. The 'custom' (blank) entry is
+// the composer default and is not editable here.
+function _smsTplOverrides() {
+  try { return JSON.parse(localStorage.getItem('gk_sms_templates') || '{}') || {}; }
+  catch (_) { return {}; }
+}
+function _smsTplSaveOverrides(o) {
+  localStorage.setItem('gk_sms_templates', JSON.stringify(o));
+  try { queueSPSync(); } catch(_){}
+}
+function _smsTplRefreshPanel() {
+  const p = document.getElementById('spanel');
+  if (p) p.innerHTML = renderSMSTemplateSettings();
+}
+function renderSMSTemplateSettings() {
+  const merged = getSMSTemplates();
+  const overrides = _smsTplOverrides();
+  const keys = [
+    ...Object.keys(SMS_TEMPLATES_DEFAULT).filter(k => k !== 'custom'),
+    ...Object.keys(merged).filter(k => !(k in SMS_TEMPLATES_DEFAULT))
+  ];
+  const rows = keys.map(k => {
+    const t = merged[k] || {};
+    const isBuiltIn  = (k in SMS_TEMPLATES_DEFAULT);
+    const isModified = isBuiltIn && overrides[k] && (overrides[k].body !== undefined || overrides[k].label !== undefined);
+    const hidden = !!t.hidden;
+    return `<div class="card" style="padding:12px 14px;margin-bottom:10px${hidden ? ';opacity:0.55' : ''}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <input id="tpl-label-${k}" type="text" value="${escHtml(t.label || k)}"
+          style="flex:1;min-width:0;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:13px;font-weight:600;color:var(--text-primary);outline:none">
+        ${isBuiltIn
+          ? `<span class="chip" style="font-size:10px;flex-shrink:0" title="${isModified ? 'Built-in template with your edits' : 'Stock template'}">${isModified ? 'built-in · edited' : 'built-in'}</span>`
+          : `<span class="chip chip-blue" style="font-size:10px;flex-shrink:0">custom</span>`}
+        ${hidden ? `<span class="chip" style="font-size:10px;flex-shrink:0;color:var(--amber,#f59e0b)">hidden</span>` : ''}
+      </div>
+      <textarea id="tpl-body-${k}" rows="3"
+        style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.5">${escHtml(t.body || '')}</textarea>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn btn-p" style="padding:4px 12px;font-size:11.5px" onclick="saveSMSTemplate('${k}')">Save</button>
+        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="toggleHideSMSTemplate('${k}')" title="Hidden templates stay saved but don't appear in the composer dropdown">${hidden ? 'Show in composer' : 'Hide from composer'}</button>
+        ${isModified ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="resetSMSTemplate('${k}')" title="Discard your edits and restore the stock wording">↩ Reset to stock</button>` : ''}
+        ${!isBuiltIn ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;color:var(--red)" onclick="deleteSMSTemplate('${k}')">Delete</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="stitle">Text Templates</div>
+    <div class="sdesc">The pre-canned messages in the text composer's dropdown. Edit the wording, hide ones you don't use, or add your own — changes sync to every machine. The composer always opens on a blank message; templates are one pick away.</div>
+    <div style="margin:10px 0 14px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);font-size:12px;color:var(--text-secondary);line-height:1.6">
+      <strong>Placeholders</strong> (auto-filled at send time):
+      <code>{firstName}</code> customer's first name · <code>{repName}</code> your first name ·
+      <code>{source}</code> lead source · <code>{sourceSuffix}</code> " that Qmerit connected you with" ·
+      <code>{techName}</code> your full name · <code>{etaMinutes}</code> ETA ·
+      <code>{jobAddress}</code> site address
+    </div>
+    ${rows}
+    <button class="btn btn-g" style="padding:6px 14px;font-size:12px" onclick="addSMSTemplate()">+ Add template</button>`;
+}
+function saveSMSTemplate(k) {
+  const label = (document.getElementById('tpl-label-' + k)?.value || '').trim().slice(0, 60);
+  const body  = (document.getElementById('tpl-body-'  + k)?.value || '').trim().slice(0, 1600);
+  if (!label) { toast('Give the template a name', 'warning'); return; }
+  const o = _smsTplOverrides();
+  const stock = SMS_TEMPLATES_DEFAULT[k];
+  if (stock && stock.label === label && stock.body === body) {
+    // Saved back to stock wording — drop the override entirely (keep hidden flag).
+    if (o[k] && o[k].hidden) o[k] = { hidden: true }; else delete o[k];
+  } else {
+    o[k] = { ...(o[k] || {}), label, body };
+  }
+  _smsTplSaveOverrides(o);
+  toast('Template saved', 'success');
+  _smsTplRefreshPanel();
+}
+function resetSMSTemplate(k) {
+  if (!SMS_TEMPLATES_DEFAULT[k]) return;
+  if (!confirm('Discard your edits and restore the stock wording for this template?')) return;
+  const o = _smsTplOverrides();
+  if (o[k] && o[k].hidden) o[k] = { hidden: true }; else delete o[k];
+  _smsTplSaveOverrides(o);
+  toast('Restored stock wording', 'success');
+  _smsTplRefreshPanel();
+}
+function toggleHideSMSTemplate(k) {
+  const o = _smsTplOverrides();
+  const cur = !!(o[k] && o[k].hidden);
+  o[k] = { ...(o[k] || {}), hidden: !cur };
+  // Un-hiding a pure {hidden} override of a built-in → drop the key entirely.
+  if (cur && SMS_TEMPLATES_DEFAULT[k] && o[k].label === undefined && o[k].body === undefined) delete o[k];
+  else if (cur) delete o[k].hidden;
+  _smsTplSaveOverrides(o);
+  _smsTplRefreshPanel();
+}
+function addSMSTemplate() {
+  const o = _smsTplOverrides();
+  const k = 'tpl-' + Date.now();
+  o[k] = { label: 'New template', body: '' };
+  _smsTplSaveOverrides(o);
+  _smsTplRefreshPanel();
+  setTimeout(() => { const el = document.getElementById('tpl-label-' + k); if (el) { el.focus(); el.select(); } }, 50);
+}
+function deleteSMSTemplate(k) {
+  if (SMS_TEMPLATES_DEFAULT[k]) return; // built-ins can only be hidden/reset
+  if (!confirm('Delete this custom template?')) return;
+  const o = _smsTplOverrides();
+  delete o[k];
+  _smsTplSaveOverrides(o);
+  toast('Template deleted', 'success');
+  _smsTplRefreshPanel();
 }
 
 function substituteTemplate(body, ctx) {
@@ -21412,7 +21673,9 @@ function _buildTemplateContext(lead, cust) {
 }
 
 let _smsLeadId = null;
-let _smsCurrentTemplateKey = 'intro';
+// Default = 'custom' (blank) — the pre-canned templates are rarely used
+// (Jonathan, 2026-07-11); pick one from the dropdown when needed.
+let _smsCurrentTemplateKey = 'custom';
 
 // Auto-refresh polling for the open lead's SMS thread + consent state.
 // While a job-detail page is open, hit the Worker every SMS_POLL_INTERVAL_MS
@@ -24287,10 +24550,11 @@ function openSMSModal(leadId) {
   const templates = getSMSTemplates();
   const tplSel = document.getElementById('sms-tpl-sel');
   if (tplSel) {
-    tplSel.innerHTML = Object.entries(templates).map(
-      ([k, t]) => `<option value="${k}">${escHtml(t.label)}</option>`
-    ).join('');
-    tplSel.value = 'intro';
+    tplSel.innerHTML = Object.entries(templates)
+      .filter(([k, t]) => !t.hidden)   // hidden via Settings → Text Templates
+      .map(([k, t]) => `<option value="${k}">${escHtml(t.label)}</option>`)
+      .join('');
+    tplSel.value = 'custom';
     tplSel.onchange = () => applySMSTemplate(tplSel.value, lead, cust);
   }
 
@@ -24298,7 +24562,7 @@ function openSMSModal(leadId) {
   const prevWrap = document.getElementById('sms-prev-wrap');
   if (prevWrap) prevWrap.style.display = 'none';
 
-  applySMSTemplate('intro', lead, cust);
+  applySMSTemplate('custom', lead, cust);
   try { _smsClearImage(); } catch(_){}
   document.getElementById('sms-modal').classList.add('show');
 }
