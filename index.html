@@ -22510,15 +22510,22 @@ const LEAD_INBOX_MIN_INTERVAL_MS = 60000;
 let _leadInboxLastPoll = 0;
 let _leadInboxBusy = false;
 
-// Website service_type → CRM jobType. Solar/commercial map to 'custom' until
-// they get first-class job types.
+// Website service_type → CRM jobType. Commercial maps to 'custom' until it
+// gets a first-class residential-pipeline treatment. 2026-07-11: added the
+// form-v2 dropdown values (v2h/new_service/service_upgrade/electrical) mapped
+// to their existing first-class job types; unknown values now fall back to
+// 'custom' (was 'ev-residential', which mislabeled non-EV leads).
 const _WEB_SERVICE_TO_JOBTYPE = {
-  'ev':         'ev-residential',
-  'battery':    'battery-system',
-  'generator':  'generator',
-  'solar':      'custom',
-  'commercial': 'custom',
-  'other':      'custom'
+  'ev':              'ev-residential',
+  'v2h':             'v2h-system',
+  'battery':         'battery-system',
+  'new_service':     'new-service',
+  'service_upgrade': 'service-upgrade',
+  'electrical':      'custom',
+  'generator':       'generator',
+  'solar':           'custom',
+  'commercial':      'custom',
+  'other':           'custom'
 };
 
 async function _leadInboxPollOnce() {
@@ -22634,7 +22641,7 @@ function _importWebLead(row) {
   }
 
   // Build the lead — mirrors saveLead()'s shape.
-  const jobType = _WEB_SERVICE_TO_JOBTYPE[String(row.service_type || '').toLowerCase()] || 'ev-residential';
+  const jobType = _WEB_SERVICE_TO_JOBTYPE[String(row.service_type || '').toLowerCase()] || 'custom';
   const city = row.city || '';
   const j = (typeof checkJurisdiction === 'function') ? checkJurisdiction(city) : null;
   let custom = {};
