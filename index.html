@@ -24453,10 +24453,6 @@ function _blobToFileAndDataUrl(blob, name) {
 }
 async function _fileInboundSmsPhotos(leadId, msgs) {
   if (!leadId || !Array.isArray(msgs)) return;
-  // Only file when Graph is signed in — addFileRecord needs both to upload to
-  // SharePoint. If not signed in, skip: the worker still has the picture, and
-  // we mark nothing as filed, so a later pass (once signed in) files it.
-  if (typeof _spDrive === 'undefined' || !_spDrive || !_gToken) return;
   const lead = getLead(leadId);
   if (!lead) return;
   const filed = Array.isArray(lead.smsPhotosFiled) ? lead.smsPhotosFiled.slice() : [];
@@ -24478,6 +24474,16 @@ async function _fileInboundSmsPhotos(leadId, msgs) {
     }
   }
   if (!pending.length) return;
+
+  // Only file when Graph is signed in — addFileRecord needs it to upload to
+  // SharePoint. If not signed in, skip WITHOUT marking anything filed; the
+  // thread poller retries this function every pass, so filing happens as
+  // soon as sign-in completes. (Checked AFTER the pending scan so we can say
+  // why we're waiting instead of failing silently.)
+  if (typeof _spDrive === 'undefined' || !_spDrive || !_gToken) {
+    console.info('[GK] ' + pending.length + ' texted photo(s) waiting to file on ' + leadId + ' — SharePoint not signed in yet; will retry.');
+    return;
+  }
 
   let token; try { token = await _acquireSMSToken(); } catch (_) { return; }
   let anyFiled = false;
@@ -24561,6 +24567,13 @@ async function renderSMSThread(leadId, quiet) {
     // Fingerprint to detect changes — covers count, ids, and status updates.
     const fingerprint = msgs.map(m => (m.id || '') + ':' + (m.status || '') + ':' + (m.body || '').length + ':' + (m.media_json ? '1' : '0')).join('|');
     if (quiet && _smsThreadFingerprint[leadId] === fingerprint) {
+      // Nothing changed visually — but STILL retry photo filing before
+      // bailing. The first filing attempt can skip silently (e.g. the
+      // SharePoint/Graph token wasn't ready when the page first rendered),
+      // and since nothing marks the fingerprint dirty, we'd otherwise never
+      // try again — texted pics would open in the viewer but never land in
+      // the job's Pictures (Chris F.'s panel photos, 2026-07-11).
+      try { _fileInboundSmsPhotos(leadId, msgs); } catch(_){}
       return; // nothing changed, skip re-render
     }
     _smsThreadFingerprint[leadId] = fingerprint;
