@@ -5225,7 +5225,13 @@ function initMaterials(){
 
 function fmt$(n){if(!n&&n!==0)return'—';return'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 
-function quoteStatusChip(s){
+function quoteStatusChip(s, q){
+  // External (platform/outside) quotes at 'delivered' = submitted to the
+  // platform, awaiting THEIR approval — label it honestly (Sherri, 2026-07-11:
+  // tiered Qmerit submissions were auto-showing Approved).
+  if (q && q.external && s === 'delivered') {
+    return `<span class="chip chip-delivered">Pending approval</span>`;
+  }
   const m={
     draft:                'chip-draft Draft',
     delivered:            'chip-delivered Delivered',
@@ -5312,7 +5318,7 @@ function renderQuotesPage(){
       <td style="font-weight:500">${name}</td>
       <td style="font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td>
       <td><span class="chip chip-blue">${q.type==='quick'?'Quick':'Detailed'}</span></td>
-      <td>${quoteStatusChip(q.status)}</td>
+      <td>${quoteStatusChip(q.status, q)}</td>
       <td style="font-family:var(--mono)" title="No-fee (cash) price — what the customer sees as TOTAL. Card adds 3%.">${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))}</td>
       <td style="font-size:12px;color:var(--text-muted)">${q.createdAt?q.createdAt.slice(0,10):'—'}</td>
       <td><button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="event.stopPropagation();previewQuotePDF('${q.id}')">PDF</button></td>
@@ -5646,7 +5652,7 @@ function renderQuoteBuilder(qid){
       </div>
       <span style="font-size:13px;color:var(--text-muted)">${custName}</span>
       ${lead?`<span class="chip chip-blue" style="font-size:11px">${lead.id}</span>`:''}
-      ${quoteStatusChip(q.status)}
+      ${quoteStatusChip(q.status, q)}
       ${(q.status==='approved'||q.status==='invoiced'||q.status==='contingent-approved')?'':`<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;color:var(--red);flex-shrink:0" onclick="deleteQuoteFromBuilder('${q.id}','${q.leadId||''}')" title="Delete this quote (removes its saved PDFs too)">🗑 Delete</button>`}
     </div>
     ${revBanner}
@@ -11477,8 +11483,8 @@ function _renderJobRail(lead){
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)${isAcc?';border-left:3px solid var(--green);padding-left:7px':''}">
       <div style="min-width:0;cursor:pointer" onclick="${openAction}">
         <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')} (outside)</span>`:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${titleTxt}">${qLbl?escHtml(qLbl)+' · ':''}$${_quoteNet(q).toLocaleString()}</div>
-        <div style="font-size:10.5px;color:${stColor}">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${qLbl?' · '+escHtml(qLbl):''}</div>
+        <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
       ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}
@@ -11552,7 +11558,23 @@ function openExternalQuote(leadId, quoteId){
     <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Source</label>
     <select class="fsel" id="ext-q-src" style="width:100%;margin-bottom:12px">${SRCS.map(s=>`<option${s===curSrc?' selected':''}>${escHtml(s)}</option>`).join('')}</select>
     <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Note (optional) — PO #, or where the quote PDF lives in Documents</label>
-    <input class="fi" id="ext-q-note" value="${ex?escHtml(ex.scope||''):''}" placeholder="e.g. Treehouse PO 12345 — PDF in Documents" style="width:100%">`;
+    <input class="fi" id="ext-q-note" value="${ex?escHtml(ex.scope||''):''}" placeholder="e.g. Treehouse PO 12345 — PDF in Documents" style="width:100%;margin-bottom:12px">
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Status</label>
+    ${(() => {
+      // Tiered Qmerit submissions often WAIT for platform approval — default
+      // those to pending instead of auto-approving (Sherri, 2026-07-11).
+      const curPending = ex ? (ex.status !== 'approved' && ex.status !== 'invoiced' && ex.status !== 'contingent-approved') : (curSrc === 'Qmerit');
+      return `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
+        <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12.5px;color:var(--text-primary)">
+          <input type="radio" name="ext-q-status" value="pending"${curPending?' checked':''} style="margin-top:2px;accent-color:var(--green)">
+          <span><strong>Pending platform approval</strong> — submitted, waiting on the platform (or customer). Doesn't set Job Value yet.</span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:12.5px;color:var(--text-primary)">
+          <input type="radio" name="ext-q-status" value="approved"${!curPending?' checked':''} style="margin-top:2px;accent-color:var(--green)">
+          <span><strong>Approved / accepted</strong> — final; marks the quote approved and sets the Job Value.</span>
+        </label>
+      </div>`;
+    })()}`;
   const foot = `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button><button class="btn btn-p" onclick="saveExternalQuote('${leadId}','${quoteId||''}')">${ex?'Save':'Save & set Job Value'}</button>`;
   openDrawer(ex?'Edit outside quote':'Record outside quote', body, foot);
 }
@@ -11563,26 +11585,50 @@ function saveExternalQuote(leadId, quoteId){
   const amount=Math.round(raw);
   const src=document.getElementById('ext-q-src')?.value||'Other';
   const noteTxt=(document.getElementById('ext-q-note')?.value||'').trim();
+  // Pending = submitted to the platform, awaiting THEIR approval (tiered
+  // Qmerit etc.) — stored as 'delivered' + external, shown as "Pending
+  // approval". Approved = final: accepted quote + Job Value (old behavior).
+  const isPending = (document.querySelector('input[name="ext-q-status"]:checked')?.value || 'approved') === 'pending';
   if(quoteId){
     const ex=getQuote(quoteId); if(!ex){ toast('Quote not found','error'); return; }
-    upsertQuote({...ex, source:src, scope:noteTxt, external:true, preProcessingTotal:amount, paymentProcessingFee:0, quoteTotal:amount, updatedAt:new Date().toISOString()});
+    const wasApproved = (ex.status==='approved' || ex.status==='contingent-approved' || ex.status==='invoiced');
+    const patch = {...ex, source:src, scope:noteTxt, external:true, preProcessingTotal:amount, paymentProcessingFee:0, quoteTotal:amount, updatedAt:new Date().toISOString()};
+    if (isPending) {
+      if (ex.status !== 'invoiced') { patch.status='delivered'; patch.customerActionAt=null; patch.customerActionAction=null; patch.customerActionSource=null; }
+    } else if (!wasApproved) {
+      patch.status='approved';
+      patch.customerActionAt=new Date().toISOString(); patch.customerActionAction='accepted'; patch.customerActionSource='external-manual';
+    }
+    upsertQuote(patch);
     closeDrawer();
-    if(getLead(leadId)?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, amount, quoteId);
+    const _lead=getLead(leadId);
+    if (isPending && _lead?.acceptedQuoteId===quoteId && ex.status!=='invoiced') {
+      // No longer the accepted quote — un-mark it (Job Value left as-is).
+      try{ upsertLead({..._lead, acceptedQuoteId:null}); }catch(_){}
+    } else if (!isPending) {
+      if (_lead?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, amount, quoteId);
+      else if (!wasApproved) { try{ acceptJobQuote(leadId, quoteId); }catch(_){} }
+    }
     renderJobDetail(leadId);
-    toast('Outside quote updated','success');
+    toast(isPending?'Outside quote saved — pending platform approval':'Outside quote updated','success');
     return;
   }
   const qid='qt-ext-'+Date.now();
   upsertQuote({
     id:qid, leadId, customerId:lead.customerId||'', source:src, jobType:lead.jobType||'',
-    external:true, status:'approved',
+    external:true, status:(isPending?'delivered':'approved'),
     preProcessingTotal:amount, paymentProcessingFee:0, quoteTotal:amount,
     scope:noteTxt, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
-    customerActionAt:new Date().toISOString(), customerActionAction:'accepted', customerActionSource:'external-manual'
+    ...(isPending ? {} : { customerActionAt:new Date().toISOString(), customerActionAction:'accepted', customerActionSource:'external-manual' })
   });
   closeDrawer();
-  try{ acceptJobQuote(leadId, qid); }catch(_){ renderJobDetail(leadId); }
-  toast('Outside quote recorded — Job Value set','success');
+  if (isPending) {
+    renderJobDetail(leadId);
+    toast('Outside quote recorded — pending platform approval. Edit it and mark Approved once the platform signs off.','success');
+  } else {
+    try{ acceptJobQuote(leadId, qid); }catch(_){ renderJobDetail(leadId); }
+    toast('Outside quote recorded — Job Value set','success');
+  }
 }
 
 // ── SPECIAL ORDER MATERIALS (tracker behind the Materials chip) ────────────
@@ -12680,7 +12726,7 @@ function renderJobDetail(id) {
       ${(q.label||'').trim()?`<span style="font-size:12px;font-weight:600;color:var(--text-primary);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(q.label.trim())}">${escHtml(q.label.trim())}</span>`:''}
       <span style="font-size:11.5px;color:var(--text-muted)" title="${escHtml(fullTs)}">${created}</span>
       ${latestChip}
-      ${quoteStatusChip(q.status)}
+      ${quoteStatusChip(q.status, q)}
       <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto" title="No-fee (cash) price — card adds 3%.">${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))}</span>
       <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openQuoteBuilder('${q.id}')">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 2l3 3-8 8H3v-3L11 2z"/></svg>
