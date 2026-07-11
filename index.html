@@ -4963,7 +4963,7 @@ function _confirmAndDeleteQuote(quoteId, leadId, fromBuilder) {
     return;
   }
   const lbl = (q.label||'').trim();
-  if (!confirm(`Delete quote ${quoteId}${lbl ? ' — "'+lbl+'"' : ''} (${fmt$(q.quoteTotal)})?\n\nIts saved quote PDFs are removed from Documents and the customer's SharePoint folder too (recoverable ~93 days from the SharePoint recycle bin). The job and customer records are not affected.`)) return;
+  if (!confirm(`Delete quote ${quoteId}${lbl ? ' — "'+lbl+'"' : ''} (${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))})?\n\nIts saved quote PDFs are removed from Documents and the customer's SharePoint folder too (recoverable ~93 days from the SharePoint recycle bin). The job and customer records are not affected.`)) return;
   const effLeadId = leadId || q.leadId;
   // Tombstone in the raw store (NOT a hard remove — sync-safe).
   const raw = _getQuotesRaw();
@@ -5313,7 +5313,7 @@ function renderQuotesPage(){
       <td style="font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td>
       <td><span class="chip chip-blue">${q.type==='quick'?'Quick':'Detailed'}</span></td>
       <td>${quoteStatusChip(q.status)}</td>
-      <td style="font-family:var(--mono)">${fmt$(q.quoteTotal)}</td>
+      <td style="font-family:var(--mono)" title="No-fee (cash) price — what the customer sees as TOTAL. Card adds 3%.">${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))}</td>
       <td style="font-size:12px;color:var(--text-muted)">${q.createdAt?q.createdAt.slice(0,10):'—'}</td>
       <td><button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="event.stopPropagation();previewQuotePDF('${q.id}')">PDF</button></td>
     </tr>`;
@@ -5391,7 +5391,7 @@ function startQuoteBuilder(){
     .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (existingDrafts.length) {
     const list = existingDrafts.map(q =>
-      `  • ${q.id} — ${fmt$(q.quoteTotal)} (${q.type === 'detailed' ? 'Detailed' : 'Quick'})`
+      `  • ${q.id} — ${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))} (${q.type === 'detailed' ? 'Detailed' : 'Quick'})`
     ).join('\n');
     const msg =
       `This customer already has ${existingDrafts.length} draft quote${existingDrafts.length === 1 ? '' : 's'}:\n\n` +
@@ -5633,16 +5633,16 @@ function renderQuoteBuilder(qid){
           if (!q.leadId || sibs.length < 2) return `<span style="flex-shrink:0">${q.id}</span>`;
           const opts = sibs.map(s => {
             const nm = (s.label||'').trim() || (getJobType(s.jobType)?.label || s.jobType || 'Quote');
-            const txt = `${nm} — $${Math.round(s.quoteTotal||0).toLocaleString()} · ${s.status||'draft'} · ${s.id}`;
+            const txt = `${nm} — $${Math.round((typeof _quoteNet==='function')?_quoteNet(s):(s.quoteTotal||0)).toLocaleString()} · ${s.status||'draft'} · ${s.id}`;
             return `<option value="${s.id}"${s.id===q.id?' selected':''}>${escHtml(txt)}</option>`;
           }).join('');
           return `<select onchange="openQuoteBuilder(this.value)" title="Switch between this job's quotes"
-            style="flex-shrink:0;max-width:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--text-primary);outline:none;cursor:pointer">${opts}</select>`;
+            style="flex:2;min-width:0;max-width:560px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;font-family:var(--font);font-size:12.5px;font-weight:600;color:var(--text-primary);outline:none;cursor:pointer">${opts}</select>`;
         })()}
-        <input type="text" id="qb-label" placeholder="Optional label — e.g. Option A: Level 2 in garage"
+        <input type="text" id="qb-label" placeholder="Optional label — e.g. Option A"
           value="${(q.label||'').replace(/"/g,'&quot;')}"
           onchange="updateQuoteLabel('${q.id}', this.value)"
-          style="flex:1;min-width:0;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-family:var(--font);font-size:12.5px;font-weight:500;color:var(--text-primary);outline:none" />
+          style="flex:1;min-width:130px;max-width:280px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-family:var(--font);font-size:12.5px;font-weight:500;color:var(--text-primary);outline:none" />
       </div>
       <span style="font-size:13px;color:var(--text-muted)">${custName}</span>
       ${lead?`<span class="chip chip-blue" style="font-size:11px">${lead.id}</span>`:''}
@@ -5826,7 +5826,30 @@ function renderQuickQuoteForm(q){
   const qq=q.qq||{};
   const isQmerit=q.source==='Qmerit';
   const lead=getLead(q.leadId);
+  const _evT=qq.evInstallType||'full';
+  // Install Type (2026-07-11, Jonathan): three real-world EV circumstances —
+  // full install (new circuit), charger swap (like-for-like $150 / different
+  // type $200), and add-charger-on-existing-circuit ($300, e.g. outlet → JB
+  // hardwire). Swap/existing skip the permit (auto-zeroed, editable) and
+  // ignore panel-location base pricing; run segments / difficulty / travel /
+  // extras still apply if needed. EV charger only — NEMA is always a circuit.
+  const _evTypeSection = (q.jobType==='ev-residential') ? `
+    <div class="qq-section">
+      <div class="qq-title">Install Type</div>
+      <div class="fg">
+        <select class="fsel" id="qq-evtype" onchange="onQQEVTypeChange('${q.id}')">
+          <option value="full"${_evT==='full'?' selected':''}>Full installation — new dedicated circuit</option>
+          <option value="swap-like"${_evT==='swap-like'?' selected':''}>Charger swap — like for like — $150</option>
+          <option value="swap-diff"${_evT==='swap-diff'?' selected':''}>Charger swap — different type — $200</option>
+          <option value="existing"${_evT==='existing'?' selected':''}>Add charger on existing circuit — $300</option>
+        </select>
+        ${_evT!=='full'?`<div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+          Uses the existing circuit — <strong>no permit</strong> (auto-zeroed below, still editable) and no base-install fee. The type price replaces Panel Location pricing. Travel, difficulty, run segments, and extras still add if needed. Override the base via "Base install override" in Adjustments.
+        </div>`:''}
+      </div>
+    </div>` : '';
   wrap.innerHTML=`
+    ${_evTypeSection}
     <div class="qq-section">
       <div class="qq-title">Panel Location</div>
       <div class="fg"><div class="fl">Panel Location</div>
@@ -6381,6 +6404,16 @@ function _renderQQ_DetailedRedirect(q) {
 }
 
 // ── QQ CALCULATIONS ──
+// EV install-type change: zero (or restore) the permit to match the type,
+// persist, then re-render the form so the type hint and pricing update.
+function onQQEVTypeChange(qid){
+  const t=document.getElementById('qq-evtype')?.value||'full';
+  const pEl=document.getElementById('qq-permit');
+  if(pEl) pEl.value = (t==='full') ? (defaultPermitFee(getQuote(qid))||200) : 0;
+  onQQChange(qid);
+  const nq=getQuote(qid);
+  if(nq && typeof renderQBForm==='function') renderQBForm(nq);
+}
 function onQQChange(qid){
   const q=getQuote(qid); if(!q) return;
   // Type-specific math handlers (route to specialized compute functions)
@@ -6413,13 +6446,16 @@ function onQQChange(qid){
   // Update travel calc display
   const tCalcEl=document.getElementById('qq-travel-calc');
   if(tCalcEl) tCalcEl.textContent='$'+travelAdder;
+  // EV install type (2026-07-11): full | swap-like | swap-diff | existing.
+  // Non-full types reuse an existing circuit — no permit, flat base price.
+  const evInstallType = document.getElementById('qq-evtype')?.value || q.qq?.evInstallType || 'full';
   const _jtQQ = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
-  // Saved $0 only honored for noPermit job types — a $0 permit on a
-  // permit-required job (panel swap, EV install) is always a data bug, so
-  // heal it back to the type default (2026-06-12).
-  const _qqPermitFallback = (typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (_jtQQ && _jtQQ.noPermit)))
+  // Saved $0 only honored for noPermit job types (and non-full EV install
+  // types) — a $0 permit on a permit-required job (panel swap, full EV
+  // install) is always a data bug, so heal it back to the type default.
+  const _qqPermitFallback = (typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (_jtQQ && _jtQQ.noPermit) || evInstallType !== 'full'))
     ? q.permitFee
-    : defaultPermitFee(q);
+    : (evInstallType !== 'full' ? 0 : defaultPermitFee(q));
   const permitFee=_readNum('qq-permit', _qqPermitFallback);
   // Editable overrides (empty string = use computed value)
   const installOverrideRaw = document.getElementById('qq-install-override')?.value;
@@ -6429,10 +6465,18 @@ function onQQChange(qid){
   const isVeteran          = !!document.getElementById('qq-veteran')?.checked;
   const runSegs=q.qq?.runSegs||[];
   const evWireId=document.getElementById('qq-wire')?.value||q.qq?.evWireId||'6cu';
+  const _evTypeBase = evInstallType==='swap-like' ? 150
+                    : evInstallType==='swap-diff' ? 200
+                    : evInstallType==='existing'  ? 300
+                    : (panelLoc==='garage'?p.garage:p.interior);
   const baseInstall = installOverride!=null && !isNaN(installOverride)
     ? installOverride
-    : (panelLoc==='garage'?p.garage:p.interior);
+    : _evTypeBase;
   let lm = baseInstall;
+  // Roll in additional tasks (HVAC circuits, EV swaps, etc.) — the HVAC and
+  // panel primaries already did this via _finalizeQQTotals; the EV branch
+  // rendered the section but never priced it (bug, fixed 2026-07-11).
+  lm += (typeof _additionalTasksLM === 'function') ? _additionalTasksLM(q) : 0;
   runSegs.forEach(seg=>{
     const ft=Math.max(parseInt(seg.ft)||0,0);
     if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') lm+=(ft/10)*p.addl10Surface;
@@ -6460,7 +6504,7 @@ function onQQChange(qid){
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
-    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
+    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
     permitFee,
     baseInstall,
     laborAndMaterials:lm,
@@ -6539,6 +6583,11 @@ function _calcAdditionalTaskLM(task) {
 function _calcAdditionalTaskCalculated(task) {
   if (!task) return 0;
   if (task.jobType === 'hvac-circuit') return _calcAdditionalTask_HVAC(task);
+  if (task.jobType === 'ev-swap')      return task.swapKind === 'different' ? 200 : 150;
+  if (task.jobType === 'ev-existing')  {
+    const brk = HVAC_BREAKER_OPTIONS.find(b => b.key === (task.breakerKey || 'none'));
+    return 300 + (brk ? brk.price : 0);
+  }
   return 0;
 }
 function _calcAdditionalTask_HVAC(task) {
@@ -6605,6 +6654,15 @@ function _additionalTaskScope(task) {
     const brkDesc = ampLabel ? ` protected by a new ${ampLabel} breaker installed in the existing panel` : '';
     return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the HVAC equipment disconnect${discDesc}${brkDesc}.`;
   }
+  if (task.jobType === 'ev-swap') {
+    const diff = task.swapKind === 'different';
+    return `Remove the existing EV charger and install the customer-supplied replacement charger${diff ? ' (different make/model, including any required connection adjustments)' : ''} in the same location on the existing dedicated circuit, with mounting, connection, and setup.`;
+  }
+  if (task.jobType === 'ev-existing') {
+    const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
+    const brkDesc = ampLabel ? `, including a new ${ampLabel} breaker in the existing panel` : '';
+    return `Install the customer-supplied EV charger at the location of the existing dedicated circuit, converting the existing outlet or connection to a hardwired junction-box termination (insulated lugs and liquidtight flex)${brkDesc}, with mounting, connection, and setup.`;
+  }
   return '';
 }
 
@@ -6622,14 +6680,74 @@ function _additionalTaskInclusions(task) {
     }
     return lines;
   }
+  if (task.jobType === 'ev-swap') {
+    return ['• Removal and disposal of the existing charger', '• Mounting, connection, and setup of the replacement charger'];
+  }
+  if (task.jobType === 'ev-existing') {
+    const lines = ['• Conversion of existing outlet/connection to hardwired junction box'];
+    const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
+    if (ampLabel) lines.push(`• New ${ampLabel} breaker installed in existing panel`);
+    lines.push('• Mounting, connection, and setup of the charger');
+    return lines;
+  }
   return [];
 }
 
-// Render compact form card for an additional task (HVAC variant for now)
+// Shared calculated/override/effective footer rows for additional-task cards.
+function _atPriceRows(qid, task, calculated, effective, overrideActive) {
+  return `<div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
+        <span style="color:var(--text-muted)">Calculated subtotal</span>
+        <span style="font-family:var(--mono);color:${overrideActive?'var(--text-muted)':'var(--green)'};${overrideActive?'text-decoration:line-through':'font-weight:600'}">${fmt$(calculated)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;gap:8px">
+        <span style="color:var(--text-muted);flex-shrink:0">Override subtotal ($)</span>
+        <input class="fi" type="number" min="0" step="0.01" placeholder="auto" value="${(task.amountOverride!=null&&task.amountOverride!=='')?task.amountOverride:''}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'amountOverride', this.value)" style="width:120px;text-align:right;font-family:var(--mono)">
+      </div>
+      ${overrideActive ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 2px 0;border-top:1px dashed var(--border);margin-top:4px">
+        <span style="font-weight:600">Effective subtotal</span>
+        <span style="font-family:var(--mono);color:var(--green);font-weight:600">${fmt$(effective)}</span>
+      </div>` : ''}
+    </div>`;
+}
+// Render compact form card for an additional task (dispatches by jobType).
 function _renderAdditionalTaskCard(qid, task, idx) {
   const calculated = _calcAdditionalTaskCalculated(task);
   const effective  = _calcAdditionalTaskLM(task);
   const overrideActive = (task.amountOverride != null && task.amountOverride !== '' && !isNaN(parseFloat(task.amountOverride)));
+  // EV charger swap — like-for-like or different type.
+  if (task.jobType === 'ev-swap') {
+    return `<div class="qq-row" id="addtask-card-${task.id}" style="flex-direction:column;align-items:stretch;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:13px;font-weight:600">Task ${idx + 2}: EV Charger Swap</div>
+        <button class="li-del" onclick="removeAdditionalTask('${qid}', '${task.id}')">×</button>
+      </div>
+      <div class="fg"><div class="fl">Swap Type</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'swapKind', this.value)">
+          <option value="like"${(task.swapKind||'like')==='like'?' selected':''}>Like for like — same make/model — $150</option>
+          <option value="different"${task.swapKind==='different'?' selected':''}>Different type — connection adjustments — $200</option>
+        </select>
+      </div>
+      ${_atPriceRows(qid, task, calculated, effective, overrideActive)}
+    </div>`;
+  }
+  // EV charger on an existing circuit (outlet → hardwired JB, breaker as needed).
+  if (task.jobType === 'ev-existing') {
+    return `<div class="qq-row" id="addtask-card-${task.id}" style="flex-direction:column;align-items:stretch;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:13px;font-weight:600">Task ${idx + 2}: EV Charger — Existing Circuit</div>
+        <button class="li-del" onclick="removeAdditionalTask('${qid}', '${task.id}')">×</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--text-muted);line-height:1.45">$300 base — converts the existing outlet/connection to a hardwired junction box (lugs + liquidtight), mounts and sets up the charger. Add a breaker if the existing one needs to change; use the override for difficult chargers.</div>
+      <div class="fg"><div class="fl">Breaker Change</div>
+        <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'breakerKey', this.value)">
+          ${HVAC_BREAKER_OPTIONS.map(opt => `<option value="${opt.key}"${(task.breakerKey || 'none') === opt.key ? ' selected' : ''}>${opt.label}${opt.price > 0 ? ` (+$${opt.price})` : ''}</option>`).join('')}
+        </select>
+      </div>
+      ${_atPriceRows(qid, task, calculated, effective, overrideActive)}
+    </div>`;
+  }
   const wireOptions = (typeof HVAC_WIRE_OPTIONS !== 'undefined') ? HVAC_WIRE_OPTIONS : [
     {id:'m-001', label:'10/2 NM-B (30 A)'},
     {id:'m-026', label:'6/2 NM-B (50-60 A)'},
@@ -6696,17 +6814,27 @@ function _renderAdditionalTaskCard(qid, task, idx) {
 function _renderAdditionalTasksSection(q) {
   const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks : [];
   return `<div class="qq-section">
-    <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between">
+    <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap">
       Additional Tasks
-      <button class="li-add" onclick="addAdditionalTask_HVAC('${q.id}')" style="padding:5px 12px;font-size:12px">
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
-        Circuit
-      </button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="li-add" onclick="addAdditionalTask_HVAC('${q.id}')" style="padding:5px 12px;font-size:12px" title="Additional HVAC circuit">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+          Circuit
+        </button>
+        <button class="li-add" onclick="addAdditionalTask_EVSwap('${q.id}')" style="padding:5px 12px;font-size:12px" title="Swap an existing charger for a new one ($150 like-for-like / $200 different type)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+          Charger Swap
+        </button>
+        <button class="li-add" onclick="addAdditionalTask_EVExisting('${q.id}')" style="padding:5px 12px;font-size:12px" title="Install a charger where a circuit already exists — outlet → hardwired JB ($300)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+          Charger, Existing Circuit
+        </button>
+      </div>
     </div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
       Add additional circuits or work that should be quoted alongside the primary task. Pricing for additional tasks excludes base install and permit (those are already covered by the primary task) — the customer gets a fair discount vs. quoting separately.
     </div>
-    ${tasks.length ? tasks.map((t, i) => _renderAdditionalTaskCard(q.id, t, i)).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No additional tasks. Click "+ Circuit" above to add one.</div>`}
+    ${tasks.length ? tasks.map((t, i) => _renderAdditionalTaskCard(q.id, t, i)).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No additional tasks. Use the buttons above to add one.</div>`}
   </div>`;
 }
 
@@ -6731,6 +6859,32 @@ function addAdditionalTask_HVAC(qid) {
   // invisible — the form would need a full re-render to show the card.)
   if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
   // Recompute primary totals so combined L&M reflects the new task
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+// EV charger swap additional task ($150 like-for-like / $200 different type).
+function addAdditionalTask_EVSwap(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks.slice() : [];
+  tasks.push({
+    id: 'at-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    jobType: 'ev-swap',
+    swapKind: 'like'
+  });
+  upsertQuote({ ...q, additionalTasks: tasks });
+  if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+// EV charger on an existing circuit ($300 base + optional breaker change).
+function addAdditionalTask_EVExisting(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks.slice() : [];
+  tasks.push({
+    id: 'at-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    jobType: 'ev-existing',
+    breakerKey: 'none'
+  });
+  upsertQuote({ ...q, additionalTasks: tasks });
+  if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
   if (typeof onQQChange === 'function') onQQChange(qid);
 }
 // Update a single field on an additional task
@@ -7321,6 +7475,14 @@ function _autoScopePrimary(q){
     return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
   }
 
+  // EV Charger — swap / existing-circuit install types (2026-07-11)
+  if (q.jobType === 'ev-residential' && (qq.evInstallType==='swap-like' || qq.evInstallType==='swap-diff')) {
+    const diff = qq.evInstallType==='swap-diff';
+    return `Remove the existing EV charger and install the customer-supplied replacement charger${diff ? ' (different make/model)' : ''} in the same location on the existing dedicated circuit. Work includes demounting and disposal of the old unit${diff ? ', any required connection adjustments' : ''}, and mounting, connection, and setup of the new charger. All work is performed to NEC and local code. No permit is required — this is a replacement on an existing, previously inspected circuit.`;
+  }
+  if (q.jobType === 'ev-residential' && qq.evInstallType==='existing') {
+    return `Install the customer-supplied EV charger at the location of the existing dedicated circuit. Work includes converting the existing outlet or connection to a hardwired junction-box termination (insulated lugs and liquidtight flex), verifying or replacing the branch breaker as required, and mounting, connection, and setup of the charger. All work is performed to NEC and local code. No permit is required for this connection change on an existing circuit.`;
+  }
   // Default: EV Charger
   const mount = qq.mountType==='post' ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.' : '';
   const wireOpt = _evnemaWire(qq);
@@ -7331,8 +7493,11 @@ function _autoScopePrimary(q){
 function autoInclusions(q){
   const lines = ['• All labor and materials','• Cleanup and job site restoration'];
   // Permit-required types include "Permit application and inspection coordination"
+  // — except EV swap / existing-circuit install types, which need no permit.
   const t = getJobType(q.jobType);
-  if (!t || !t.noPermit) lines.splice(1, 0, '• Permit application and inspection coordination');
+  const _evTInc = q.qq?.evInstallType || 'full';
+  const _evNoPermit = q.jobType === 'ev-residential' && _evTInc !== 'full';
+  if ((!t || !t.noPermit) && !_evNoPermit) lines.splice(1, 0, '• Permit application and inspection coordination');
   if (q.source === 'Qmerit') lines.push('• Platform coordination and documentation');
   if (q.jobType === 'ev-residential') lines.push('• Setup and product training');
   if ((q.qq?.extras||[]).find(e => e.id==='emporia')) lines.push('• Emporia Vue energy monitor installation');
@@ -11261,7 +11426,7 @@ function _renderJobRail(lead){
     const qDate = q.createdAt ? new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
     const titleTxt = q.external
       ? `Outside / fixed-price quote (${escHtml(q.source||'external')}) — no 3% fee; counts as revenue. Click to edit.`
-      : `Net of the 3% service fee — this is what counts as revenue. Customer is quoted $${Math.round(q.quoteTotal||0).toLocaleString()} (fee included).`;
+      : `No-fee (cash/Zelle) price — what the customer sees as TOTAL and what counts as revenue. Card payment adds 3% ($${Math.round(q.quoteTotal||0).toLocaleString()}).`;
     const openAction = q.external ? `openExternalQuote('${id}','${q.id}')` : `openQuoteBuilder('${q.id}')`;
     const qLbl = (q.label||'').trim();
     // With multi-option emails, make accepted-vs-open readable at a glance:
@@ -12477,7 +12642,7 @@ function renderJobDetail(id) {
       <span style="font-size:11.5px;color:var(--text-muted)" title="${escHtml(fullTs)}">${created}</span>
       ${latestChip}
       ${quoteStatusChip(q.status)}
-      <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto">${fmt$(q.quoteTotal)}</span>
+      <span style="font-family:var(--mono);font-size:13px;color:var(--green);margin-left:auto" title="No-fee (cash) price — card adds 3%.">${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))}</span>
       <button class="btn btn-p" style="padding:4px 12px;font-size:12px" onclick="openQuoteBuilder('${q.id}')">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 2l3 3-8 8H3v-3L11 2z"/></svg>
         Edit
