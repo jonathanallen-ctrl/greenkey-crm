@@ -6503,10 +6503,10 @@ function onQQChange(qid){
   const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=Math.round(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars
+  const preProcessingTotal=Math.ceil(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100);
+  const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
@@ -6645,12 +6645,12 @@ function _scopeBreakdownRows(q, combinedLM) {
   if (!tasks.length) return null;
   const taskRows = tasks.map((t, i) => ({
     desc: `Scope ${i + 2} — ${_additionalTaskLabel(t)}`,
-    amt: Math.round(_calcAdditionalTaskLM(t))
+    amt: Math.ceil(_calcAdditionalTaskLM(t))
   }));
   const tasksSum = taskRows.reduce((s, r) => s + r.amt, 0);
   const jt = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
   return [
-    { desc: `Scope 1 — ${jt ? jt.label : 'Primary installation'}`, amt: Math.round(combinedLM) - tasksSum },
+    { desc: `Scope 1 — ${jt ? jt.label : 'Primary installation'}`, amt: Math.ceil(combinedLM) - tasksSum },
     ...taskRows
   ];
 }
@@ -6994,10 +6994,10 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const lmAfterDiscount = lm - veteranDiscount;
   let qmeritFee = 0;
   if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lmAfterDiscount * p.qmeritPct);
-  const preProcessingTotal = Math.round(lmAfterDiscount + qmeritFee + permitFee);  // whole dollars
+  const preProcessingTotal = Math.ceil(lmAfterDiscount + qmeritFee + permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
   const paymentBuffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee = Math.round(preProcessingTotal * paymentBuffer / 100);
+  const paymentProcessingFee = Math.ceil(preProcessingTotal * paymentBuffer / 100);
   const quoteTotal = preProcessingTotal + paymentProcessingFee;
   upsertQuote({
     ...q,
@@ -8065,10 +8065,10 @@ function onDQChange(qid){
   const lmAfterDiscount=lm-veteranDiscount;
   let qmeritFee=0;
   if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=Math.round(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars
+  const preProcessingTotal=Math.ceil(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.round(preProcessingTotal*paymentBuffer/100);
+  const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
@@ -8117,27 +8117,29 @@ function calcQuoteTotals(q){
   // only the total was rounded, leaving cents on the line items (e.g. $2,689.57
   // + $200 that read as $2,890). Display/aggregate only — stored quote fields
   // and margin math are unaffected.
-  const rMat    = Math.round(q.matSubtotal||0);
-  const rAllow  = Math.round(q.matAllowance||0);
-  const rLabor  = Math.round(q.laborTotal||0);
-  const rRental = Math.round(q.rentalTotal||0);
-  const rVet    = Math.round(q.veteranDiscount||0);
-  const rQmerit = Math.round(q.qmeritFee||0);
-  const rPermit = Math.round(q.permitFee||0);
+  // Always round UP (Sherri, 2026-07-11) — except the DISCOUNT, which rounds
+  // DOWN: rounding a discount up would give money away.
+  const rMat    = Math.ceil(q.matSubtotal||0);
+  const rAllow  = Math.ceil(q.matAllowance||0);
+  const rLabor  = Math.ceil(q.laborTotal||0);
+  const rRental = Math.ceil(q.rentalTotal||0);
+  const rVet    = Math.floor(q.veteranDiscount||0);
+  const rQmerit = Math.ceil(q.qmeritFee||0);
+  const rPermit = Math.ceil(q.permitFee||0);
   // For detailed quotes L&M is the sum of its shown parts (so the breakdown
   // reconciles to the subtotal line); for quick quotes it's the pre-engineered
   // value. Round either way.
   const _partsSum = rMat + rAllow + rLabor + rRental;
-  const rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.round(q.laborAndMaterials||0);
+  const rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.ceil(q.laborAndMaterials||0);
   const lmAfterDiscount = rLM - rVet;
   const preProcessingTotal = lmAfterDiscount + rQmerit + rPermit;  // whole dollars, reconciles with the shown lines
   const _round2 = (x) => Math.round(x * 100) / 100;
   // Per-tier processing fees — each computed independently from the base, so
   // the math is exact (avoids the "discount-off-discounted-price" rounding
   // weirdness of the old non-card-discount model).
-  const ccFee   = Math.round(preProcessingTotal * ccBufferPct  / 100);
-  const achFee  = Math.round(preProcessingTotal * achBufferPct / 100);
-  const cashFee = Math.round(preProcessingTotal * cashBufferPct/ 100);
+  const ccFee   = Math.ceil(preProcessingTotal * ccBufferPct  / 100);
+  const achFee  = Math.ceil(preProcessingTotal * achBufferPct / 100);
+  const cashFee = Math.ceil(preProcessingTotal * cashBufferPct/ 100);
   const ccTotal   = preProcessingTotal + ccFee;
   const achTotal  = preProcessingTotal + achFee;
   const cashTotal = preProcessingTotal + cashFee;
@@ -24183,7 +24185,7 @@ function _renderAIDraftResult(draft) {
   resultPane.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
       <div style="background:var(--green-dim);color:var(--green);border:1px solid var(--green);border-radius:999px;padding:3px 12px;font-size:11px;font-weight:600;letter-spacing:0.3px">${jobTypeLabel.toUpperCase()}</div>
-      <div style="font-size:13px;color:var(--text-muted)">Estimated total: <strong style="color:var(--green);font-family:var(--mono)">${fmt$(total)}</strong> (L&amp;M ${fmt$(matsTotal+labor+rentalsTotal)} + permit ${fmt$(permit)})</div>
+      <div style="font-size:13px;color:var(--text-muted)">Estimated total: <strong style="color:var(--green);font-family:var(--mono)">${fmt$(Math.ceil(total))}</strong> (L&amp;M ${fmt$(Math.ceil(matsTotal+labor+rentalsTotal))} + permit ${fmt$(Math.ceil(permit))})</div>
     </div>
     ${scopeRewriteHtml}
     <div style="margin-top:14px">
