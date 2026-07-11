@@ -7037,7 +7037,17 @@ function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWi
 // wire in conduit through a trench." gauge '' (HVAC) omits the conductor spec
 // since the wire is named in the opener. Conductor type follows the method:
 // concealed runs (crawl/attic) use SEU cable, conduit runs use THHN/THWN-2.
-function _runRoutingSentence(segs, gauge, metal){
+// Describe the wire run for the scope text. Returns { inline, sentence }:
+//   inline   — appended INSIDE the "a total run of approximately N ft…"
+//              clause (single-segment runs), e.g.
+//              " of #6 THHN/THWN-2 (Cu) wire in surface-mounted conduit"
+//   sentence — a separate follow-on sentence (multi-segment runs only)
+// The included panel-side footage (includedFt, normally 5) is folded into
+// the FIRST leg so every number the customer reads adds up to the stated
+// total — previously this sentence described only the ADDED footage, so a
+// 15 ft total showed a "10 ft" route and looked both wrong and redundant
+// (Jonathan, 2026-07-11).
+function _runRoutingSentence(segs, gauge, metal, includedFt){
   const m = metal || 'Cu';
   const PHRASE = {
     'crawl':'through the crawl space',
@@ -7050,13 +7060,21 @@ function _runRoutingSentence(segs, gauge, metal){
     'crawl':'SEU','attic':'SEU',
     'surface':'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2'
   };
-  const parts = (segs||[]).map(seg => {
-    const ft = parseInt(seg.ft)||0;
-    if (!ft || !PHRASE[seg.type]) return '';
-    const spec = gauge ? `of ${gauge} ${INSUL[seg.type]} (${m}) wire ` : '';
-    return `approximately ${ft} ft ${spec}${PHRASE[seg.type]}`;
-  }).filter(Boolean);
-  return parts.length ? ` The wire route is ${parts.join(', then ')}.` : '';
+  const list = (segs||[])
+    .map(seg => ({ ft: parseInt(seg.ft)||0, type: seg.type }))
+    .filter(s => s.ft > 0 && PHRASE[s.type]);
+  if (!list.length) return { inline: '', sentence: '' };
+  list[0].ft += (includedFt || 0);
+  if (list.length === 1) {
+    const s = list[0];
+    const spec = gauge ? ` of ${gauge} ${INSUL[s.type]} (${m}) wire` : '';
+    return { inline: `${spec} ${PHRASE[s.type]}`, sentence: '' };
+  }
+  const parts = list.map(s => {
+    const spec = gauge ? ` (${gauge} ${INSUL[s.type]}, ${m})` : '';
+    return `approximately ${s.ft} ft ${PHRASE[s.type]}${spec}`;
+  });
+  return { inline: '', sentence: ` The route runs ${parts.join(', then ')}.` };
 }
 function _autoScopePrimary(q){
   const qq = q.qq || {};
@@ -7081,8 +7099,8 @@ function _autoScopePrimary(q){
     const discDesc = disc === 'fused' ? ' with a fused disconnect at the unit'
                     : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
                     : '';
-    const routing = _runRoutingSentence(segs, '');
-    return `Furnish and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel in the ${loc} to the HVAC equipment disconnect${discDesc}, a total run of approximately ${totalFt} ft.${routing} All work is performed to NEC and local code.`;
+    const routing = _runRoutingSentence(segs, '', '', 5);
+    return `Furnish and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel in the ${loc} to the HVAC equipment disconnect${discDesc}, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
   }
 
   // Circuit Replacement (no permit)
@@ -7139,15 +7157,15 @@ function _autoScopePrimary(q){
   if (q.jobType === 'nema-1450') {
     const outLoc = qq.nemaLocation==='outside' ? 'exterior' : 'interior';
     const wireOpt = _evnemaWire(qq);
-    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal);
-    return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft.${routing} All work is performed to NEC and local code.`;
+    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5);
+    return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
   }
 
   // Default: EV Charger
   const mount = qq.mountType==='post' ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.' : '';
   const wireOpt = _evnemaWire(qq);
-  const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal);
-  return `Furnish and install a dedicated 240-volt, 60-amp branch circuit from the main electrical panel in the ${loc} to the Level 2 EV charger location, a total run of approximately ${totalFt} ft.${routing} Work includes mounting, connection, and setup of the charger.${mount} All work is performed to NEC and local code.`;
+  const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5);
+  return `Furnish and install a dedicated 240-volt, 60-amp branch circuit from the main electrical panel in the ${loc} to the Level 2 EV charger location, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} Work includes mounting, connection, and setup of the charger.${mount} All work is performed to NEC and local code.`;
 }
 
 function autoInclusions(q){
@@ -13719,7 +13737,8 @@ async function notifyMentionCompletion(task) {
           leadId:      task.jobId || 'internal',
           to:          author.mobile,
           message:     smsBody,
-          templateKey: 'mention-complete'
+          templateKey: 'mention-complete',
+          customerName: author.name || ''   // teammate's name, so replies are labeled
         })
       });
       if (resp.ok) return; // delivered via SMS, we're done
@@ -13775,32 +13794,64 @@ const CUST_NOTIF_TYPES = new Set([
   'web-lead'
 ]);
 function isCustomerNotif(n) { return !!(n && CUST_NOTIF_TYPES.has(n.type)); }
+// PER-USER ACKNOWLEDGMENT (2026-07-11). Customer notifications are shared
+// (same synced store on every machine), but acknowledging is now PER PERSON:
+// each ack only adds the acker to the record's `ackedBy` map — it never flips
+// the shared `status`. So when Jonathan dismisses a text, it still sits in
+// Sherri's bell (with a "✓ Handled by Jonathan" tag) until SHE dismisses it,
+// and vice versa. Works for any number of users — each new teammate's id gets
+// its own slot in `ackedBy`. Legacy records with status 'acknowledged'
+// (cleared before this change) stay hidden for everyone.
+function _notifAckedByMe(n) {
+  const uid = S.user?.id || '';
+  return !!(uid && n && n.ackedBy && n.ackedBy[uid]);
+}
+// New users shouldn't inherit months of old pending notices: hide anything
+// that predates their first sign-in (users created before this feature have
+// no firstSeenAt and see everything, i.e. behavior unchanged for Jon/Sherri).
+function _notifVisibleToMe(n) {
+  const me = (typeof getUsers === 'function' ? getUsers() : []).find(u => u.id === (S.user?.id||''));
+  if (!me || !me.firstSeenAt) return true;
+  return (n.at || n.createdAt || '') >= me.firstSeenAt;
+}
 function getPendingCustomerNotifs() {
   return getNotifications()
-    .filter(n => isCustomerNotif(n) && n.status === 'pending')
+    .filter(n => isCustomerNotif(n) && n.status === 'pending' && !_notifAckedByMe(n) && _notifVisibleToMe(n))
     .sort((a,b)=>(b.at||b.createdAt||'').localeCompare(a.at||a.createdAt||''));
 }
-// Acknowledge a single customer notification (clears it from the bell count).
+// Acknowledge a single notification. Customer notifications: per-user (see
+// above). Non-customer (Admin Queue) notifications keep the legacy shared
+// behavior — approving a field revision resolves it for the whole team.
 function acknowledgeNotif(id) {
   const arr = getNotifications();
   const idx = arr.findIndex(n=>n.id===id);
   if (idx<0) return;
-  arr[idx].status = 'acknowledged';
-  arr[idx].resolvedAt = new Date().toISOString();
-  arr[idx].resolvedBy = S.user?.id || '';
-  arr[idx].updatedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  const n = arr[idx];
+  if (isCustomerNotif(n)) {
+    const uid = S.user?.id || 'unknown';
+    n.ackedBy = { ...(n.ackedBy||{}), [uid]: { at: now, name: S.user?.name || '' } };
+  } else {
+    n.status = 'acknowledged';
+    n.resolvedAt = now;
+    n.resolvedBy = S.user?.id || '';
+  }
+  n.updatedAt = now;
   saveNotifications(arr);
   updateNotifBadge();
   if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
 }
-// Acknowledge every pending customer notification at once.
+// Acknowledge every customer notification pending FOR ME at once (per-user:
+// doesn't clear anyone else's bell).
 function acknowledgeAllNotifs() {
   const arr = getNotifications();
   const now = new Date().toISOString();
+  const uid = S.user?.id || 'unknown';
   let changed = 0;
   arr.forEach(n => {
-    if (isCustomerNotif(n) && n.status === 'pending') {
-      n.status = 'acknowledged'; n.resolvedAt = now; n.resolvedBy = S.user?.id || ''; n.updatedAt = now; changed++;
+    if (isCustomerNotif(n) && n.status === 'pending' && !_notifAckedByMe(n)) {
+      n.ackedBy = { ...(n.ackedBy||{}), [uid]: { at: now, name: S.user?.name || '' } };
+      n.updatedAt = now; changed++;
     }
   });
   if (changed) { saveNotifications(arr); updateNotifBadge(); if (typeof _bellRefreshUI==='function') _bellRefreshUI(); }
@@ -15213,10 +15264,10 @@ async function sendInspectorSMS(btn){
     const token=await _acquireSMSToken();
     const send=async(payload)=>{ const r=await fetch(base+'/sms/send',{ method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body:JSON.stringify(payload) }); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error((d&&(d.error||d.message))||('send '+r.status)); return d; };
     // 1) Text first, on its own, so it never goes down with a failing photo.
-    if(body){ try{ await send({ leadId:key, to:insp.phone, message:body }); sent++; }catch(e){ failed++; console.warn('[GK] inspector text failed:',e); } }
+    if(body){ try{ await send({ leadId:key, to:insp.phone, message:body, customerName:(insp.name||'')+' (inspector)' }); sent++; }catch(e){ failed++; console.warn('[GK] inspector text failed:',e); } }
     // 2) Each photo: resize + re-host (small) then send, spaced out to avoid carrier filtering.
     for(let i=0;i<photos.length;i++){
-      try{ const mediaUrl=await _inspMediaUrl(photos[i], token); await send({ leadId:key, to:insp.phone, message:'', mediaUrl }); sent++; }
+      try{ const mediaUrl=await _inspMediaUrl(photos[i], token); await send({ leadId:key, to:insp.phone, message:'', mediaUrl, customerName:(insp.name||'')+' (inspector)' }); sent++; }
       catch(e){ failed++; console.warn('[GK] inspector photo failed:',(photos[i]&&photos[i].name),e); }
       await new Promise(r=>setTimeout(r,400));
     }
@@ -19299,8 +19350,10 @@ async function _onMSALSuccess(account) {
       };
     } else {
       // First-time sign-in — bootstrap Jon's known cell from handoff; others can self-set.
+      // firstSeenAt: new users only get bell notifications from this moment on
+      // (see _notifVisibleToMe) — no backlog flood on day one.
       const bootstrapMobile = (stableId === 'u-jon') ? '+18043105368' : '';
-      users.push({ ...user, mobile: bootstrapMobile });
+      users.push({ ...user, mobile: bootstrapMobile, firstSeenAt: new Date().toISOString() });
     }
     saveUsers(users);
     // Mirror the mobile onto the in-memory S.user so @mention SMS has it immediately.
@@ -19467,8 +19520,18 @@ function _mergeArrayByIdAndTs(localArr, remoteArr) {
     }
     const lTs = (existing.updatedAt || existing.createdAt || '');
     const rTs = (r.updatedAt || r.createdAt || '');
-    if (rTs > lTs) {
-      byId.set(r.id, r);
+    // Per-user notification acks (`ackedBy` map): UNION across both copies.
+    // Plain last-write-wins would let two people acknowledging near-
+    // simultaneously drop each other's ack (whole record replaced). Union
+    // keys instead — an ack, once made, survives any merge direction.
+    const rHasNewAcks = r.ackedBy && Object.keys(r.ackedBy).some(k => !(existing.ackedBy||{})[k]);
+    if (rTs > lTs || rHasNewAcks) {
+      const winner = rTs > lTs ? r : existing;
+      const loser  = rTs > lTs ? existing : r;
+      const rec = (existing.ackedBy || r.ackedBy)
+        ? { ...winner, ackedBy: { ...(loser.ackedBy||{}), ...(winner.ackedBy||{}) } }
+        : winner;
+      byId.set(r.id, rec);
       remoteUpdated++;
     }
   }
@@ -21418,8 +21481,9 @@ async function _bellPollOnce() {
     if (_bellRecentCache.length > BELL_RECENT_CAP) _bellRecentCache.length = BELL_RECENT_CAP;
     // PERSIST each inbound text into the synced notifications store so it stays
     // in the bell until acknowledged (survives reloads, visible to the team).
-    // upsert preserves an already-acknowledged status, so this won't resurrect
-    // messages someone already cleared.
+    // upsert preserves existing status AND the per-user `ackedBy` map (the
+    // incoming data has neither field), so re-polling the same message won't
+    // resurrect it for anyone who already dismissed it.
     fresh.forEach(m => {
       if (m && (m.direction === 'outbound')) return;  // only inbound
       try {
@@ -21464,16 +21528,31 @@ function _activityGetSince() {
 }
 function _activitySetSince(iso) { try { localStorage.setItem(ACTIVITY_LAST_KEY, iso); } catch(_){} }
 
+// Resolve a customer display name for an activity event: prefer the name the
+// worker sent (from the quote/scheduling record), else look it up locally.
+function _activityCustName(ev, leadIdMaybe) {
+  if (ev && ev.customerName) return ev.customerName;
+  try {
+    const lead = leadIdMaybe && typeof getLead === 'function' ? getLead(leadIdMaybe) : null;
+    if (lead) {
+      const cust = lead.customerId && typeof getCustomer === 'function' ? getCustomer(lead.customerId) : null;
+      if (cust) return (typeof custFullName === 'function') ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim();
+      if (lead.customerName) return lead.customerName;
+    }
+  } catch(_){}
+  return '';
+}
 function _activityEventToNotif(ev) {
   if (!ev || !ev.type) return null;
   if (ev.type === 'scheduling') {
     const resched = ev.action === 'reschedule_requested';
     const dateStr = ev.proposedDate ? (' · ' + ev.proposedDate) : '';
+    const who = _activityCustName(ev, ev.leadId);
     return {
       id: 'cust-sched-' + (ev.id || (ev.leadId + '-' + ev.at)),
       type: resched ? 'cust-sched-reschedule' : 'cust-sched-confirmed',
-      title: resched ? 'Reschedule requested' : 'Appointment confirmed',
-      description: (resched ? 'Customer asked to reschedule' : 'Customer confirmed the appointment')
+      title: (resched ? 'Reschedule requested' : 'Appointment confirmed') + (who ? ' — ' + who : ''),
+      description: ((who || 'Customer') + (resched ? ' asked to reschedule' : ' confirmed the appointment'))
                    + dateStr + (ev.note ? (' — “' + ev.note + '”') : ''),
       jobId: ev.leadId || null,
       at: ev.at
@@ -21482,11 +21561,13 @@ function _activityEventToNotif(ev) {
   if (ev.type === 'quote') {
     const declined = ev.action === 'declined';
     const lead = (ev.quoteId && typeof getQuote === 'function') ? getQuote(ev.quoteId) : null;
+    const who = _activityCustName(ev, lead && lead.leadId);
     return {
       id: 'cust-quote-' + (ev.id || (ev.quoteId + '-' + ev.at)),
       type: declined ? 'cust-quote-declined' : 'cust-quote-accepted',
-      title: declined ? 'Quote declined' : (ev.action === 'contingent_accepted' ? 'Quote accepted (contingent)' : 'Quote accepted'),
-      description: (declined ? 'Customer declined quote ' : 'Customer accepted quote ')
+      title: (declined ? 'Quote declined' : (ev.action === 'contingent_accepted' ? 'Quote accepted (contingent)' : 'Quote accepted'))
+             + (who ? ' — ' + who : ''),
+      description: ((who || 'Customer') + (declined ? ' declined quote ' : ' accepted quote '))
                    + (ev.quoteId || '') + (ev.note ? (' — “' + ev.note + '”') : ''),
       jobId: (lead && lead.leadId) || null,
       quoteId: ev.quoteId || null,
@@ -21928,11 +22009,19 @@ function _bellRenderList() {
     const meta = _bellTypeMeta(n.type);
     const when = _bellRelativeTime(n.at || n.createdAt);
     const hasJob = !!n.jobId;
+    // If a teammate already acknowledged this, say so — the item still needs
+    // MY ack to leave MY bell, but I can see the outcome ("Handled by …").
+    const myId = S.user?.id || '';
+    const handledBy = Object.entries(n.ackedBy||{})
+      .filter(([uid]) => uid !== myId)
+      .map(([,v]) => (v && v.name) || '').filter(Boolean);
+    const handledTag = handledBy.length
+      ? `<div style="font-size:10.5px;color:var(--green);margin-top:4px">✓ Handled by ${escHtml(handledBy.join(', '))}</div>` : '';
     return `<div style="padding:10px 12px;border-bottom:1px solid var(--border);border-left:3px solid ${meta.accent};cursor:pointer" onclick="_bellSelectNotif('${n.id}','${n.jobId||''}')" title="${hasJob?'Open job and mark acknowledged':'Mark acknowledged'}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0">
           <div style="font-size:12.5px;font-weight:600;color:var(--text-primary)">${meta.ico} ${escHtml(n.title||'')}</div>
-          <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4">${escHtml(n.description||'')}</div>
+          <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4">${escHtml(n.description||'')}</div>${handledTag}
         </div>
         <div style="font-size:10.5px;color:var(--text-muted);flex-shrink:0;white-space:nowrap">${when}</div>
       </div>
@@ -24295,7 +24384,10 @@ async function sendIntroSMS() {
         to:          phone,
         message,
         templateKey: _smsCurrentTemplateKey,
-        mediaUrl
+        mediaUrl,
+        // Lets the worker say WHO texted back in notification emails and
+        // owner-phone forwards (stored on phone_lead_map).
+        customerName: cust ? custFullName(cust) : (lead?.customerName || '')
       })
     });
     const data = await resp.json().catch(() => ({}));
