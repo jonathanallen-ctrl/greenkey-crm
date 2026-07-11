@@ -12856,7 +12856,26 @@ function renderJobDetail(id) {
     </div>
   </div>` : '';
 
+  // ── Customer's website form message (read-only, own section) ──
+  // 2026-07-11: the form's "anything else" text used to live only in
+  // lead.description, which the Scope textarea fell back to — editing scope
+  // made the customer's words disappear. New web leads store it in
+  // lead.webMessage; older web leads still carry it in description. Either
+  // way it now renders as its own permanent read-only block.
+  const _webMsg = String(lead.webMessage || (lead.source === 'Website' ? (lead.description || '') : '')).trim();
+  const _webMsgD = lead.webSubmittedAt ? new Date(lead.webSubmittedAt) : null;
+  const _webMsgWhen = (_webMsgD && !isNaN(_webMsgD)) ? ' · ' + _webMsgD.toLocaleString() : '';
+  const webMsgSec = _webMsg ? `<div class="jd-sec">
+    <div class="jd-sh"><div class="jd-st">🌐 Customer's Form Message</div></div>
+    <div class="jd-sb">
+      <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;background:#f6f9f6;border:1px solid #dfe6df;border-radius:8px;padding:12px 14px">${_webMsg.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Submitted with the website form${_webMsgWhen} — kept separate from Scope of Work so it can't be edited away.</div>
+    </div>
+  </div>` : '';
+
   // ── Scope of Work ──
+  // Website leads: do NOT fall back to description (that's the customer's
+  // form message, shown in its own block above). Other sources unchanged.
   const scopeSec = `<div class="jd-sec">
     <div class="jd-sh">
       <div class="jd-st">Scope of Work</div>
@@ -12866,7 +12885,7 @@ function renderJobDetail(id) {
       </button>
     </div>
     <div class="jd-sb">
-      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…" oninput="autoSaveScope('${id}')">${(lead.scopeOfWork||lead.description||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+      <textarea class="scope-ta" id="scope-ta-${id}" placeholder="Describe the full scope of work — used for quoting, permitting, materials, and field reference…" oninput="autoSaveScope('${id}')">${(lead.scopeOfWork||(lead.source==='Website' ? '' : lead.description)||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
     </div>
   </div>`;
 
@@ -13280,7 +13299,7 @@ function renderJobDetail(id) {
   // custActionBanner sits between the header and the two-column wrap so it
   // spans the full content width and is the first thing the user sees.
   dv.innerHTML = hdr + custActionBanner + `<div class="jd-wrap">
-    <div>${custSec}${smsSec}${statusSec}${notWonSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
+    <div>${custSec}${smsSec}${statusSec}${notWonSec}${webMsgSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${_renderJobRail(lead)}</div>
   </div>`;
 
@@ -13463,9 +13482,11 @@ function addFileRecord(jobId, category, subFolder, file, dataUrl) {
   // are now surfaced to the user — previously they were silent, which led
   // to "Cannot display" on other devices with no explanation.
   if (_gToken && _spDrive) {
-    _uploadPhotoToSP(jobId, category, file, dataUrl).then(url => {
-      if (url) {
-        rec.spUrl = url;
+    _uploadPhotoToSP(jobId, category, file, dataUrl).then(r => {
+      if (r && r.webUrl) {
+        rec.spUrl = r.webUrl;
+        rec.spDriveItemId = r.id || rec.spDriveItemId || null;   // lets hydration recognize it (no dup)
+        rec.spName = r.name || rec.spName || null;                // SP-side filename (timestamp_sanitized)
         rec.spUploadFailedAt = null;     // clear any prior failure
         _idbPut(rec);
       } else {
@@ -21113,7 +21134,11 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
       }
       const result = await resp.json();
       console.log(`[GK] Photo uploaded (direct, ${(fileSize/1024).toFixed(0)} KB):`, result.webUrl);
-      return result.webUrl || null;
+      // Return id + SP-side name so callers can stamp them on the local
+      // record — without them, _hydratePhotosFromSP can't recognize the
+      // upload as "already local" (SP name = timestamp_sanitized) and
+      // creates a duplicate sp- record on this same device (2026-07-11 fix).
+      return result.webUrl ? { webUrl: result.webUrl, id: result.id || null, name: result.name || fname } : null;
     }
 
     // ── Upload session path (files >4 MB) ──
@@ -21172,7 +21197,7 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
       if (metaResp.ok) lastResult = await metaResp.json();
     }
     console.log(`[GK] Photo uploaded (session, ${(fileSize/1024/1024).toFixed(1)} MB):`, lastResult?.webUrl);
-    return lastResult?.webUrl || null;
+    return lastResult?.webUrl ? { webUrl: lastResult.webUrl, id: lastResult.id || null, name: lastResult.name || fname } : null;
   } catch(e) {
     console.warn('[GK] SP photo upload failed:', e);
     throw e;   // re-throw so callers can show user feedback
@@ -21228,12 +21253,25 @@ async function _hydratePhotosFromSP(jobId) {
     }
     await _walk(folder.id, jobId ? [jobId] : []);
 
-    // Build a fast lookup of existing local records by spDriveItemId AND by name+jobId
+    // Build a fast lookup of existing local records by spDriveItemId AND by name+jobId.
+    // ALSO by SP-side name: uploads rename the file in SharePoint
+    // (`${Date.now()}_${name with non-alphanumerics → _}`), so the plain
+    // name+jobId match NEVER hit for locally-uploaded photos — hydration then
+    // created a duplicate sp- record on the uploading device (found via the
+    // 2026-07-11 web-lead photo test; affected texted/dragged photos too).
+    // New records carry spName/spDriveItemId (stamped at upload); for legacy
+    // records we match by sanitized local name vs the SP name minus its
+    // timestamp prefix.
     const existingByDriveId = new Map();
     const existingByNameJob = new Map();
+    const existingByNormName = new Map();
     for (const f of _filesCache) {
       if (f.spDriveItemId) existingByDriveId.set(f.spDriveItemId, f);
-      if (f.name && f.jobId) existingByNameJob.set(f.jobId + '|' + f.name, f);
+      if (f.name && f.jobId) {
+        existingByNameJob.set(f.jobId + '|' + f.name, f);
+        existingByNormName.set(f.jobId + '|' + String(f.name).replace(/[^a-zA-Z0-9._-]/g, '_'), f);
+      }
+      if (f.spName && f.jobId) existingByNormName.set(f.jobId + '|' + f.spName, f);
     }
 
     // Signed download URLs from Graph expire ~1 hour after they're issued.
@@ -21294,9 +21332,15 @@ async function _hydratePhotosFromSP(jobId) {
 
       // Already represented locally? Refresh the downloadUrl if it's stale,
       // and repair the category if it's wrong.
-      const existing = existingByDriveId.get(item.id) || existingByNameJob.get(itemJobId + '|' + item.name);
+      const existing = existingByDriveId.get(item.id)
+        || existingByNameJob.get(itemJobId + '|' + item.name)
+        || existingByNormName.get(itemJobId + '|' + item.name)
+        || existingByNormName.get(itemJobId + '|' + String(item.name).replace(/^\d+_/, ''));
       if (existing) {
         let wroteAnything = false;
+        // Stamp the SP identity on first sight so future matches are exact.
+        if (!existing.spDriveItemId) { existing.spDriveItemId = item.id; wroteAnything = true; }
+        if (!existing.spName) { existing.spName = item.name; wroteAnything = true; }
         // Repair miscategorized records (the 2026-06-08 photo-category bug).
         if (existing.category !== category && !VALID_CATS.includes(existing.category)) {
           existing.category = category;
@@ -21642,9 +21686,11 @@ async function refreshPhotosFromSP(jobId) {
   let retried = 0;
   for (const f of failed) {
     try {
-      const url = await _uploadPhotoToSP(jobId, f.category, { name: f.name, type: f.mimeType, size: f.size }, f.dataUrl);
-      if (url) {
-        f.spUrl = url;
+      const r = await _uploadPhotoToSP(jobId, f.category, { name: f.name, type: f.mimeType, size: f.size }, f.dataUrl);
+      if (r && r.webUrl) {
+        f.spUrl = r.webUrl;
+        f.spDriveItemId = r.id || f.spDriveItemId || null;
+        f.spName = r.name || f.spName || null;
         f.spUploadFailedAt = null;
         f.spUploadError = null;
         try { await _idbPut(f); } catch(_) {}
@@ -22648,8 +22694,12 @@ function _importWebLead(row) {
   try { custom = row.custom_json ? JSON.parse(row.custom_json) : {}; } catch (_) {}
   let utm = null;
   try { utm = row.utm_json ? JSON.parse(row.utm_json) : null; } catch (_) {}
+  // 2026-07-11: the customer's message gets its OWN field (lead.webMessage,
+  // rendered as a read-only block on the job page) instead of riding in
+  // description — where the Scope textarea's fallback made it disappear the
+  // moment someone edited scope. description keeps only the structured
+  // extras (e.g. chargerDistance) which ARE scope-ish.
   const descBits = [];
-  if (row.message) descBits.push(row.message);
   const customText = Object.entries(custom).map(([k, v]) => k + ': ' + v).join(' · ');
   if (customText) descBits.push(customText);
 
@@ -22676,6 +22726,7 @@ function _importWebLead(row) {
       : undefined,
     inspectionRequired: !!j,
     webInboxId: row.id,
+    webMessage: row.message || '',     // customer's "anything else" text — own field, own job-page block
     webForm: row.source,               // which form: residential | commercial | contact
     webUtm: utm,
     webReferrer: row.referrer || '',
