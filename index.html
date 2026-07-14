@@ -1087,6 +1087,47 @@
 <!-- AI DRAFT MODAL — paste a scope of work, get an AI-drafted quote -->
 <!-- Two-pane layout: left side is the input (scope + context), right side fills with the result. -->
 <!-- Bound to a single quote at a time via _aiDraftQuoteId; closing reverts the modal back to input view. -->
+<!-- ═══════ AI LOAD CALCULATOR modal (NEC 220.83; photo-required chat intake) ═══════ -->
+<div class="moverlay" id="loadcalc-modal">
+  <div class="modal" style="max-width:760px;width:100%;max-height:92vh;display:flex;flex-direction:column">
+    <div class="mtitle" style="display:flex;align-items:center;gap:10px">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+      AI Load Calculator — NEC 220.83
+      <span id="lc-job-label" style="font-size:11px;color:var(--text-muted);font-weight:400"></span>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.5">
+      Snap the <strong>panel with the door open</strong> (main + breakers readable). The AI reads it, asks about anything unclear, then runs the calc. The photo and finished PDF both file to this job's Documents.
+    </div>
+
+    <div id="lc-photo-row" style="margin-bottom:10px">
+      <label id="lc-photo-drop" for="lc-photo-input" style="display:flex;align-items:center;gap:12px;border:1.5px dashed var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.6"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <div style="flex:1"><div style="font-weight:600;font-size:13px" id="lc-photo-title">Panel photo (required)</div>
+        <div style="font-size:11px;color:var(--text-muted)" id="lc-photo-sub">Tap to take or choose a photo — the calc can't start without one</div></div>
+        <img id="lc-photo-thumb" style="display:none;width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+      </label>
+      <input type="file" id="lc-photo-input" accept="image/*" capture="environment" style="display:none">
+    </div>
+
+    <div id="lc-thread" style="flex:1;overflow-y:auto;min-height:140px;max-height:44vh;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:12px;margin-bottom:10px">
+      <div style="font-size:12px;color:var(--text-muted)">Attach the panel photo, add anything you already know (charger amps, square footage, gas appliances…), and hit Send.</div>
+    </div>
+
+    <div id="lc-result" style="display:none;margin-bottom:10px"></div>
+    <div id="lc-error" style="display:none;background:rgba(201,74,58,.1);border:1px solid rgba(201,74,58,.4);border-radius:var(--r);padding:8px 12px;font-size:12px;margin-bottom:10px"></div>
+
+    <div style="display:flex;gap:8px;align-items:flex-end">
+      <textarea id="lc-input" placeholder="e.g. 48A charger, ~2,400 sq ft, gas range and gas water heater" rows="2"
+        style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.45"></textarea>
+      <button class="btn btn-p" id="lc-send-btn" onclick="sendLoadCalcMsg()" disabled title="Attach the panel photo first">Send</button>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-g" onclick="closeLoadCalcModal()">Close</button>
+      <button class="btn btn-p" id="lc-save-btn" onclick="saveLoadCalcToJob()" style="display:none">💾 Save PDF + photo to Documents</button>
+    </div>
+  </div>
+</div>
+
 <div class="moverlay" id="ai-draft-modal">
   <div class="modal" style="max-width:900px;width:100%;max-height:92vh;display:flex;flex-direction:column">
     <div class="mtitle" style="display:flex;align-items:center;gap:10px">
@@ -12678,6 +12719,7 @@ function renderJobDetail(id) {
         Schedule
       </button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
     </div>
   </div>`;
 
@@ -24020,6 +24062,357 @@ function startPipelineQuotePolling() {
       }
     }).catch(()=>{});
   }, 60_000);
+}
+
+// ═════════════════════════════════════════════════════════════
+// AI LOAD CALCULATOR — NEC 220.83(A), photo-required chat intake
+// ═════════════════════════════════════════════════════════════
+// Engine + PDF builder ported verbatim from loadcalc_draft/loadcalc.html
+// (GKLoadCalc IIFE — verified to reproduce GreenKey_EV_Load_Calc.xlsx:
+// 150A / 2,000 ft² / 40A → 105.7 A demand, PASS, #6 Cu). The modal posts an
+// Anthropic-format transcript (panel photo in the first user message) to the
+// Worker's /loadcalc/estimate; when Claude replies done:true the inputs feed
+// GKLoadCalc.calc → PASS/FAIL panel → Save files the PDF AND the panel photo
+// to the lead's Documents via addFileRecord (same pipeline as quote PDFs).
+const GKLoadCalc = (function () {
+  const DEFAULT_LOADS = [
+    { key:'lighting', label:'General lighting & receptacles', basis:'3 VA/ft² × floor area', va:0, dynamic:'lighting', on:true },
+    { key:'smallapp', label:'Small-appliance branch circuits', basis:'1,500 VA each', va:0, dynamic:'smallapp', on:true },
+    { key:'laundry',  label:'Laundry circuit', basis:'1,500 VA', va:1500, on:true },
+    { key:'wh',       label:'Water heater', basis:'nameplate (typ. 4.5 kW)', va:4500, on:true },
+    { key:'dryer',    label:'Clothes dryer', basis:'nameplate (min 5 kVA)', va:5000, on:true },
+    { key:'range',    label:'Range / oven', basis:'nameplate (typ. 12 kW)', va:12000, on:true },
+    { key:'dw',       label:'Dishwasher', basis:'nameplate', va:1200, on:true },
+    { key:'disp',     label:'Disposal', basis:'nameplate', va:900, on:true },
+    { key:'micro',    label:'Microwave', basis:'nameplate', va:1500, on:true },
+    { key:'fridge',   label:'Refrigerator', basis:'nameplate', va:700, on:true },
+    { key:'saw',      label:'Table saw (garage/shop)', basis:'nameplate', va:1500, on:true },
+    { key:'ac',       label:'Air conditioner (larger of A/C or heat)', basis:'nameplate', va:4000, on:true }
+  ];
+  const STD_BREAKERS = [15,20,30,40,50,60,70,80,90,100];
+  function defaultInputs(){return{project:'',preparedBy:'GreenKey',date:new Date().toISOString().slice(0,10),
+    service:150,voltage:240,area:2000,smallApp:2,evAmps:40,evVolts:240,loads:DEFAULT_LOADS.map(l=>({...l}))};}
+  function _resolveVa(l,inp){if(l.dynamic==='lighting')return 3*(+inp.area||0);if(l.dynamic==='smallapp')return 1500*(+inp.smallApp||0);return +l.va||0;}
+  function conductorFor(b){return b<=20?'#12 AWG':b<=30?'#10 AWG':b<=40?'#8 AWG':b<=50?'#6 AWG':b<=60?'#4 AWG':b<=90?'#3 AWG':'#1 AWG';}
+  function calc(inp){
+    const V=+inp.voltage||240;
+    const rows=inp.loads.filter(l=>l.on).map(l=>({label:l.label,basis:l.basis,va:_resolveVa(l,inp)}));
+    const existing=rows.reduce((a,r)=>a+r.va,0);
+    const evVA=(+inp.evAmps||0)*(+inp.evVolts||V);
+    const connected=existing+evVA;
+    const first8=Math.min(8000,connected), remainder=Math.max(0,connected-8000)*0.4;
+    const demandVA=first8+remainder, demandA=demandVA/V;
+    const service=+inp.service||0, pct=service?demandA/service*100:0, spare=service-demandA, pass=demandA<=service;
+    const mca=(+inp.evAmps||0)*1.25, breaker=STD_BREAKERS.find(s=>mca<=s)||110, conductor=conductorFor(breaker);
+    const scenario=a=>{const c=existing+a*(+inp.evVolts||V);const d=(Math.min(8000,c)+Math.max(0,c-8000)*0.4)/V;
+      const b=STD_BREAKERS.find(s=>a*1.25<=s)||110;return{amps:a,breaker:b,demandA:+d.toFixed(1),pct:service?+(d/service*100).toFixed(0):0,pass:d<=service};};
+    return{rows,existing,evVA,connected,first8,remainder,demandVA:Math.round(demandVA),demandA:+demandA.toFixed(1),
+      service,pct:+pct.toFixed(1),spare:+spare.toFixed(1),pass,mca:+mca.toFixed(1),breaker,conductor,
+      scenarios:[32,40,48].map(scenario),voltage:V,evAmps:+inp.evAmps||0,evVolts:+inp.evVolts||V};
+  }
+  function summaryText(r,inp){const svc=r.service,ev=r.evAmps;
+    if(r.pass)return `Good news — your existing ${svc}-amp electrical service has room for the ${ev}-amp EV charger. Under the NEC calculation your home's total demand comes to about ${Math.round(r.demandA)} amps, which is ${r.pct}% of the panel's capacity, leaving roughly ${Math.round(r.spare)} amps of headroom. No service upgrade is required to add this charger.`;
+    return `Your existing ${svc}-amp service is calculated at about ${Math.round(r.demandA)} amps of demand with the ${ev}-amp charger added — ${r.pct}% of capacity, which exceeds the panel. To move forward we'd either upsize the service or install a listed energy-management (load-sharing) device per NEC 625.42, which lets the charger share capacity with large loads and usually avoids a full service upgrade. We'll walk you through both options.`;
+  }
+  const NOTES=[
+    'Method: NEC 220.83(A) — 100% of the first 8 kVA of connected load + 40% of the remainder. Used when the added load is not air-conditioning or space heating (an EV charger is neither).',
+    'Appliance VA are typical nameplate estimates. Replace with actual nameplates for a stamped/permit calculation.',
+    'Preferred alternative for tight services: NEC 220.87 — size existing load from the utility’s 12-month peak demand × 125%. It usually shows more headroom.',
+    'An EV charger is a continuous load: circuit conductors and breaker are sized at 125% (NEC 625.41). A 40 A charger therefore needs a 50 A circuit / #6 Cu.',
+    'Confirm two adjacent open spaces on the bus and a listed breaker for this loadcenter before install.',
+    'If a service fails the calc, NEC 625.42 energy-management (load-sharing) can avoid a service upgrade.'
+  ];
+  function buildPdf(jsPDFCtor,r,inp,aiAssumptions){
+    const doc=new jsPDFCtor({unit:'pt',format:'letter'});
+    const W=612,PH=792,M=42;
+    const FOREST=[30,53,18],FOREST2=[22,41,12],LIME=[140,198,63],INK=[26,36,19],BODY=[72,84,63],MUTE=[120,132,110],
+      LINE=[227,234,219],MIST=[245,248,240],PASS=[140,198,63],FAIL=[201,74,58],WHITE=[255,255,255];
+    const money=n=>Number(n).toLocaleString('en-US');let y=0;
+    doc.setFillColor(...FOREST);doc.rect(0,0,W,74,'F');
+    doc.setFont('helvetica','bold');doc.setFontSize(21);doc.setTextColor(...WHITE);doc.text('Green',M,40);
+    const gw=doc.getTextWidth('Green');doc.setTextColor(...LIME);doc.text('Key',M+gw,40);
+    doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(214,226,198);
+    doc.text('ELECTRICAL SERVICE LOAD CALCULATION',M,58);
+    doc.setFillColor(...LIME);doc.roundedRect(W-M-118,24,118,26,5,5,'F');
+    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(...FOREST2);doc.text('NEC 220.83',W-M-59,37,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(7);doc.text('Added load - existing dwelling',W-M-59,46,{align:'center'});
+    y=92;
+    const meta=[['PROJECT / ADDRESS',inp.project||'-'],['PREPARED BY',inp.preparedBy||'GreenKey'],['DATE',inp.date],['SERVICE',`${r.service} A / ${r.voltage} V`]];
+    const colW=(W-2*M)/4;
+    meta.forEach((m,i)=>{const x=M+i*colW;doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);doc.text(m[0],x,y);
+      doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(...INK);doc.text(doc.splitTextToSize(String(m[1]),colW-8),x,y+13);});
+    y+=30;doc.setDrawColor(...LINE);doc.setLineWidth(0.75);doc.line(M,y,W-M,y);y+=16;
+    const heroH=82,resColor=r.pass?PASS:FAIL;
+    doc.setFillColor(...MIST);doc.roundedRect(M,y,W-2*M,heroH,7,7,'F');
+    doc.setFillColor(...resColor);doc.roundedRect(M+12,y+12,150,58,6,6,'F');
+    doc.setFont('helvetica','bold');doc.setFontSize(28);doc.setTextColor(...(r.pass?FOREST2:WHITE));doc.text(r.pass?'PASS':'FAIL',M+87,y+40,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(r.pass?'Service has capacity':'Upgrade or EMS req.',M+87,y+57,{align:'center'});
+    const stats=[['CALCULATED DEMAND',`${Math.round(r.demandA)} A`],['% OF SERVICE',`${r.pct}%`],['SPARE CAPACITY',`${Math.round(r.spare)} A`]];
+    const sx0=M+178,sColW=(W-M-sx0)/3;
+    stats.forEach((s,i)=>{const x=sx0+i*sColW;doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);doc.text(s[0],x,y+20);
+      doc.setFont('helvetica','bold');doc.setFontSize(20);doc.setTextColor(...FOREST);doc.text(s[1],x,y+42);});
+    const barX=sx0,barW=W-M-sx0-4,barY=y+56,barH=8;
+    doc.setFillColor(226,232,217);doc.roundedRect(barX,barY,barW,barH,4,4,'F');
+    const fill=Math.max(0.02,Math.min(1,r.pct/100));doc.setFillColor(...(r.pass?PASS:FAIL));doc.roundedRect(barX,barY,barW*fill,barH,4,4,'F');
+    doc.setFont('helvetica','normal');doc.setFontSize(6.5);doc.setTextColor(...MUTE);doc.text(`Demand vs. ${r.service} A service`,barX,y+74);
+    y+=heroH+12;
+    doc.setFillColor(...(r.pass?[240,247,230]:[252,240,238]));
+    const sum=summaryText(r,inp);doc.setFont('helvetica','normal');doc.setFontSize(9.5);
+    const sumLines=doc.splitTextToSize(sum,W-2*M-24);const sumH=sumLines.length*11.5+14;
+    doc.roundedRect(M,y,W-2*M,sumH,6,6,'F');doc.setFillColor(...(r.pass?PASS:FAIL));doc.rect(M,y,3,sumH,'F');
+    doc.setTextColor(...INK);doc.text(sumLines,M+14,y+15);y+=sumH+13;
+    function sectionHead(t){doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...FOREST);doc.text(t,M,y);y+=5;
+      doc.setDrawColor(...LIME);doc.setLineWidth(1.2);doc.line(M,y,M+30,y);y+=10;}
+    sectionHead('CONNECTED LOADS');
+    doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);doc.text('LOAD',M,y);doc.text('BASIS',M+190,y);doc.text('VA',W-M,y,{align:'right'});
+    y+=4;doc.setDrawColor(...LINE);doc.setLineWidth(0.5);doc.line(M,y,W-M,y);y+=12;
+    r.rows.forEach(row=>{doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...INK);doc.text(row.label,M,y);
+      doc.setTextColor(...MUTE);doc.setFontSize(8);doc.text(row.basis,M+190,y);doc.setFontSize(9);doc.setTextColor(...INK);
+      doc.text(money(row.va),W-M,y,{align:'right'});y+=12.5;});
+    doc.setDrawColor(...LINE);doc.line(M,y-2,W-M,y-2);y+=12;
+    const totRow=(label,val,bold,color)=>{doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(9);doc.setTextColor(...(color||INK));
+      doc.text(label,M,y);doc.text(money(val)+' VA',W-M,y,{align:'right'});y+=13;};
+    totRow('Subtotal - existing loads (no EV)',r.existing,false,MUTE);
+    totRow(`EV charger - ${r.evAmps} A x ${r.evVolts} V continuous`,r.evVA,false,INK);
+    y+=3;doc.setDrawColor(...FOREST);doc.setLineWidth(0.75);doc.line(M,y-11,W-M,y-11);
+    totRow('CONNECTED TOTAL',r.connected,true,FOREST);y+=4;
+    const midX=W/2+6,yTop=y;
+    doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...FOREST);doc.text('CALCULATED DEMAND',M,y);
+    doc.setDrawColor(...LIME);doc.setLineWidth(1.2);doc.line(M,y+6,M+30,y+6);let ly=y+20;
+    const dRow=(l,v)=>{doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...BODY);doc.text(l,M,ly);
+      doc.setTextColor(...INK);doc.setFont('helvetica','bold');doc.text(v,midX-12,ly,{align:'right'});ly+=13.5;};
+    dRow('First 8,000 VA @ 100%',money(r.first8)+' VA');dRow('Remainder @ 40%',money(Math.round(r.remainder))+' VA');
+    dRow('Calculated demand',money(r.demandVA)+' VA');dRow(`/ ${r.voltage} V =`,Math.round(r.demandA)+' A');
+    doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...FOREST);doc.text('EV CIRCUIT SIZING',midX,yTop);
+    doc.setDrawColor(...LIME);doc.setLineWidth(1.2);doc.line(midX,yTop+6,midX+30,yTop+6);let ry=yTop+20;
+    const cRow=(l,v)=>{doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...BODY);doc.text(l,midX,ry);
+      doc.setTextColor(...INK);doc.setFont('helvetica','bold');doc.text(v,W-M,ry,{align:'right'});ry+=13.5;};
+    cRow('Min circuit ampacity (x1.25)',r.mca+' A');cRow('Breaker (next standard size)',r.breaker+' A');
+    cRow('Copper conductor (75C)',r.conductor);cRow('Charger',`${r.evAmps} A @ ${r.evVolts} V`);
+    y=Math.max(ly,ry)+6;
+    sectionHead('SCENARIO COMPARISON');
+    const sc=[M,M+130,M+235,M+355,W-M];
+    doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);
+    doc.text('SCENARIO',sc[0],y);doc.text('BREAKER',sc[1],y);doc.text('CALC DEMAND',sc[2],y);doc.text('% OF SERVICE',sc[3],y);doc.text('RESULT',sc[4],y,{align:'right'});
+    y+=4;doc.setDrawColor(...LINE);doc.line(M,y,W-M,y);y+=13;
+    r.scenarios.forEach(s=>{doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...INK);
+      doc.text(`${s.amps} A charger`,sc[0],y);doc.text(`${s.breaker} A`,sc[1],y);doc.text(`${Math.round(s.demandA)} A`,sc[2],y);doc.text(`${s.pct}%`,sc[3],y);
+      doc.setFont('helvetica','bold');doc.setTextColor(...(s.pass?[76,133,27]:FAIL));doc.text(s.pass?'PASS':'FAIL',sc[4],y,{align:'right'});y+=12.5;});
+    y+=6;
+    if(y>PH-132){doc.addPage();y=54;}
+    sectionHead('ASSUMPTIONS & NOTES');
+    const notes=(aiAssumptions&&aiAssumptions.length?aiAssumptions:[]).concat(NOTES);
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...BODY);
+    notes.forEach(n=>{if(y>PH-58){doc.addPage();y=54;}const lines=doc.splitTextToSize(n,W-2*M-12);
+      doc.setFillColor(...LIME);doc.circle(M+2,y-2.5,1.4,'F');doc.text(lines,M+10,y);y+=lines.length*9.3+2.5;});
+    const pages=doc.getNumberOfPages();
+    for(let p=1;p<=pages;p++){doc.setPage(p);doc.setDrawColor(...LINE);doc.setLineWidth(0.5);doc.line(M,PH-42,W-M,PH-42);
+      doc.setFont('helvetica','normal');doc.setFontSize(7);doc.setTextColor(...MUTE);
+      doc.text('GreenKey - Licensed Class A Electrical Contractor - Central Virginia',M,PH-28);
+      doc.text('Estimate for planning. Final sizing confirmed on-site against actual nameplates & panel conditions.',M,PH-18);
+      doc.text(`${inp.date}   -   Page ${p} of ${pages}`,W-M,PH-23,{align:'right'});}
+    return doc;
+  }
+  function filename(inp){const who=(inp.project||'Customer').replace(/[^\w]+/g,'_').replace(/^_|_$/g,'').slice(0,40)||'Customer';
+    return `GreenKey_LoadCalc_${who}_${inp.date}.pdf`;}
+  return{defaultInputs,DEFAULT_LOADS,calc,summaryText,NOTES,buildPdf,filename,conductorFor};
+})();
+
+// ── Load Calc modal state ──
+let _lcJobId = null;         // lead the modal is bound to
+let _lcMessages = [];        // Anthropic-format transcript (photo in msg[0])
+let _lcPhotoB64 = null;      // resized panel photo, base64 (no prefix)
+let _lcPhotoDataUrl = null;  // same, with data: prefix (for save + thumb)
+let _lcResult = null;        // { inputs, assumptions } once Claude says done
+let _lcBusy = false;
+
+function openLoadCalcModal(jobId) {
+  const lead = getLead(jobId); if (!lead) { toast('Job not found', 'error'); return; }
+  _lcJobId = jobId; _lcMessages = []; _lcPhotoB64 = null; _lcPhotoDataUrl = null; _lcResult = null; _lcBusy = false;
+  const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+  const label = lead.address || (cust ? customFullNameSafe(cust) : '');
+  const lbl = document.getElementById('lc-job-label'); if (lbl) lbl.textContent = label ? '— ' + label : '';
+  document.getElementById('lc-thread').innerHTML =
+    '<div id="lc-hint" style="font-size:12px;color:var(--text-muted)">Attach the panel photo, add anything you already know (charger amps, square footage, gas appliances…), and hit Send.</div>';
+  const res = document.getElementById('lc-result'); res.style.display = 'none'; res.innerHTML = '';
+  const err = document.getElementById('lc-error'); err.style.display = 'none'; err.textContent = '';
+  const thumb = document.getElementById('lc-photo-thumb'); thumb.style.display = 'none'; thumb.src = '';
+  document.getElementById('lc-photo-title').textContent = 'Panel photo (required)';
+  document.getElementById('lc-photo-sub').textContent = 'Tap to take or choose a photo — the calc can\'t start without one';
+  document.getElementById('lc-photo-input').value = '';
+  document.getElementById('lc-input').value = '';
+  const send = document.getElementById('lc-send-btn'); send.disabled = true; send.title = 'Attach the panel photo first';
+  document.getElementById('lc-save-btn').style.display = 'none';
+  document.getElementById('loadcalc-modal').classList.add('show');
+}
+function closeLoadCalcModal() {
+  document.getElementById('loadcalc-modal').classList.remove('show');
+  _lcJobId = null; _lcMessages = []; _lcPhotoB64 = null; _lcPhotoDataUrl = null; _lcResult = null; _lcBusy = false;
+}
+
+// Photo attach → resize through the CRM's existing MMS pipeline (~1600px jpeg).
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('lc-photo-input');
+  if (!inp) return;
+  inp.addEventListener('change', async () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    try {
+      const rawUrl = await new Promise((res, rej) => {
+        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(f);
+      });
+      const out = await _resizeAndConvertImage(f, rawUrl, { maxDimension: 1600, quality: 0.82 });
+      const jpgUrl = await new Promise((res, rej) => {
+        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(out.blob);
+      });
+      _lcPhotoDataUrl = jpgUrl;
+      _lcPhotoB64 = jpgUrl.split(',')[1];
+      const thumb = document.getElementById('lc-photo-thumb'); thumb.src = jpgUrl; thumb.style.display = '';
+      document.getElementById('lc-photo-title').textContent = '✓ Panel photo attached';
+      document.getElementById('lc-photo-sub').textContent = 'Tap to change';
+      const send = document.getElementById('lc-send-btn'); send.disabled = false; send.title = '';
+    } catch (e) {
+      console.warn('[GK] load calc photo failed:', e);
+      toast('Couldn\'t read that photo (' + (e.message || e) + ') — try a different one', 'error');
+    }
+  });
+});
+
+function _lcAppendBubble(role, text) {
+  const wrap = document.getElementById('lc-thread');
+  const hint = document.getElementById('lc-hint'); if (hint) hint.remove();
+  const mine = role === 'user';
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;margin-bottom:8px;justify-content:' + (mine ? 'flex-end' : 'flex-start');
+  const bubble = document.createElement('div');
+  bubble.style.cssText = 'max-width:82%;padding:8px 11px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;' +
+    (mine ? 'background:var(--green);color:#fff' : 'background:var(--bg-card,rgba(140,198,63,.12));border:1px solid var(--border);color:var(--text-primary)');
+  bubble.textContent = text;
+  div.appendChild(bubble); wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return bubble;
+}
+
+async function sendLoadCalcMsg() {
+  if (_lcBusy) return;
+  if (!_lcJobId) { toast('No job bound to the load calc', 'error'); return; }
+  if (!_lcPhotoB64) { toast('Attach the panel photo first — it\'s required', 'warning'); return; }
+  const box = document.getElementById('lc-input');
+  const text = (box.value || '').trim();
+  if (!text && _lcMessages.length) return;                 // nothing to add mid-conversation
+  const firstText = text || 'Here is the panel. Read the main and branch breakers and ask me whatever you need.';
+
+  // Build this turn (photo rides in the FIRST user message only).
+  if (_lcMessages.length === 0) {
+    _lcMessages.push({ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: _lcPhotoB64 } },
+      { type: 'text', text: firstText }
+    ]});
+  } else {
+    _lcMessages.push({ role: 'user', content: text });
+  }
+  _lcAppendBubble('user', firstText === text ? text : firstText);
+  box.value = '';
+
+  _lcBusy = true;
+  const sendBtn = document.getElementById('lc-send-btn'); sendBtn.disabled = true; sendBtn.textContent = '…';
+  const errBox = document.getElementById('lc-error'); errBox.style.display = 'none';
+  const thinking = _lcAppendBubble('assistant', 'Reading…');
+  try {
+    const bearer = await _acquireSMSToken();
+    const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/loadcalc/estimate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearer },
+      body: JSON.stringify({ messages: _lcMessages })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || ('Worker returned ' + resp.status));
+    _lcMessages.push({ role: 'assistant', content: data.reply + (data.done && data.result ? '\n```json\n' + JSON.stringify(data.result) + '\n```' : '') });
+    thinking.textContent = data.reply || (data.done ? 'Got everything I need.' : '…');
+    if (data.done && data.result && data.result.inputs) {
+      _lcResult = data.result;
+      _lcRenderResult();
+    }
+  } catch (e) {
+    _lcMessages.pop();                                     // let the user retry the same turn
+    thinking.textContent = '⚠ ' + (e.message || e);
+    errBox.textContent = (e.message || String(e)) + ' — you can try Send again.';
+    errBox.style.display = 'block';
+  } finally {
+    _lcBusy = false;
+    sendBtn.disabled = false; sendBtn.textContent = 'Send';
+  }
+}
+
+// Merge Claude's inputs into engine defaults → run calc → PASS/FAIL panel.
+function _lcBuildInputs() {
+  const lead = getLead(_lcJobId);
+  const cust = lead && lead.customerId ? getCustomer(lead.customerId) : null;
+  const ai = (_lcResult && _lcResult.inputs) || {};
+  const inp = GKLoadCalc.defaultInputs();
+  inp.project = (lead && lead.address) || (cust ? customFullNameSafe(cust) : '') || '';
+  ['service','voltage','area','smallApp','evAmps','evVolts'].forEach(k => {
+    if (ai[k] != null && !isNaN(+ai[k]) && +ai[k] > 0) inp[k] = +ai[k];
+  });
+  if (ai.loads && typeof ai.loads === 'object') {
+    for (const [key, val] of Object.entries(ai.loads)) {
+      const existing = inp.loads.find(l => l.key === key);
+      if (val === false) { if (existing) existing.on = false; }
+      else if (val && typeof val === 'object') {
+        if (existing) { existing.on = val.on !== false; if (+val.va > 0) { existing.va = +val.va; existing.dynamic = null; } if (val.basis) existing.basis = String(val.basis); }
+        else inp.loads.push({ key, label: String(val.label || key), basis: String(val.basis || 'nameplate'), va: +val.va || 0, on: val.on !== false });
+      }
+    }
+  }
+  inp._aiAssumptions = Array.isArray(_lcResult && _lcResult.assumptions) ? _lcResult.assumptions.map(String) : [];
+  return inp;
+}
+
+function _lcRenderResult() {
+  const inp = _lcBuildInputs();
+  const r = GKLoadCalc.calc(inp);
+  const el = document.getElementById('lc-result');
+  const col = r.pass ? 'var(--green)' : '#c94a3a';
+  el.innerHTML =
+    '<div style="display:flex;gap:12px;align-items:center;border:1px solid ' + col + ';border-radius:var(--r);padding:10px 14px">' +
+      '<div style="font-size:20px;font-weight:800;color:' + col + '">' + (r.pass ? 'PASS' : 'FAIL') + '</div>' +
+      '<div style="font-size:12px;line-height:1.5;color:var(--text-primary)">' +
+        r.service + ' A service — calculated demand <strong>' + Math.round(r.demandA) + ' A (' + r.pct + '%)</strong>, spare ' + Math.round(r.spare) + ' A. ' +
+        'EV circuit: <strong>' + r.breaker + ' A breaker / ' + r.conductor + '</strong> for the ' + r.evAmps + ' A charger.' +
+        (r.pass ? '' : ' Options: service upgrade or NEC 625.42 load-management.') +
+      '</div>' +
+    '</div>' +
+    ((inp._aiAssumptions || []).length ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">AI assumptions: ' + inp._aiAssumptions.map(a => String(a).replace(/</g,'&lt;')).join(' · ') + '</div>' : '');
+  el.style.display = '';
+  document.getElementById('lc-save-btn').style.display = '';
+}
+
+// Save = file BOTH the panel photo (evidence) and the finished PDF into the
+// lead's Documents — addFileRecord shows them in the job's Documents tab and
+// uploads to the SharePoint job folder (same pipeline as quote PDFs).
+function saveLoadCalcToJob() {
+  if (!_lcJobId || !_lcResult) { toast('Run the calc first', 'warning'); return; }
+  const jsPDF = getPDFLib(); if (!jsPDF) { toast('PDF library not loaded yet — try again in a moment', 'error'); return; }
+  try {
+    const inp = _lcBuildInputs();
+    const r = GKLoadCalc.calc(inp);
+    const doc = GKLoadCalc.buildPdf(jsPDF, r, inp, inp._aiAssumptions || []);
+    const dataUrl = doc.output('datauristring');
+    const fname = GKLoadCalc.filename(inp);
+    const pdfSize = Math.round((dataUrl.length - 28) * 3 / 4);
+    addFileRecord(_lcJobId, 'documents', null, { name: fname, size: pdfSize, type: 'application/pdf' }, dataUrl);
+    if (_lcPhotoDataUrl) {
+      const photoName = 'LoadCalc_Panel_' + inp.date + '.jpg';
+      const photoSize = Math.round((_lcPhotoDataUrl.length - 23) * 3 / 4);
+      addFileRecord(_lcJobId, 'documents', null, { name: photoName, size: photoSize, type: 'image/jpeg' }, _lcPhotoDataUrl);
+    }
+    toast('Load calc PDF + panel photo saved to Documents', 'success');
+    try { if (window.S && S.jobDetailId === _lcJobId && typeof renderJobDetail === 'function') renderJobDetail(_lcJobId); } catch (_) {}
+    closeLoadCalcModal();
+  } catch (e) {
+    console.warn('[GK] load calc save failed:', e);
+    toast('Could not save the load calc: ' + (e.message || e), 'error');
+  }
 }
 
 // ═════════════════════════════════════════════════════════════
