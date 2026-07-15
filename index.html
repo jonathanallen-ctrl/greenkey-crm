@@ -12781,7 +12781,7 @@ function renderJobDetail(id) {
   if (lead.payment && lead.payment.collectedAt) {
     const _p = lead.payment;
     const _pDate = new Date(_p.collectedAt).toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'});
-    const _pMeth = ({card:'Card (Stripe Tap to Pay)', zelle:'Zelle', cash:'Cash / check'})[_p.method] || (_p.method || 'unknown');
+    const _pMeth = ({card:'Card (Stripe Tap to Pay)', 'card-link':'Card (Stripe payment link)', zelle:'Zelle', cash:'Cash / check'})[_p.method] || (_p.method || 'unknown');
     paymentBanner = `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--green);background:var(--green-dim);border-radius:var(--r);display:flex;align-items:flex-start;gap:10px;font-size:13px">
       <div style="font-size:18px;line-height:1;color:var(--green);flex-shrink:0">💰</div>
       <div style="flex:1">
@@ -22694,6 +22694,113 @@ async function _leadInboxPollOnce() {
   finally { _leadInboxBusy = false; }
 }
 
+// ── Stripe field card-payment poller ──
+// The worker's /stripe/webhook records paid Payment Links to D1 (it has no
+// SharePoint access, so it can't stamp the lead itself). This poller pulls paid
+// rows, stamps lead.payment + the paymentReceived milestone (which drives
+// auto-archive), toasts, then acks — the same record-to-D1 → CRM-imports pattern
+// as the website lead inbox above. Card collection only; QuickBooks stays the
+// invoicing system of record (reconcile gross + Stripe fee there).
+const STRIPE_POLL_MIN_INTERVAL_MS = 60000;
+let _stripePayLastPoll = 0;
+let _stripePayBusy = false;
+
+async function _stripePaymentPollOnce() {
+  if (_stripePayBusy) return;
+  if (Date.now() - _stripePayLastPoll < STRIPE_POLL_MIN_INTERVAL_MS) return;
+  if (typeof _msal === 'undefined' || !_msal) return;
+  if (typeof SMS_WORKER_URL === 'undefined' || !SMS_WORKER_URL) return;
+  _stripePayBusy = true;
+  _stripePayLastPoll = Date.now();
+  try {
+    const token = await _acquireSMSToken();
+    const resp = await fetch(
+      SMS_WORKER_URL.replace(/\/$/,'') + '/stripe/pending',
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json().catch(() => ({}));
+    const rows = Array.isArray(data.payments) ? data.payments : [];
+    if (!rows.length) return;
+    for (const row of rows) {
+      try {
+        const res = _applyStripePayment(row);
+        if (res.ack) {
+          await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/stripe/ack', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: [row.id] })
+          });
+        }
+        // No ack when the lead isn't loaded yet — it retries next poll once the
+        // SharePoint sync has pulled the job in (never lose a payment stamp).
+      } catch (e) {
+        console.warn('[GK] stripe payment import failed:', row && row.id, e);
+      }
+    }
+    if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
+  } catch (_) { /* silent */ }
+  finally { _stripePayBusy = false; }
+}
+
+// Stamp a paid Stripe row onto its lead. Idempotent (re-importing the same
+// session is a no-op). Returns { ack } — ack when applied, when it's a dup, or
+// when the full lead set is loaded and this lead genuinely isn't in it.
+function _applyStripePayment(row) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === row.leadId);
+  if (idx < 0) return { ack: arr.length > 0 };   // dataset loaded but no such lead → ack; empty → retry after sync
+  const lead = arr[idx];
+  if (lead.payment && lead.payment.stripeSessionId && lead.payment.stripeSessionId === row.sessionId) {
+    return { ack: true };                          // already recorded this session
+  }
+  const now = new Date().toISOString();
+  const amt = Math.round(Number(row.amount) || 0);
+  const at  = row.paidAt || now;
+  lead.payment = { method: 'card-link', amount: amt, collectedAt: at, stripeSessionId: row.sessionId || '' };
+  if (!['Qmerit','Electrum','Treehouse'].includes(lead.source)) {
+    if (!lead.milestones) lead.milestones = {};
+    lead.milestones.paymentReceived = { done: true, date: String(at).slice(0,10), amount: amt };
+  }
+  lead.updatedAt = now;
+  saveLeads(arr);
+  try { checkAutoArchive(lead.id); } catch (_) {}
+  try { toast('💳 Card payment received — ' + (row.customerName || lead.id) + (amt ? ' ($' + amt.toLocaleString('en-US') + ')' : ''), 'success'); } catch (_) {}
+  return { ack: true };
+}
+
+// Heal the pre-2026-07-15 wiring gap: field-app payments recorded BEFORE
+// field.html started stamping the paymentReceived milestone. For any active
+// direct job with a recorded payment but no paymentReceived.done, stamp it and
+// re-check auto-archive. Idempotent; writes only when something actually changes.
+function _reconcileFieldPayments() {
+  try {
+    const arr = getLeads();
+    let changed = false;
+    for (const lead of arr) {
+      if (!lead || lead.stage === 'archived') continue;
+      if (['Qmerit','Electrum','Treehouse'].includes(lead.source)) continue;
+      if (!(lead.payment && lead.payment.collectedAt)) continue;
+      const ms = lead.milestones || {};
+      if (ms.paymentReceived && ms.paymentReceived.done) continue;
+      if (!lead.milestones) lead.milestones = {};
+      lead.milestones.paymentReceived = {
+        done: true,
+        date: String(lead.payment.collectedAt).slice(0,10),
+        amount: Number(lead.payment.amount) || 0
+      };
+      lead.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) {
+      saveLeads(arr);
+      for (const lead of arr) {
+        if (lead && lead.stage !== 'archived') { try { checkAutoArchive(lead.id); } catch (_) {} }
+      }
+    }
+  } catch (_) {}
+}
+
 // Create the customer + lead from one leads_inbox row. Returns
 // { leadId, custId }, or null if already imported (webInboxId guard).
 function _importWebLead(row) {
@@ -23095,11 +23202,15 @@ function _bellStartPolling() {
   _bellPollOnce();
   _activityPollOnce();
   _leadInboxPollOnce();
+  _stripePaymentPollOnce();
+  try { _reconcileFieldPayments(); } catch(_){}
   try { _spFolderRetrySweep(); } catch(_){}
   try { _opsInspectionSweep(); } catch(_){}
   _bellPollTimer = setInterval(() => {
     if (document.visibilityState === 'visible') {
       _bellPollOnce(); _activityPollOnce(); _leadInboxPollOnce();
+      _stripePaymentPollOnce();
+      try { _reconcileFieldPayments(); } catch(_){}
       try { _spFolderRetrySweep(); } catch(_){}
       try { _opsInspectionSweep(); } catch(_){}
     }

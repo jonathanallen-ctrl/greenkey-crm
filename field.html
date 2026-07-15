@@ -63,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-13 field-4';
+const BUILD = '2026-07-15 field-5';
 const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
 const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
 const FIELD_URL       = location.origin + location.pathname; // this page
@@ -81,6 +81,11 @@ const SP_PHOTO_LIB    = 'CEO/CRM software/GreenKeyCRM_Photos';
 const GRAPH_SCOPES    = ['https://graph.microsoft.com/Sites.ReadWrite.All','User.Read'];
 const ZELLE_EMAIL     = 'jonathan.allen@greenkey-usa.com';
 const PLATFORMS       = ['Qmerit','Electrum','Treehouse'];
+// SMS Relay worker (same as the main CRM) — used to create + text a Stripe
+// payment link. The main CRM and this app share the same Azure client app, so
+// the SMS.send scope is already consented; the token acquires silently.
+const SMS_WORKER_URL  = 'https://greenkey-sms.greenkey-usa.workers.dev';
+const SMS_SCOPE_URL   = 'api://f4704bd1-8316-4740-8f59-540901153810/SMS.send';
 
 let _msal=null,_gToken=null,_spSite=null,_spList=null,_spDrive=null;
 const $app = ()=>document.getElementById('app');
@@ -239,6 +244,8 @@ function renderDetail(id){
                  : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
       + '<button class="btn green" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">💳 Card paid'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">💳 Text pay link'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+      + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'zelle\','+(n||0)+')">Zelle paid'+(n!=null?(' · '+fmt$(n)):'')+'</button>'
       + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'cash\',0)">Cash / check</button>'
@@ -378,20 +385,67 @@ function toggleZelleQR(){
 }
 
 // ---------- payment (Phase 3): record collected payment, sync back ----------
+// Stamp lead.payment AND the paymentReceived milestone together. The office
+// auto-archive fires on (final inspection passed + paymentReceived.done); before
+// this, a field payment never set that milestone, so paid jobs never auto-closed.
+// Direct jobs only — platform jobs are invoiced by the platform and don't gate.
+function _stampPaymentMilestone(lead, amount, isoNow){
+  if(!PLATFORMS.includes(lead.source)){
+    if(!lead.milestones) lead.milestones={};
+    lead.milestones.paymentReceived = { done:true, date:isoNow.slice(0,10), amount:amount||0 };
+  }
+}
 async function recordPayment(jobId, method, amount){
   try{ await syncFromSP(); }catch(e){}
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
-  arr[i].payment = { method:method, amount:amount||0, collectedAt:new Date().toISOString() };
-  arr[i].updatedAt = new Date().toISOString();
+  const now=new Date().toISOString();
+  arr[i].payment = { method:method, amount:amount||0, collectedAt:now };
+  _stampPaymentMilestone(arr[i], amount, now);
+  arr[i].updatedAt = now;
   localStorage.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 async function clearPayment(jobId){
   try{ await syncFromSP(); }catch(e){}
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) return;
-  delete arr[i].payment; arr[i].updatedAt=new Date().toISOString();
+  delete arr[i].payment;
+  if(arr[i].milestones && arr[i].milestones.paymentReceived) delete arr[i].milestones.paymentReceived;
+  arr[i].updatedAt=new Date().toISOString();
   localStorage.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
+}
+
+// ---------- Stripe pay link: create + text from the business number ----------
+async function _acquireWorkerToken(){
+  const a=_msal.getAllAccounts()[0]; if(!a) throw new Error('Not signed in');
+  try{ const r=await _msal.acquireTokenSilent({account:a,scopes:[SMS_SCOPE_URL]}); return r.accessToken; }
+  catch(e){ const r=await _msal.acquireTokenSilent({account:a,scopes:[SMS_SCOPE_URL],forceRefresh:true}); return r.accessToken; }
+}
+async function textPayLink(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
+  if(!isDirect(l)){ alert(l.source+' invoices the customer — do not collect on site.'); return; }
+  const phone=leadPhone(l);
+  if(!phone){ alert('No phone number on file for this customer — add one in the CRM first.'); return; }
+  let amt=jobPayAmounts(l).card;
+  if(!amt){ const v=prompt('Card amount to charge ($):',''); if(v===null) return; amt=Math.round(parseFloat(v)||0); }
+  if(!amt||amt<=0){ alert('Enter a valid amount.'); return; }
+  if(!confirm('Text a card payment link for '+fmt$(amt)+' to '+custName(l)+' ('+phone+')?')) return;
+  loading('Creating payment link…');
+  try{
+    const token=await _acquireWorkerToken();
+    const lr=await fetch(SMS_WORKER_URL+'/stripe/link',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({leadId:l.id,amount:amt,customerName:custName(l),description:prettyType(l.jobType)})});
+    const ld=await lr.json().catch(()=>({}));
+    if(!lr.ok||!ld.url) throw new Error(ld.error||'Could not create link');
+    const first=(custName(l).trim().split(/\s+/)[0])||'there';
+    const msg='Hi '+first+', here is your secure GreenKey card payment link for '+fmt$(amt)+': '+ld.url+'\nThank you! — GreenKey';
+    const sr=await fetch(SMS_WORKER_URL+'/sms/send',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({leadId:l.id,to:phone,message:msg,templateKey:'stripe_pay_link',customerName:custName(l)})});
+    const sd=await sr.json().catch(()=>({}));
+    if(!sr.ok) throw new Error(sd.error||'Link created but the text failed to send');
+    alert('✓ Payment link texted to '+custName(l)+'.\nThey pay by card — it shows here in the office once it clears.');
+  }catch(e){ alert('Could not send pay link: '+(e.message||e)); }
+  renderDetail(jobId);
 }
 async function doPayment(jobId, method, amount){
   if(!amount){ const v=prompt('Amount collected ($):',''); if(v===null) return; amount=Math.round(parseFloat(v)||0); }
