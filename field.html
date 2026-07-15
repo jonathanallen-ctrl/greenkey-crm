@@ -61,15 +61,18 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-06-29 field-1';
+const BUILD = '2026-06-29 field-3';
 const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
 const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
-const FIELD_URL       = location.origin + location.pathname; // this page (for reference)
-// Use the ALREADY-REGISTERED root as the MSAL redirect so your phone (already
-// signed into the main CRM) gets a token silently with NO Azure change. For a
-// cold device (a tech who never opened the main CRM), register field.html as a
-// redirect URI in Azure and switch AUTH_REDIRECT to FIELD_URL — that's Phase 2.
-const AUTH_REDIRECT   = 'https://jonathanallen-ctrl.github.io/greenkey-crm/';
+const FIELD_URL       = location.origin + location.pathname; // this page
+// 2026-07-13 (Phase 2 auth): redirect is now THIS page, so a cold device (an
+// iPad or a tech's phone that never opened the main CRM) can sign in directly
+// and land back here. ⚠ REQUIRES the one-time Azure step BEFORE this deploys:
+// portal.azure.com → App registrations → the CRM app (61b4a86a…) →
+// Authentication → Single-page application → Add URI:
+//   https://jonathanallen-ctrl.github.io/greenkey-crm/field.html
+// (Adding a URI doesn't affect the main CRM. Warm devices keep working either way.)
+const AUTH_REDIRECT   = 'https://jonathanallen-ctrl.github.io/greenkey-crm/field.html';
 const SP_HOSTNAME     = 'greenkeyusa.sharepoint.com';
 const SP_LIST_NAME    = 'GreenKeyCRM_Data';
 const SP_PHOTO_LIB    = 'CEO/CRM software/GreenKeyCRM_Photos';
@@ -92,6 +95,16 @@ function prettyType(t){ if(!t) return ''; return String(t).replace(/[-_]/g,' ').
 function schedDate(l){ return (l.milestones&&l.milestones.installScheduled&&l.milestones.installScheduled.date)||l.scheduleAt||''; }
 function isDirect(l){ return !PLATFORMS.includes(l.source); }
 function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-won','closed-lost','not-won'].includes(l.stage) && !(l.lostInfo&&l.lostInfo.isLost)); }
+function getQuotes(){ try{return JSON.parse(localStorage.getItem('gk_quotes')||'[]')}catch(e){return[]} }
+function fmt$(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
+// Amount to collect: from the accepted quote (card = quoteTotal w/ fee, net = preProcessingTotal). Falls back to jobValue.
+function jobPayAmounts(l){
+  const q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
+  if(q){ const net=(typeof q.preProcessingTotal==='number'&&isFinite(q.preProcessingTotal))?Math.round(q.preProcessingTotal):null;
+         const card=(typeof q.quoteTotal==='number'&&isFinite(q.quoteTotal))?Math.round(q.quoteTotal):net; return {net,card}; }
+  const jv=(l.jobValue&&typeof l.jobValue.amount==='number'&&isFinite(l.jobValue.amount))?Math.round(l.jobValue.amount):null;
+  return {net:jv, card:jv};
+}
 
 // ---------- auth ----------
 async function loadMsal(){ const m = await import('https://esm.sh/@azure/msal-browser@2'); window.msal = m; return m; }
@@ -208,11 +221,41 @@ function renderDetail(id){
   const phone=leadPhone(l), addr=leadAddr(l);
   const tel = phone? 'tel:'+phone.replace(/[^0-9+]/g,'') : '';
   const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
-  const payCard = isDirect(l)
-    ? '<div class="pay"><div class="lab" style="color:#7fe0a6">Collect Payment (direct customer)</div>'
-      + '<div style="font-size:14px">Zelle to <b>'+esc(ZELLE_EMAIL)+'</b></div>'
-      + '<div class="muted" style="font-size:12.5px;margin-top:4px">Have the customer send via their bank’s Zelle. Confirm before leaving.</div></div>'
-    : '<div class="card"><div class="lab">Payment</div><div class="muted" style="font-size:14px">'+esc(l.source||'Platform')+' invoices the customer — do not collect on site.</div></div>';
+  const pay = jobPayAmounts(l); const paid = l.payment;
+  let payCard;
+  if(paid){
+    payCard = '<div class="card"><div class="lab">Payment</div>'
+      + '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Collected'+(paid.amount?(' · '+fmt$(paid.amount)):'')+(paid.method?(' · '+esc(String(paid.method).toUpperCase())):'')+'</div>'
+      + (paid.collectedAt?'<div class="muted" style="font-size:12px;margin-top:2px">'+esc(paid.collectedAt.slice(0,10))+'</div>':'')
+      + '<button class="btn ghost" style="margin-top:10px" onclick="doClearPayment(\''+esc(l.id)+'\')">Undo</button></div>';
+  } else if(!isDirect(l)){
+    payCard = '<div class="card"><div class="lab">Payment</div><div class="muted" style="font-size:14px">'+esc(l.source||'Platform')+' invoices the customer — do not collect on site.</div></div>';
+  } else {
+    const c=pay.card, n=pay.net; const hasAmt=(c!=null||n!=null);
+    payCard = '<div class="pay"><div class="lab" style="color:#7fe0a6">Collect Payment</div>'
+      + (hasAmt ? '<div style="font-size:14px;margin-bottom:10px">'+(c!=null?'Card <b>'+fmt$(c)+'</b>':'')+((c!=null&&n!=null&&n!==c)?' &nbsp;·&nbsp; Zelle/cash <b>'+fmt$(n)+'</b>':'')+'</div>'
+                 : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
+      + '<button class="btn green" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">💳 Card paid'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'zelle\','+(n||0)+')">Zelle paid'+(n!=null?(' · '+fmt$(n)):'')+'</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'cash\',0)">Cash / check</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="toggleZelleQR()">▦ Show Zelle QR for customer</button>'
+      + '<div id="zelleqr" style="display:none;background:#fff;border-radius:12px;padding:16px;margin-top:10px;text-align:center">'
+      +   '<div id="zelleqr-img" style="display:flex;justify-content:center"></div>'
+      +   '<div style="color:#1e6e38;font-weight:700;font-size:14px;margin-top:10px;word-break:break-all">'+esc(ZELLE_EMAIL)+'</div>'
+      +   '<div style="color:#555;font-size:12px;margin-top:4px;line-height:1.45">Scan with your banking app’s Zelle, or search the email. Send the exact quote amount.</div>'
+      + '</div>'
+      + '<div class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">Card: open the <b>Stripe</b> app and charge the card amount with Tap to Pay (tap the customer’s card or phone), then tap “Card paid”. Zelle to '+esc(ZELLE_EMAIL)+'.</div>'
+      + '</div>';
+  }
+  const ms = l.milestones||{}; const complete = !!(ms.installCompleted && ms.installCompleted.done);
+  const statusCard = '<div class="card"><div class="lab">Job status</div>'
+    + (complete
+      ? '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Install complete'+(ms.installCompleted.date?(' · '+esc(ms.installCompleted.date)):'')+'</div><button class="btn ghost" style="margin-top:10px" onclick="doComplete(\''+esc(l.id)+'\',false)">Undo</button>'
+      : '<button class="btn green" onclick="doComplete(\''+esc(l.id)+'\',true)">✓ Mark install complete</button>')
+    + '</div>';
   $app().innerHTML = header('Job')
     + '<div class="wrap">'
     + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
@@ -224,8 +267,13 @@ function renderDetail(id){
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
     + '</div>'
     + payCard
+    + statusCard
     + (l.scopeOfWork?'<div class="card"><div class="lab">Scope of Work</div><div class="scope">'+esc(l.scopeOfWork)+'</div></div>':'')
-    + '<div class="card"><div class="lab">Photos</div><div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div></div>'
+    + '<div class="card"><div class="lab" style="display:flex;align-items:center;justify-content:space-between">Photos'
+      + '<button class="chip" onclick="document.getElementById(\'ph-input\').click()">📸 Add completion photos</button></div>'
+      + '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
+      + '<div id="ph-status" class="muted" style="font-size:12.5px;margin:6px 0 2px"></div>'
+      + '<div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div></div>'
     + '</div>';
   loadJobPhotos(l.id).then(ph=>{
     const el=document.getElementById('photos'); if(!el) return;
@@ -238,6 +286,125 @@ function goJobs(){ location.hash=''; renderJobs(); }
 async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
 function route(){ const m=/#job=([^&]+)/.exec(location.hash); if(m) renderDetail(decodeURIComponent(m[1])); else renderJobs(); }
 window.addEventListener('hashchange', route);
+
+// ---------- writes (Phase 2): photo upload + mark complete ----------
+function _dataUrlToBlob(d){ const a=d.split(','),m=a[0].match(/:(.*?);/)[1],b=atob(a[1]); const u=new Uint8Array(b.length); for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i); return new Blob([u],{type:m}); }
+async function resizeImage(file, maxDim, quality){
+  const dataUrl = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
+  if(!/^image\//.test(file.type||'')) return { blob:_dataUrlToBlob(dataUrl), name:file.name||'file', type:file.type||'application/octet-stream' };
+  return await new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{ try{ let w=img.width,h=img.height; if(!w||!h) return reject(new Error('decode 0x0'));
+      if(w>maxDim||h>maxDim){ if(w>h){ h=Math.round(h/w*maxDim); w=maxDim; } else { w=Math.round(w/h*maxDim); h=maxDim; } }
+      const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(b=>{ if(!b) return reject(new Error('toBlob null')); resolve({ blob:b, name:(file.name||'photo').replace(/\.[^.]+$/,'')+'.jpg', type:'image/jpeg' }); },'image/jpeg',quality);
+    }catch(e){ reject(e); } };
+    img.onerror=()=>reject(new Error('image decode failed')); img.src=dataUrl;
+  });
+}
+async function graphPatch(path, bodyObj){
+  const r=await fetch('https://graph.microsoft.com/v1.0'+path,{method:'PATCH',headers:{Authorization:'Bearer '+_gToken,'Content-Type':'application/json'},body:JSON.stringify(bodyObj)});
+  if(!r.ok) throw new Error('PATCH '+r.status); return r.json().catch(()=>null);
+}
+async function uploadPhoto(jobId, file){
+  if(!_spDrive) throw new Error('no drive');
+  const conv = await resizeImage(file, 2048, 0.88);
+  const fname = Date.now()+'_'+(conv.name||'photo.jpg').replace(/[^A-Za-z0-9._-]/g,'_');
+  const path = SP_PHOTO_LIB+'/'+jobId+'/install/'+fname;       // CRM auto-pulls this folder
+  const r = await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/root:/'+encodeURI(path)+':/content',
+    { method:'PUT', headers:{ Authorization:'Bearer '+_gToken, 'Content-Type':conv.type||'image/jpeg' }, body:conv.blob });
+  if(!r.ok) throw new Error('upload '+r.status);
+  return true;
+}
+async function onPhotoPick(input, jobId){
+  const files=[...(input.files||[])]; input.value=''; if(!files.length) return;
+  const st=document.getElementById('ph-status');
+  try{ await getTokenSilent(); }catch(e){}
+  let ok=0,fail=0;
+  for(let i=0;i<files.length;i++){ if(st) st.textContent='Uploading '+(i+1)+' of '+files.length+'…'; try{ await uploadPhoto(jobId,files[i]); ok++; }catch(e){ console.warn('[field] photo',e); fail++; } }
+  if(st) st.textContent = ok+' uploaded'+(fail?(' · '+fail+' failed'):'');
+  const el=document.getElementById('photos'); if(el){ el.innerHTML='<div class="muted" style="font-size:13px">Refreshing…</div>';
+    try{ const ph=await loadJobPhotos(jobId); el.innerHTML = ph.length? '<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>'; }catch(e){}
+  }
+}
+// Safe single-lead write: re-pull fresh, modify, merge by id+updatedAt, PATCH the list item.
+async function pushLeads(){
+  if(!_spList) throw new Error('no list');
+  let itemId=null, spVal=null, next='/sites/'+_spSite+'/lists/'+_spList+'/items?$expand=fields&$top=200';
+  while(next){ const res=await graphFetch(next); for(const it of (res.value||[])){ if(it.fields&&it.fields.Title==='gk_leads'){ itemId=it.id; spVal=it.fields.DataValue; } } next=res['@odata.nextLink']||null; }
+  let merged=getLeads();
+  if(spVal){ try{ const spArr=JSON.parse(spVal); const map=new Map(); for(const r of spArr) map.set(r.id,r);
+    for(const r of getLeads()){ const ex=map.get(r.id); if(!ex || (r.updatedAt && (!ex.updatedAt || r.updatedAt>ex.updatedAt))) map.set(r.id,r); }
+    merged=[...map.values()]; }catch(e){} }
+  localStorage.setItem('gk_leads', JSON.stringify(merged));
+  if(itemId) await graphPatch('/sites/'+_spSite+'/lists/'+_spList+'/items/'+itemId+'/fields', { DataValue: JSON.stringify(merged) });
+}
+async function markComplete(jobId, done){
+  try{ await syncFromSP(); }catch(e){}                          // re-pull fresh first
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+  if(!arr[i].milestones) arr[i].milestones={};
+  if(done){ arr[i].milestones.installCompleted={done:true,date:new Date().toISOString().slice(0,10)}; arr[i].stage='post-install-docs'; }
+  else { delete arr[i].milestones.installCompleted; }
+  arr[i].updatedAt=new Date().toISOString();
+  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  await pushLeads();
+}
+async function doComplete(jobId, done){
+  if(done && !confirm('Mark this install complete? It moves the job to Post-Install and lets the office close it out + schedule inspection.')) return;
+  loading(done?'Marking complete…':'Updating…');
+  try{ await markComplete(jobId, done); }catch(e){ alert('Could not update: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+
+// Zelle QR (customer scans off this screen). qrcodejs loads lazily from the
+// same CDN the standalone GreenKey_Zelle_Payment.html card uses; the QR just
+// encodes the Zelle email — banking apps resolve it in their Zelle search.
+let _qrLoaded=false;
+function toggleZelleQR(){
+  const box=document.getElementById('zelleqr'); if(!box) return;
+  const show = box.style.display==='none';
+  box.style.display = show?'':'none';
+  const img=document.getElementById('zelleqr-img');
+  if(!show || !img || img.childNodes.length) return;   // hidden, or already drawn in THIS render
+  const draw=()=>{ try{ new QRCode(img,{text:ZELLE_EMAIL,width:180,height:180,colorDark:'#1e6e38',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }catch(e){ console.warn('[field] qr',e); } };
+  if(_qrLoaded || window.QRCode){ draw(); return; }
+  const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+  s.onload=()=>{ _qrLoaded=true; draw(); };
+  s.onerror=()=>{ const el=document.getElementById('zelleqr-img'); if(el) el.innerHTML='<div style="color:#555;font-size:13px">QR unavailable offline — use the email below.</div>'; };
+  document.head.appendChild(s);
+}
+
+// ---------- payment (Phase 3): record collected payment, sync back ----------
+async function recordPayment(jobId, method, amount){
+  try{ await syncFromSP(); }catch(e){}
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+  arr[i].payment = { method:method, amount:amount||0, collectedAt:new Date().toISOString() };
+  arr[i].updatedAt = new Date().toISOString();
+  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  await pushLeads();
+}
+async function clearPayment(jobId){
+  try{ await syncFromSP(); }catch(e){}
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) return;
+  delete arr[i].payment; arr[i].updatedAt=new Date().toISOString();
+  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  await pushLeads();
+}
+async function doPayment(jobId, method, amount){
+  if(!amount){ const v=prompt('Amount collected ($):',''); if(v===null) return; amount=Math.round(parseFloat(v)||0); }
+  const label = method==='card'?'card':(method==='zelle'?'Zelle':'cash/check');
+  if(!confirm('Record '+fmt$(amount)+' '+label+' payment collected for this job?')) return;
+  loading('Recording payment…');
+  try{ await recordPayment(jobId, method, amount); }catch(e){ alert('Could not record: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+async function doClearPayment(jobId){
+  if(!confirm('Undo the recorded payment?')) return;
+  loading('Updating…');
+  try{ await clearPayment(jobId); }catch(e){ alert(e.message||e); }
+  renderDetail(jobId);
+}
 
 // ---------- boot ----------
 (async function boot(){

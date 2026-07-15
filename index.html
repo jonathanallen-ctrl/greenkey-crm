@@ -12758,6 +12758,24 @@ function renderJobDetail(id) {
     </div>`;
   }
 
+  // ── Field-collected payment banner (written by field.html Phase 3) ──
+  // The field app records { method, amount, collectedAt } on lead.payment when
+  // Chase/Jonathan collects on site. Surface it here so the office SEES it
+  // (reconciliation vs QuickBooks; don't re-invoice a paid job).
+  let paymentBanner = '';
+  if (lead.payment && lead.payment.collectedAt) {
+    const _p = lead.payment;
+    const _pDate = new Date(_p.collectedAt).toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+    const _pMeth = ({card:'Card (Stripe Tap to Pay)', zelle:'Zelle', cash:'Cash / check'})[_p.method] || (_p.method || 'unknown');
+    paymentBanner = `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--green);background:var(--green-dim);border-radius:var(--r);display:flex;align-items:flex-start;gap:10px;font-size:13px">
+      <div style="font-size:18px;line-height:1;color:var(--green);flex-shrink:0">💰</div>
+      <div style="flex:1">
+        <div style="font-weight:600;color:var(--green);margin-bottom:2px">Payment collected in the field${_p.amount ? ` — $${Number(_p.amount).toLocaleString('en-US')}` : ''}</div>
+        <div style="color:var(--text-secondary);line-height:1.45">${_pMeth} on <strong>${_pDate}</strong>, recorded via the Field app. Reconcile with the bank/QuickBooks deposit before invoicing.</div>
+      </div>
+    </div>`;
+  }
+
   // ── Customer & Site ──
   const _custIsCom = cust && cust.propertyType === 'commercial';
   const _custBiz = _custIsCom && cust.businessName ? cust.businessName : '';
@@ -13340,7 +13358,7 @@ function renderJobDetail(id) {
   // ── Assemble ──
   // custActionBanner sits between the header and the two-column wrap so it
   // spans the full content width and is the first thing the user sees.
-  dv.innerHTML = hdr + custActionBanner + `<div class="jd-wrap">
+  dv.innerHTML = hdr + custActionBanner + paymentBanner + `<div class="jd-wrap">
     <div>${custSec}${smsSec}${statusSec}${notWonSec}${webMsgSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${_renderJobRail(lead)}</div>
   </div>`;
