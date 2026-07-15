@@ -11896,8 +11896,23 @@ function saveMsField(leadId, key, field, val) {
   if (!arr[idx].milestones) arr[idx].milestones = {};
   if (!arr[idx].milestones[key]) arr[idx].milestones[key] = {};
   arr[idx].milestones[key][field] = val;
+  // Install scheduled: typing a date IS scheduling — auto-set done so the
+  // green scheduled state lights up without also hunting for the checkbox
+  // (2026-07-13, Jonathan: date+time via the Status section didn't "take";
+  // only the top Schedule button did, because only it stamped done:true).
+  // Clearing the date un-schedules. Mirrors the Outlook/scheduler stamps.
+  if (key === 'installScheduled' && field === 'date') {
+    arr[idx].milestones[key].done = !!val;
+    const cb = document.querySelector('#ms-item-installScheduled .ms-cb');
+    if (cb) cb.checked = !!val;
+    const lbl = document.querySelector('#ms-item-installScheduled .ms-lbl');
+    if (lbl) lbl.classList.toggle('done', !!val);
+  }
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+  if (key === 'installScheduled' && field === 'date' && typeof renderJobDetail === 'function') {
+    try { renderJobDetail(leadId); } catch (_) {}
+  }
 }
 
 function checkAutoArchive(leadId) {
