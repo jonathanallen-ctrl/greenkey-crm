@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -12,7 +12,9 @@
 <title>GreenKey Field</title>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%;font-size:16px;line-height:1.4}
+  /* touch-action pan-only: finger drags scroll, but two-finger pinch-zoom is
+     ignored — keeps the app locked to its single-column layout on the iPad. */
+  html,body{margin:0;background:#0f1117;color:#e8eaed;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-text-size-adjust:100%;font-size:16px;line-height:1.4;touch-action:pan-x pan-y}
   /* Read-only text is non-selectable so a finger-drag always scrolls; inputs re-enabled. */
   body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;padding-bottom:calc(env(safe-area-inset-bottom) + 20px)}
   input,textarea{-webkit-user-select:text;user-select:text}
@@ -61,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-06-29 field-3';
+const BUILD = '2026-07-13 field-4';
 const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
 const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
 const FIELD_URL       = location.origin + location.pathname; // this page
