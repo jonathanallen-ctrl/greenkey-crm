@@ -25572,20 +25572,13 @@ const _SCHED_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','AF1'];
 // Tracks which lead the open schedule modal is for.
 let _schedLeadId = null;
 
-function scheduleInOutlook(leadId, _specOk) {
+function scheduleInOutlook(leadId) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found', 'error'); return; }
-
-  // SPEC BACKSTOP — this is the entry point the header "Schedule" button uses,
-  // so it must gate here too (scheduleNow(), the milestone-row path, gates
-  // separately). _specOk is set on the way back from the prompt to avoid
-  // re-prompting forever when the user chooses "Not known yet".
-  // Walkdowns are exempt: the whole point of a walkdown is to GO FIND the spec.
-  const _isWalkdownVisit = ['lead-received','info-gathering','estimating'].includes(lead.stage);
-  if (!_specOk && !_isWalkdownVisit && _specIncomplete(lead)) {
-    openSpecPrompt(leadId, () => scheduleInOutlook(leadId, true));
-    return;
-  }
+  // NOTE: the spec backstop is NOT here. It lives in openSchedInOutlook(), at
+  // the moment you press Create — because only then is the APPOINTMENT TYPE
+  // known, and that (not the job's stage) is what determines whether the spec
+  // is required. An Installation needs it; a Walkdown is the trip that finds it.
   _schedLeadId = leadId;
 
   // Default to installation type unless lead is in a pre-quote stage.
@@ -25955,7 +25948,7 @@ function _schedBodyToHtml(plain) {
 // (or the user's default if none configured), then open the created event
 // in Outlook web for review. Replaces the old deep-link compose flow so we
 // can target a specific calendar (e.g. GreenKey Business Calendar).
-async function openSchedInOutlook() {
+async function openSchedInOutlook(_specOk) {
   if (!_schedLeadId) { toast('Job not found', 'error'); return; }
   const lead = getLead(_schedLeadId);
   if (!lead) { toast('Job not found', 'error'); return; }
@@ -25977,6 +25970,22 @@ async function openSchedInOutlook() {
   // request — if accepted, the event is created TENTATIVE and flips to busy when
   // the customer confirms (via the /scheduling/* Worker flow).
   const _isInstall = (document.getElementById('sched-type')?.value || '') === 'installation';
+
+  // ── SPEC BACKSTOP ──────────────────────────────────────────────────────
+  // Gate on the APPOINTMENT TYPE, not the job's stage. An Installation can't be
+  // bought or worked without the breaker type and size; a Walkdown / site visit
+  // is precisely the trip that goes and finds them, so it must never be blocked.
+  // This is the right home for the check: it's the first point where the type is
+  // known, it's before installScheduled gets stamped or any customer email goes
+  // out, and it catches BOTH schedule entry points because they both land here.
+  // _specOk is passed on the way back from the prompt so choosing "Not known
+  // yet" doesn't re-prompt forever.
+  if (!_specOk && _isInstall && _specIncomplete(lead)) {
+    const _lid = _schedLeadId;
+    openSpecPrompt(_lid, () => { _schedLeadId = _lid; openSchedInOutlook(true); });
+    return;
+  }
+
   const _cust = (lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
   const _custEmail = (_cust?.email || lead.customerEmail || '').trim();
   let _wantConfirm = false;
