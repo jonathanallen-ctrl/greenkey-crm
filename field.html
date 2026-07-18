@@ -63,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-15 field-5';
+const BUILD = '2026-07-15 field-6';
 const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
 const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
 const FIELD_URL       = location.origin + location.pathname; // this page
@@ -104,13 +104,21 @@ function isDirect(l){ return !PLATFORMS.includes(l.source); }
 function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-won','closed-lost','not-won'].includes(l.stage) && !(l.lostInfo&&l.lostInfo.isLost)); }
 function getQuotes(){ try{return JSON.parse(localStorage.getItem('gk_quotes')||'[]')}catch(e){return[]} }
 function fmt$(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
-// Amount to collect: from the accepted quote (card = quoteTotal w/ fee, net = preProcessingTotal). Falls back to jobValue.
-function jobPayAmounts(l){
+// The quote amount as originally priced: card = quoteTotal (w/ fee), net = preProcessingTotal. Falls back to jobValue.
+function quoteAmounts(l){
   const q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
   if(q){ const net=(typeof q.preProcessingTotal==='number'&&isFinite(q.preProcessingTotal))?Math.round(q.preProcessingTotal):null;
          const card=(typeof q.quoteTotal==='number'&&isFinite(q.quoteTotal))?Math.round(q.quoteTotal):net; return {net,card}; }
   const jv=(l.jobValue&&typeof l.jobValue.amount==='number'&&isFinite(l.jobValue.amount))?Math.round(l.jobValue.amount):null;
   return {net:jv, card:jv};
+}
+// Amount to actually COLLECT. If the tech made an on-site adjustment, that single
+// figure is what we charge on every method; otherwise fall back to the quote.
+function jobPayAmounts(l){
+  if(l && l.priceOverride && typeof l.priceOverride.amount==='number' && isFinite(l.priceOverride.amount)){
+    const a=Math.round(l.priceOverride.amount); return {net:a, card:a, overridden:true};
+  }
+  return quoteAmounts(l);
 }
 
 // ---------- auth ----------
@@ -200,8 +208,12 @@ function renderJobs(){
     const todayJobs=leads.filter(l=>schedDate(l).slice(0,10)===todayStr);
     const upcoming=leads.filter(l=>{ const d=schedDate(l).slice(0,10); if(!d||d===todayStr) return false; const dt=new Date(d); if(isNaN(dt))return false; const days=Math.round((dt-today)/86400000); return days>0&&days<=7; });
     const other=leads.filter(l=>l.stage==='installation' && !todayJobs.includes(l) && !upcoming.includes(l));
+    // Walkdowns = jobs sitting in the pre-quote "Walkdown" stage (id still
+    // 'info-gathering' in the CRM; relabeled to Walkdown).
+    const walkdowns=leads.filter(l=>l.stage==='info-gathering');
     const sec=(t,arr)=> arr.length? '<div class="sec">'+t+' ('+arr.length+')</div>'+arr.map(jobCard).join('') : '';
-    body = sec('Today',todayJobs)+sec('Next 7 days',upcoming)+sec('In progress',other);
+    const wsec=walkdowns.length? '<div class="sec">Walkdowns ('+walkdowns.length+')</div>'+walkdowns.map(walkdownCard).join('') : '';
+    body = sec('Today',todayJobs)+sec('Next 7 days',upcoming)+sec('In progress',other)+wsec;
     if(!body) body='<div class="empty">No scheduled or in-progress jobs.<br>Use search to find any job.</div>';
   }
   $app().innerHTML = header('My Jobs')
@@ -222,6 +234,74 @@ function jobCard(l){
     + '</div><div class="chev">›</div></div></a>';
 }
 function openJob(id){ location.hash='#job='+encodeURIComponent(id); renderDetail(id); }
+function walkdownCard(l){
+  return '<a class="card" onclick="openWalkdown(\''+esc(l.id)+'\')">'
+    + '<div class="jrow"><div style="flex:1;min-width:0">'
+    + '<div class="jname">'+esc(custName(l))+'</div>'
+    + (leadAddr(l)?'<div class="jaddr">'+esc(leadAddr(l))+'</div>':'')
+    + '<div class="chips"><span class="chip amber">🔍 Walkdown</span>'+(l.jobType?'<span class="chip blue">'+esc(prettyType(l.jobType))+'</span>':'')+'</div>'
+    + '</div><div class="chev">›</div></div></a>';
+}
+function openWalkdown(id){ location.hash='#wd='+encodeURIComponent(id); renderWalkdown(id); }
+// Light walkdown capture: a few free-text electrical fields + notes + photos.
+// Saved into lead.walkdown / lead.walkdownNotes (kept separate from the CRM's
+// structured electricalSnapshot so it can't corrupt quote-pricing dropdowns);
+// the office reads it in the CRM and finalizes the structured snapshot there.
+function renderWalkdown(id){
+  const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
+  if(!l){ $app().innerHTML=header('Walkdown')+'<div class="wrap"><a class="back" onclick="goJobs()">‹ Back</a><div class="empty">Job not found.</div></div>'; return; }
+  const phone=leadPhone(l), addr=leadAddr(l);
+  const tel = phone? 'tel:'+phone.replace(/[^0-9+]/g,'') : '';
+  const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
+  const w=l.walkdown||{}, s=l.electricalSnapshot||{};
+  const fld=(fid,lab,val,ph)=>'<div style="margin-bottom:10px"><div class="lab">'+esc(lab)+'</div><input id="'+fid+'" class="srch" style="margin-top:0" value="'+esc(val||'')+'" placeholder="'+esc(ph||'')+'"></div>';
+  $app().innerHTML = header('Walkdown')
+    + '<div class="wrap">'
+    + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
+    + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
+    + (addr?'<div class="jaddr" style="font-size:14px;margin-bottom:6px">'+esc(addr)+'</div>':'')
+    + '<div class="row2">'
+    + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
+    + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
+    + '</div>'
+    + '<div class="card"><div class="lab" style="margin-bottom:8px">Site electrical — for the estimate</div>'
+    +   fld('wd-service','Service size', w.serviceSize||s.serviceSize, 'e.g. 200A')
+    +   fld('wd-panel','Panel make / model', w.panelMake||s.panelBrand, 'e.g. Square D Homeline')
+    +   fld('wd-breaker','Main breaker', w.mainBreaker||s.breakerSize, 'e.g. 200A')
+    +   fld('wd-spaces','Open breaker spaces', w.openSpaces, 'e.g. 4 (2 tandem)')
+    +   '<div class="lab">Notes for the estimator</div>'
+    +   '<textarea id="wd-notes" class="srch" style="margin-top:0;min-height:90px;resize:vertical">'+esc(l.walkdownNotes||'')+'</textarea>'
+    +   '<button class="btn green" style="margin-top:12px" onclick="saveWalkdown(\''+esc(l.id)+'\')">Save walkdown info</button>'
+    + '</div>'
+    + '<div class="card"><div class="lab" style="display:flex;align-items:center;justify-content:space-between">Photos'
+    +   '<button class="chip" onclick="shotPick(\''+esc(l.id)+'\',\'walkdown\')">📸 Add photo</button></div>'
+    +   '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
+    +   '<div id="ph-status" class="muted" style="font-size:12.5px;margin:6px 0 2px"></div>'
+    +   '<div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
+    + '</div>'
+    + '</div>';
+  loadJobPhotos(l.id).then(ph=>{ const el=document.getElementById('photos'); if(!el) return;
+    el.innerHTML = ph.length? '<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>';
+  }).catch(()=>{});
+  window.scrollTo(0,0);
+}
+async function saveWalkdown(jobId){
+  const g=fid=>{ const e=document.getElementById(fid); return e?e.value.trim():''; };
+  const service=g('wd-service'), panel=g('wd-panel'), breaker=g('wd-breaker'), spaces=g('wd-spaces'), notes=g('wd-notes');
+  loading('Saving walkdown…');
+  try{
+    await syncFromSP().catch(()=>{});
+    const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+    const acct=_msal&&_msal.getAllAccounts()[0]; const who=(acct&&(acct.name||acct.username))||'';
+    arr[i].walkdown={ serviceSize:service, panelMake:panel, mainBreaker:breaker, openSpaces:spaces, by:who, at:new Date().toISOString() };
+    arr[i].walkdownNotes=notes;
+    arr[i].updatedAt=new Date().toISOString();
+    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    await pushLeads();
+    alert('✓ Walkdown info saved. The office will finalize the electrical snapshot in the CRM.');
+  }catch(e){ alert('Could not save: '+(e.message||e)); }
+  renderWalkdown(jobId);
+}
 function renderDetail(id){
   const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
   if(!l){ $app().innerHTML=header('Job')+'<div class="wrap"><a class="back" onclick="goJobs()">‹ Back</a><div class="empty">Job not found.</div></div>'; return; }
@@ -242,7 +322,9 @@ function renderDetail(id){
     payCard = '<div class="pay"><div class="lab" style="color:#7fe0a6">Collect Payment</div>'
       + (hasAmt ? '<div style="font-size:14px;margin-bottom:10px">'+(c!=null?'Card <b>'+fmt$(c)+'</b>':'')+((c!=null&&n!=null&&n!==c)?' &nbsp;·&nbsp; Zelle/cash <b>'+fmt$(n)+'</b>':'')+'</div>'
                  : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
-      + '<button class="btn green" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">💳 Card paid'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+      + '<button class="btn green" onclick="tapToPay(\''+esc(l.id)+'\')">💳 Tap to Pay'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">✓ Card paid — record it'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">💳 Text pay link'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
@@ -265,6 +347,24 @@ function renderDetail(id){
       ? '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Install complete'+(ms.installCompleted.date?(' · '+esc(ms.installCompleted.date)):'')+'</div><button class="btn ghost" style="margin-top:10px" onclick="doComplete(\''+esc(l.id)+'\',false)">Undo</button>'
       : '<button class="btn green" onclick="doComplete(\''+esc(l.id)+'\',true)">✓ Mark install complete</button>')
     + '</div>';
+  // Amount to collect (direct jobs) — quote price or the tech's on-site adjustment.
+  const _amt = jobPayAmounts(l); const _qa = quoteAmounts(l); const _ov = l.priceOverride;
+  const _collect = (_amt.net!=null?_amt.net:_amt.card);
+  let amountCard = '<div class="card"><div class="lab">Amount to collect</div>'
+    + (_collect!=null ? '<div style="font-size:22px;font-weight:700;color:#e8eaed">'+fmt$(_collect)+'</div>' : '<div class="muted" style="font-size:14px">No quote amount on file</div>')
+    + ((_amt.card!=null&&_amt.net!=null&&_amt.card!==_amt.net) ? '<div class="muted" style="font-size:12.5px;margin-top:2px">Card '+fmt$(_amt.card)+' · Cash/Zelle '+fmt$(_amt.net)+'</div>' : '')
+    + (_ov ? '<div style="font-size:12.5px;color:#ffc861;margin-top:6px">✎ Adjusted on site'+(_qa.net!=null?(' · quoted '+fmt$(_qa.net)):'')+(_ov.note?('<br>'+esc(_ov.note)):'')+'</div>' : '')
+    + '<button class="btn ghost" style="margin-top:10px" onclick="adjustAmount(\''+esc(l.id)+'\')">✎ Adjust amount</button>'
+    + (_ov ? '<div style="height:8px"></div><button class="btn ghost" onclick="clearAdjust(\''+esc(l.id)+'\')">Undo adjustment</button>' : '')
+    + '</div>';
+  // Install Spec table (read-only) — the office fills this in the CRM.
+  const _spec = Array.isArray(l.installSpec) ? l.installSpec.filter(r=>r && (r.label||r.value)) : [];
+  const specCard = _spec.length
+    ? '<div class="card"><div class="lab">Install Spec</div>'
+      + '<div style="display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px">'
+      + _spec.map(r=>'<div class="muted" style="white-space:nowrap">'+esc(r.label||'')+'</div><div style="color:#e8eaed">'+esc(r.value||'')+'</div>').join('')
+      + '</div></div>'
+    : '';
   $app().innerHTML = header('Job')
     + '<div class="wrap">'
     + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
@@ -275,16 +375,26 @@ function renderDetail(id){
     + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
     + '</div>'
+    + (isDirect(l)?amountCard:'')
     + payCard
     + statusCard
+    + specCard
     + (l.scopeOfWork?'<div class="card"><div class="lab">Scope of Work</div><div class="scope">'+esc(l.scopeOfWork)+'</div></div>':'')
-    + '<div class="card"><div class="lab" style="display:flex;align-items:center;justify-content:space-between">Photos'
-      + '<button class="chip" onclick="document.getElementById(\'ph-input\').click()">📸 Add completion photos</button></div>'
+    + '<div class="card">'
+      + '<div class="lab" style="display:flex;align-items:center;justify-content:space-between">Required photos<span id="shot-count" class="muted" style="font-size:12px;font-weight:600">0 of '+INSTALL_SHOTS.length+'</span></div>'
+      + INSTALL_SHOTS.map(s=>'<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid #1d222c">'
+          + '<button class="btn ghost" style="width:auto;padding:8px 13px;font-size:15px;flex:0 0 auto" onclick="shotPick(\''+esc(l.id)+'\',\''+s.key+'\')">📸</button>'
+          + '<div style="flex:1;font-size:14px;line-height:1.3">'+esc(s.label)+'</div>'
+          + '<span id="shot-'+s.key+'" style="font-size:17px;width:20px;text-align:center;color:#5d6675">○</span>'
+        + '</div>').join('')
       + '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
-      + '<div id="ph-status" class="muted" style="font-size:12.5px;margin:6px 0 2px"></div>'
-      + '<div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div></div>'
+      + '<div id="ph-status" class="muted" style="font-size:12.5px;margin:8px 0 2px"></div>'
+      + '<button class="btn ghost" style="margin-top:6px" onclick="shotPick(\''+esc(l.id)+'\',\'other\')">📸 Add other photos</button>'
+      + '<div id="photos" style="margin-top:10px"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
+    + '</div>'
     + '</div>';
   loadJobPhotos(l.id).then(ph=>{
+    _applyShotStatus(ph);
     const el=document.getElementById('photos'); if(!el) return;
     if(!ph.length){ el.innerHTML='<div class="muted" style="font-size:13px">No photos on this job yet.</div>'; return; }
     el.innerHTML='<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>';
@@ -315,26 +425,49 @@ async function graphPatch(path, bodyObj){
   const r=await fetch('https://graph.microsoft.com/v1.0'+path,{method:'PATCH',headers:{Authorization:'Bearer '+_gToken,'Content-Type':'application/json'},body:JSON.stringify(bodyObj)});
   if(!r.ok) throw new Error('PATCH '+r.status); return r.json().catch(()=>null);
 }
-async function uploadPhoto(jobId, file){
+// All photos land in the job's install/ folder (which the CRM already auto-pulls);
+// the shot TYPE is tagged as a "<key>__" filename prefix so the checklist can tell
+// which required shots are done without needing extra SharePoint folders.
+async function uploadPhoto(jobId, file, catKey){
   if(!_spDrive) throw new Error('no drive');
   const conv = await resizeImage(file, 2048, 0.88);
-  const fname = Date.now()+'_'+(conv.name||'photo.jpg').replace(/[^A-Za-z0-9._-]/g,'_');
+  const tag = (catKey||'other').replace(/[^a-z0-9-]/gi,'');
+  const fname = tag+'__'+Date.now()+'_'+(conv.name||'photo.jpg').replace(/[^A-Za-z0-9._-]/g,'_');
   const path = SP_PHOTO_LIB+'/'+jobId+'/install/'+fname;       // CRM auto-pulls this folder
   const r = await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/root:/'+encodeURI(path)+':/content',
     { method:'PUT', headers:{ Authorization:'Bearer '+_gToken, 'Content-Type':conv.type||'image/jpeg' }, body:conv.blob });
   if(!r.ok) throw new Error('upload '+r.status);
   return true;
 }
+let _photoCat='other';
+function shotPick(jobId, catKey){ _photoCat=catKey||'other'; const inp=document.getElementById('ph-input'); if(inp) inp.click(); }
 async function onPhotoPick(input, jobId){
-  const files=[...(input.files||[])]; input.value=''; if(!files.length) return;
+  const files=[...(input.files||[])]; input.value=''; const cat=_photoCat; _photoCat='other'; if(!files.length) return;
   const st=document.getElementById('ph-status');
   try{ await getTokenSilent(); }catch(e){}
   let ok=0,fail=0;
-  for(let i=0;i<files.length;i++){ if(st) st.textContent='Uploading '+(i+1)+' of '+files.length+'…'; try{ await uploadPhoto(jobId,files[i]); ok++; }catch(e){ console.warn('[field] photo',e); fail++; } }
+  for(let i=0;i<files.length;i++){ if(st) st.textContent='Uploading '+(i+1)+' of '+files.length+'…'; try{ await uploadPhoto(jobId,files[i],cat); ok++; }catch(e){ console.warn('[field] photo',e); fail++; } }
   if(st) st.textContent = ok+' uploaded'+(fail?(' · '+fail+' failed'):'');
   const el=document.getElementById('photos'); if(el){ el.innerHTML='<div class="muted" style="font-size:13px">Refreshing…</div>';
-    try{ const ph=await loadJobPhotos(jobId); el.innerHTML = ph.length? '<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>'; }catch(e){}
+    try{ const ph=await loadJobPhotos(jobId); _applyShotStatus(ph); el.innerHTML = ph.length? '<div class="pgrid">'+ph.map(p=>'<a class="pcell" href="'+esc(p.url)+'" target="_blank" rel="noopener"><img src="'+esc(p.url)+'" loading="lazy" decoding="async" alt=""></a>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>'; }catch(e){}
   }
+}
+// Required closeout shots (needed for direct AND platform closeouts — Qmerit/Treehouse/etc.).
+const INSTALL_SHOTS = [
+  {key:'panel-wiring',   label:'Panel wiring'},
+  {key:'panel-labeled',  label:'Panel — cover on, breaker labeled'},
+  {key:'run',            label:'Conduit / wire run + junction boxes'},
+  {key:'charger-wiring', label:'Charger wiring'},
+  {key:'charger-done',   label:'Completed charger (stand back ~5 ft)'},
+  {key:'charger-serial', label:'Charger serial # + amp setting'},
+  {key:'commissioning',  label:'Proof of commissioning'}
+];
+function _shotDone(photos, key){ return (photos||[]).some(p=>p && typeof p.name==='string' && p.name.indexOf(key+'__')===0); }
+function _applyShotStatus(photos){
+  let done=0;
+  INSTALL_SHOTS.forEach(s=>{ const el=document.getElementById('shot-'+s.key); const ok=_shotDone(photos,s.key); if(ok) done++;
+    if(el){ el.textContent=ok?'✓':'○'; el.style.color=ok?'#36c777':'#5d6675'; } });
+  const c=document.getElementById('shot-count'); if(c) c.textContent=done+' of '+INSTALL_SHOTS.length;
 }
 // Safe single-lead write: re-pull fresh, modify, merge by id+updatedAt, PATCH the list item.
 async function pushLeads(){
@@ -413,6 +546,45 @@ async function clearPayment(jobId){
   arr[i].updatedAt=new Date().toISOString();
   localStorage.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
+}
+
+// ---------- on-site amount adjustment (amount + required note; office sees it) ----------
+async function adjustAmount(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
+  const cur=(l.priceOverride&&typeof l.priceOverride.amount==='number')?l.priceOverride.amount:(quoteAmounts(l).net||'');
+  const v=prompt('Adjusted amount to collect ($):', cur===''?'':String(cur)); if(v===null) return;
+  const amt=Math.round(parseFloat(v)||0); if(!amt||amt<=0){ alert('Enter a valid amount.'); return; }
+  const note=prompt('Reason for the change (required — the office will see this):',''); if(note===null) return;
+  if(!note.trim()){ alert('A reason is required so the office knows why it changed.'); return; }
+  loading('Saving adjustment…');
+  try{ await _saveAdjust(jobId, amt, note.trim()); }catch(e){ alert('Could not save: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+async function _saveAdjust(jobId, amount, note){
+  try{ await syncFromSP(); }catch(e){}
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+  const acct=_msal&&_msal.getAllAccounts()[0]; const who=(acct&&(acct.name||acct.username))||'';
+  arr[i].priceOverride={ amount:amount, note:note, by:who, at:new Date().toISOString() };
+  arr[i].updatedAt=new Date().toISOString();
+  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  await pushLeads();
+}
+async function clearAdjust(jobId){
+  if(!confirm('Undo the on-site amount adjustment (back to the quoted amount)?')) return;
+  loading('Updating…');
+  try{ await syncFromSP(); const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId);
+    if(i>=0){ delete arr[i].priceOverride; arr[i].updatedAt=new Date().toISOString(); localStorage.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); } }
+  catch(e){ alert(e.message||e); }
+  renderDetail(jobId);
+}
+
+// Tap to Pay: web apps can't run Tap to Pay directly (Apple requires a native
+// app), so this shows the amount and walks the tech to the Stripe app, then back
+// to record it. No pre-fill of the amount is possible from here.
+function tapToPay(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l) return;
+  const amt=jobPayAmounts(l).card;
+  alert('Tap to Pay\n\n1) Open the Stripe app and start a Tap to Pay charge for '+(amt?fmt$(amt):'the amount')+'.\n2) Tap the customer’s card or phone.\n3) Come back here and tap “✓ Card paid — record it”.');
 }
 
 // ---------- Stripe pay link: create + text from the business number ----------
