@@ -112,6 +112,58 @@ function quoteAmounts(l){
   const jv=(l.jobValue&&typeof l.jobValue.amount==='number'&&isFinite(l.jobValue.amount))?Math.round(l.jobValue.amount):null;
   return {net:jv, card:jv};
 }
+// ── Install Spec ──────────────────────────────────────────────────────────
+// Assembled from data the office ALREADY maintains — there are no new fields to
+// fill in anywhere. Panel + service come from the job's Electrical Snapshot;
+// breaker amps, wire gauge/metal, tandem count and run length come from the
+// accepted quote's Quick Quote. Mirrors index.html's EVNEMA_WIRE_OPTIONS (amps
+// are only stated for the two standard wires — we show a breaker size only when
+// it's actually known rather than guessing on the long-run variants).
+const EV_WIRE_SPEC = {
+  '8cu': { wire:'#8 Cu', amps:'50 A' },
+  '6cu': { wire:'#6 Cu', amps:'60 A' },
+  '4cu': { wire:'#4 Cu', amps:'' },
+  '2al': { wire:'#2 Al', amps:'' }
+};
+const RUN_LABEL = { crawl:'crawl space', attic:'attic', unfinished:'unfinished space',
+  surface:'surface conduit', 'hand-trench':'trench (hand dug)', 'machine-trench':'trench (machine)' };
+function _installSpecRows(l){
+  const rows=[]; if(!l) return rows;
+  const s=l.electricalSnapshot||{};
+  const panel = s.panelBrand==='Other' ? (s.panelBrandOther||'Other') : (s.panelBrand||'');
+  if(panel)        rows.push(['Panel', panel]);
+  if(s.serviceSize) rows.push(['Service', s.serviceSize]);
+  // Breaker: the Electrical Snapshot is authoritative when it's filled in; the
+  // quote's wire choice is only a fallback (it implies amps for the two standard
+  // wires). Shows "— not recorded —" when neither is known, so the tech can see
+  // the gap rather than silently getting no breaker line at all.
+  const bkr = s.breakerSize==='Other' ? (s.breakerSizeOther||'') : (s.breakerSize||'');
+  const q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
+  const qq = q && q.qq ? q.qq : null;
+  const w = qq ? EV_WIRE_SPEC[qq.evWireId||'6cu'] : null;
+  if(bkr)                 rows.push(['Breaker', bkr]);
+  else if(w && w.amps)    rows.push(['Breaker', w.amps+' 2-pole (from quote)']);
+  else if(panel||qq)      rows.push(['Breaker', '— not recorded —']);
+  if(qq){
+    if(w) rows.push(['Wire', w.wire]);
+    if(typeof qq.tandemBreakers==='number')
+      rows.push(['Tandems', qq.tandemBreakers>0 ? (qq.tandemBreakers+' needed') : 'None']);
+    const segs = Array.isArray(qq.runSegs)?qq.runSegs:[];
+    if(segs.length){
+      const total = segs.reduce((n,sg)=>n+(parseInt(sg.ft)||0),0);
+      const routes = [...new Set(segs.map(sg=>RUN_LABEL[sg.type]||sg.type))].filter(Boolean).join(', ');
+      if(total) rows.push(['Run', total+' ft'+(routes?(' — '+routes):'')]);
+    }
+  }
+  // Carry the BRH rule all the way to the person actually holding the breaker —
+  // the mistake happens at the supply house or in the truck, not at the desk.
+  if(/Eaton BR/i.test(panel||'') && /60-amp/i.test(bkr||''))
+    rows.push(['⚠ Breaker', 'Use BRH260 — BR260 not used on EV loads']);
+  // If the office scheduled without the spec, show WHY so the tech isn't guessing.
+  if(l.specSkip && l.specSkip.why) rows.push(['⚠ Spec', l.specSkip.why]);
+  return rows;
+}
+
 // Amount to actually COLLECT. If the tech made an on-site adjustment, that single
 // figure is what we charge on every method; otherwise fall back to the quote.
 function jobPayAmounts(l){
@@ -357,12 +409,13 @@ function renderDetail(id){
     + '<button class="btn ghost" style="margin-top:10px" onclick="adjustAmount(\''+esc(l.id)+'\')">✎ Adjust amount</button>'
     + (_ov ? '<div style="height:8px"></div><button class="btn ghost" onclick="clearAdjust(\''+esc(l.id)+'\')">Undo adjustment</button>' : '')
     + '</div>';
-  // Install Spec table (read-only) — the office fills this in the CRM.
-  const _spec = Array.isArray(l.installSpec) ? l.installSpec.filter(r=>r && (r.label||r.value)) : [];
+  // Install Spec table (read-only) — ASSEMBLED from data the office already
+  // maintains. Nothing new to fill in.
+  const _spec = _installSpecRows(l);
   const specCard = _spec.length
     ? '<div class="card"><div class="lab">Install Spec</div>'
       + '<div style="display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px">'
-      + _spec.map(r=>'<div class="muted" style="white-space:nowrap">'+esc(r.label||'')+'</div><div style="color:#e8eaed">'+esc(r.value||'')+'</div>').join('')
+      + _spec.map(r=>'<div class="muted" style="white-space:nowrap">'+esc(r[0])+'</div><div style="color:#e8eaed">'+esc(r[1])+'</div>').join('')
       + '</div></div>'
     : '';
   $app().innerHTML = header('Job')

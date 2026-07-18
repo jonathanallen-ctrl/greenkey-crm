@@ -1419,7 +1419,7 @@
             <select class="psel" id="lf-stage" onchange="renderLeadsPage()">
               <option value="">All Stages</option>
               <option value="lead-received">Lead Received</option>
-              <option value="info-gathering">Info Gathering</option>
+              <option value="info-gathering">Walkdown</option>
               <option value="estimating">Estimating</option>
               <option value="quote-delivered">Quote Delivered</option>
               <option value="quote-approved">Quote Approved</option>
@@ -1631,7 +1631,12 @@ try { localStorage.removeItem('gk_biometric'); } catch(_){}
 // hand. IDs stay stable so existing data and code don't need to migrate.
 const STAGES = [
   {id:'lead-received',    label:'Lead Received',     col:'blue'},
-  {id:'info-gathering',   label:'Info Gathering',    col:'blue'},
+  // 2026-07-15: relabeled "Info Gathering" → "Walkdown" (Jonathan). The stage
+  // ID stays 'info-gathering' on purpose — every job already stores that value
+  // and six logic sites key off it, so a rename would need a data migration for
+  // zero benefit. This is the stage where a job is awaiting/having its walkdown,
+  // and it's what the field app lists under "Walkdowns".
+  {id:'info-gathering',   label:'Walkdown',          col:'blue'},
   {id:'estimating',       label:'Estimating',        col:'amber'},
   {id:'quote-delivered',  label:'Awaiting Customer', col:'amber'},
   {id:'quote-approved',   label:'Quote Approved',    col:'green'},
@@ -4720,6 +4725,15 @@ function getQQPricing(){
     panelAFCIUpgradePerBreaker:100,
     // Existing add-ons
     tandemBreaker:40, post:150,
+    // Eaton BR panel + EV load ⇒ BRH260 required (BR260s have the potential to
+    // fail under continuous EV loads). Our hard cost delta is ~$67 (BRH ~$87 vs
+    // BR ~$20), but this is deliberately priced at $50, NOT cost-plus: a simple
+    // garage install is $500 base + $200 permit = $700, which is the price point
+    // that wins against unpermitted $400 competitors. +$50 lands at $750; past
+    // ~$800 on a within-5-ft install the job goes elsewhere. We absorb the rest
+    // — a 2-man crew is under an hour on these, so margin still holds.
+    // ⚠ Do not raise this without revisiting that $750 ceiling (Jonathan, 2026-07-15).
+    brhBreaker:50,
     // Permits / fees
     standardPermit:200, qmeritPermit:250, specialPermit:500,
     materialsBuffer:0.10,
@@ -4936,6 +4950,30 @@ function flagMissUtility(leadId) {
 // Panel make, breaker size, and space strategy are critical job facts for any
 // 240V-load job. Soft nag (chip) when missing — loose gate, never a block.
 const _PANEL_INFO_JOB_TYPES = ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','panel-replacement','service-upgrade','new-service','battery-system','v2h-system','generator','energy-management'];
+// Panel make IS the breaker type the tech has to bring — these two lists are the
+// single source for both the Electrical Snapshot form and the pre-schedule spec
+// prompt. 'Eaton BRH' added 2026-07-15 (Jonathan). GFCI is a breaker-size option
+// rather than a separate flag because it only applies at the 50 A NEMA level.
+const PANEL_BRAND_OPTIONS  = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+const BREAKER_SIZE_OPTIONS = ['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'];
+
+// ⚠ SPEC RULE — BR260 IS NEVER USED ON EV LOADS.
+// Eaton BR260 breakers have the potential to fail under continuous EV-charging
+// loads (a known industry issue; GreenKey has seen it in the field). A 60-amp
+// Eaton BR is ALWAYS specced, ordered and installed as a BRH260 instead.
+// Enforced here at the DATA layer — not just in one form — so a BR260 can't be
+// selected from the snapshot, the pre-schedule prompt, or any form added later.
+// Everyone here knows this today; encoding it is how it survives the next hire.
+function _enforceBRH(snap) {
+  if (snap && snap.panelBrand === 'Eaton BR' && String(snap.breakerSize || '').indexOf('60-amp') === 0) {
+    snap.panelBrand = 'Eaton BRH';
+  }
+  return snap;
+}
+function _isBRHSubstitution(brand, size) {
+  return brand === 'Eaton BR' && String(size || '').indexOf('60-amp') === 0;
+}
+
 function leadPanelInfoMissing(lead) {
   if (!lead || !_PANEL_INFO_JOB_TYPES.includes(lead.jobType)) return false;
   const s = lead.electricalSnapshot || {};
@@ -5828,16 +5866,21 @@ function _renderPanelSuggestionBanner(q, lead){
     items.push(`<span style="color:var(--amber)">⚠ Panel make / breaker size not recorded for this job.</span>
       <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="openLeadDetail('${lead.id}')">Open Electrical Snapshot →</button>`);
   }
-  // Eaton BR + EV load → BRH260 safety swap (no-exceptions rule: BR260s have
-  // melted under sustained EV charging loads).
-  const isBR = snap.panelBrand === 'Eaton BR';
+  // Eaton BR panel + EV load → BRH260 safety swap (no-exceptions rule: BR260s
+  // have the potential to fail under continuous EV charging loads).
+  // ⚠ Matches BOTH 'Eaton BR' and 'Eaton BRH'. _enforceBRH() rewrites a 60-amp
+  // 'Eaton BR' selection to 'Eaton BRH', and an exact === 'Eaton BR' test would
+  // then silently stop firing — so the BRH260 line would never be added to the
+  // quote and the correct breaker would never get ordered. The panel is still a
+  // BR-type panel either way; it's the BREAKER that's a BRH.
+  const isBR = /^Eaton BR/.test(snap.panelBrand || '');
   const isEVLoad = _EV_LOAD_JOB_TYPES.includes(q.jobType);
   const hasBRH = (q.lines||[]).some(ln=>/brh/i.test(ln.desc||'')) || (q.scope||'').match(/BRH/i);
   if (isBR && isEVLoad && !hasBRH && !q._dismissBRH) {
-    items.push(`<span><strong>Eaton BR panel + EV load</strong> — BRH260 safety breaker swap required (BR260s have melted under EV loads).</span>
+    items.push(`<span><strong>Eaton BR panel + EV load</strong> — BRH260 safety breaker swap required (BR260s have the potential to fail under EV loads).</span>
       ${q.type==='detailed'
         ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11.5px;color:var(--green)" onclick="_addSuggestedLine('${q.id}','BRH safety breaker (BR panel) — required for EV loads',1,90,30)">+ Add BRH260 line</button>`
-        : `<span style="color:var(--text-muted)">Quick Quote: add +$50 to the Difficulty / One-off fee for the swap-vs-standard difference.</span>`}`);
+        : `<span style="color:var(--text-muted)">Quick Quote: the +$${(getQQPricing().brhBreaker)} BRH adder is applied automatically on full installs — no manual difficulty fee needed.</span>`}`);
   }
   // Space strategy from the snapshot's Issues dropdown.
   const issue = snap.major240VLoads || '';
@@ -6553,6 +6596,16 @@ function onQQChange(qid){
   if(isNema) lm+=(nemaLocation==='outside'?p.nema1450Outside:p.nema1450Inside);
   if(!isNema&&mountType==='post') lm+=p.post;
   if(tandemBreakers>0) lm+=tandemBreakers*p.tandemBreaker;
+  // BRH260 auto-adder — an Eaton BR panel on an EV load always gets a BRH
+  // breaker. Applied automatically so it no longer depends on someone
+  // remembering to key +$50 into the Difficulty fee by hand. FULL installs only:
+  // swaps and existing-circuit jobs reuse the breaker that's already there.
+  // Depends on the panel make being recorded, which the pre-schedule spec prompt
+  // now enforces — that's what finally makes this automatable.
+  const _qqLead = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
+  const _qqBRH  = evInstallType === 'full'
+    && /^Eaton BR/.test((_qqLead && _qqLead.electricalSnapshot && _qqLead.electricalSnapshot.panelBrand) || '');
+  if(_qqBRH) lm += p.brhBreaker;
   lm+=difficultyFee;
   lm+=travelAdder;
   (q.qq?.extras||[]).forEach(ex=>{lm+=parseFloat(ex.price)||0;});
@@ -10556,7 +10609,11 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   toast('Quote PDF downloaded','success');
 }
 
-function generateInvoicePDF(q,cust,lead,invNum){
+// paidInfo (optional) => {amount, methodLabel, date} stamps this as a PAID
+// invoice — the document customers need for tax credits / rebates (shows the
+// work AND that it was paid). returnDataUrl mirrors generateQuotePDF: return
+// {dataUrl, filename} for emailing instead of downloading.
+function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl){
   const jsPDF=getPDFLib();if(!jsPDF)return;
   const doc=new jsPDF({unit:'pt',format:'letter'});
   const W=612,PH=792;let y=0;
@@ -10567,10 +10624,16 @@ function generateInvoicePDF(q,cust,lead,invNum){
   // split logic (Bill-To + Service Location when AF1 etc. is paying directly).
   y = pdfCustomerBlock(doc, cust, lead, y, q);
   // payment terms box
-  doc.setFillColor(235,250,225);doc.roundedRect(W-180,108,144,44,4,4,'F');
-  doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('PAYMENT TERMS',W-108,121,{align:'center'});
-  doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(...DARK);doc.text('Due upon receipt',W-108,136,{align:'center'});
-  doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('Check, Zelle, or Credit Card',W-108,148,{align:'center'});
+  doc.setFillColor(paidInfo?225:235,paidInfo?245:250,225);doc.roundedRect(W-180,108,144,44,4,4,'F');
+  if(paidInfo){
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('PAID IN FULL',W-108,121,{align:'center'});
+    doc.setFont('helvetica','bold');doc.setFontSize(12);doc.setTextColor(...GREEN);doc.text('$'+Number(paidInfo.amount||0).toLocaleString('en-US'),W-108,137,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...GRAY);doc.text([paidInfo.methodLabel,paidInfo.date].filter(Boolean).join(' · '),W-108,148,{align:'center'});
+  } else {
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('PAYMENT TERMS',W-108,121,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(...DARK);doc.text('Due upon receipt',W-108,136,{align:'center'});
+    doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('Check, Zelle, or Credit Card',W-108,148,{align:'center'});
+  }
   y=Math.max(y,162)+12;
   doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   if(lead){
@@ -10596,9 +10659,11 @@ function generateInvoicePDF(q,cust,lead,invNum){
   doc.setDrawColor(...LGRAY);doc.line(36,PH-48,W-36,PH-48);
   doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...GRAY);
   doc.text('GreenKey — Licensed Electrical Contractor — Central Virginia',W/2,PH-34,{align:'center'});
-  doc.text('Thank you for your business! Please contact us with any questions.',W/2,PH-22,{align:'center'});
+  doc.text(paidInfo?'Paid in full — thank you for your business! Keep this for your records.':'Thank you for your business! Please contact us with any questions.',W/2,PH-22,{align:'center'});
   const cn=cust?custFullName(cust).replace(/\s/g,'_'):'Customer';
-  doc.save(`GreenKey_Invoice_${invNum}_${cn}.pdf`);
+  const filename = paidInfo ? `GreenKey_PaidInvoice_${invNum}_${cn}.pdf` : `GreenKey_Invoice_${invNum}_${cn}.pdf`;
+  if(returnDataUrl){ const dataUrl=doc.output('datauristring'); return {dataUrl, filename}; }
+  doc.save(filename);
   toast('Invoice PDF downloaded','success');
 }
 
@@ -11939,30 +12004,52 @@ function saveMsField(leadId, key, field, val) {
   }
 }
 
+// 2026-07-15 (Jonathan): AUTO-ARCHIVE REMOVED. A job used to close itself the
+// moment the final inspection passed and a payment was recorded — but that fires
+// too early: closeout photos still have to go to the customer/inspector, and
+// Sherri still has to record the invoice in QuickBooks. Archiving is now a
+// deliberate click (archiveJobNow) against the visible readiness checklist in the
+// Archive section. This function is kept as a no-op so the existing call sites
+// (milestone toggles, the payment poller, the field-payment reconcile) stay valid
+// without each needing to be unwound.
 function checkAutoArchive(leadId) {
+  return; // intentionally does nothing — see archiveJobNow()
+}
+
+// Manual archive. Lists anything still outstanding on the closeout checklist and
+// lets a human close the job anyway — judgment stays with the office.
+function archiveJobNow(leadId) {
   const lead = getLead(leadId);
-  if (!lead || lead.stage === 'archived') return;
+  if (!lead) return;
+  if (lead.stage === 'archived') { toast('This job is already archived', 'info'); return; }
   const ms = lead.milestones || {};
   const isDirect = !['Qmerit','Electrum','Treehouse'].includes(lead.source);
-  const inspPassed = ms.finalInspPassed?.done;
-  const paymentOk = isDirect ? ms.paymentReceived?.done : true;
-  if (inspPassed && paymentOk) {
-    const arr = getLeads();
-    const idx = arr.findIndex(l => l.id === leadId);
-    if (idx >= 0) {
-      arr[idx].stage = 'archived';
-      arr[idx].stageAt = new Date().toISOString();
-      arr[idx].updatedAt = new Date().toISOString();
-      if (!arr[idx].milestones.archived) arr[idx].milestones.archived = {};
-      arr[idx].milestones.archived.date = new Date().toISOString().slice(0,10);
-      saveLeads(arr);
-      if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // info form shows Archived
-      toast('Job auto-archived — inspection passed + payment received ✓', 'success');
-      // update stage selector in header if visible
-      const ss = document.getElementById('jd-stage-sel');
-      if (ss) ss.value = 'archived';
-    }
-  }
+  const outstanding = [];
+  if (!ms.photosSent?.done)         outstanding.push('Photos sent to customer / inspector');
+  if (!ms.finalInspScheduled?.done) outstanding.push('Final inspection scheduled');
+  if (!ms.finalInspPassed?.done)    outstanding.push('Final inspection passed');
+  if (isDirect && !ms.paymentReceived?.done) outstanding.push('Payment received');
+  if (isDirect && !ms.invoiceSent?.done)     outstanding.push('Invoice recorded (QuickBooks)');
+  const msg = outstanding.length
+    ? 'Archive this job?\n\nStill outstanding:\n  • ' + outstanding.join('\n  • ') + '\n\nArchive anyway?'
+    : 'Archive this job? Everything on the closeout checklist is done.';
+  if (!confirm(msg)) return;
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === leadId);
+  if (idx < 0) return;
+  arr[idx].stage = 'archived';
+  arr[idx].stageAt = new Date().toISOString();
+  arr[idx].updatedAt = new Date().toISOString();
+  if (!arr[idx].milestones) arr[idx].milestones = {};
+  if (!arr[idx].milestones.archived) arr[idx].milestones.archived = {};
+  arr[idx].milestones.archived.done = true;
+  arr[idx].milestones.archived.date = new Date().toISOString().slice(0,10);
+  saveLeads(arr);
+  if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId);
+  toast('Job archived ✓', 'success');
+  const ss = document.getElementById('jd-stage-sel');
+  if (ss) ss.value = 'archived';
+  try { renderJobDetail(leadId); } catch (_) {}
 }
 
 // Moving into 'not-won' records the job as lost (reason captured in the Not Won
@@ -12291,6 +12378,7 @@ function saveJobSnapshot(leadId, silent=false) {
     generator:        document.getElementById('snap-generator')?.checked||false,
     wireRuns:         existingRuns
   };
+  _enforceBRH(arr[idx].electricalSnapshot);   // 60 A Eaton BR is always a BRH260
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
   if (silent) _showAutoSaved('snap-save-btn');
@@ -12815,6 +12903,49 @@ function renderJobDetail(id) {
     </div>`;
   }
 
+  // ── On-site amount adjustment (written by the Field app) ──
+  // The tech can change the amount to collect, but must type a reason. No
+  // approval gate by design — the office just needs to SEE why it changed.
+  if (lead.priceOverride && typeof lead.priceOverride.amount === 'number') {
+    const _ov = lead.priceOverride;
+    const _ovQ = (() => {
+      const q = lead.acceptedQuoteId ? getQuotes().find(x => x.id === lead.acceptedQuoteId) : null;
+      const n = q && typeof q.preProcessingTotal === 'number' ? Math.round(q.preProcessingTotal) : null;
+      return n;
+    })();
+    const _ovDate = _ov.at ? new Date(_ov.at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    paymentBanner += `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--amber,#d79a2b);background:rgba(255,176,32,.10);border-radius:var(--r);display:flex;align-items:flex-start;gap:10px;font-size:13px">
+      <div style="font-size:18px;line-height:1;flex-shrink:0">✎</div>
+      <div style="flex:1">
+        <div style="font-weight:600;margin-bottom:2px">Amount adjusted on site — $${Number(_ov.amount).toLocaleString('en-US')}${_ovQ!=null?` <span style="font-weight:400;color:var(--text-muted)">(quoted $${_ovQ.toLocaleString('en-US')})</span>`:''}</div>
+        <div style="color:var(--text-secondary);line-height:1.45">${escHtml(_ov.note||'(no reason given)')}${_ov.by?` — <strong>${escHtml(_ov.by)}</strong>`:''}${_ovDate?`, ${_ovDate}`:''}</div>
+      </div>
+    </div>`;
+  }
+
+  // ── Walkdown capture (written by the Field app) ──
+  // Light on-site capture the tech takes during a walkdown. Kept separate from
+  // the structured Electrical Snapshot on purpose (free text can't be trusted to
+  // match the pricing dropdowns) — the office transcribes/confirms it below.
+  if (lead.walkdown || lead.walkdownNotes) {
+    const _w = lead.walkdown || {};
+    const _wRows = [
+      ['Service size',        _w.serviceSize],
+      ['Panel make / model',  _w.panelMake],
+      ['Main breaker',        _w.mainBreaker],
+      ['Open breaker spaces', _w.openSpaces]
+    ].filter(r => r[1]);
+    const _wDate = _w.at ? new Date(_w.at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    paymentBanner += `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--r);font-size:13px">
+      <div style="font-weight:600;margin-bottom:6px">🔍 Walkdown notes from the field${_w.by?` — ${escHtml(_w.by)}`:''}${_wDate?`, ${_wDate}`:''}</div>
+      ${_wRows.length ? `<div style="display:grid;grid-template-columns:auto 1fr;gap:3px 14px;margin-bottom:${lead.walkdownNotes?'8px':'0'}">
+        ${_wRows.map(([k,v])=>`<div style="color:var(--text-muted)">${escHtml(k)}</div><div>${escHtml(v)}</div>`).join('')}
+      </div>` : ''}
+      ${lead.walkdownNotes ? `<div style="color:var(--text-secondary);line-height:1.5;white-space:pre-wrap">${escHtml(lead.walkdownNotes)}</div>` : ''}
+      <div style="color:var(--text-muted);font-size:11.5px;margin-top:7px">Confirm these into the Electrical Snapshot below — quote pricing reads the structured fields, not this.</div>
+    </div>`;
+  }
+
   // ── Customer & Site ──
   const _custIsCom = cust && cust.propertyType === 'commercial';
   const _custBiz = _custIsCom && cust.businessName ? cust.businessName : '';
@@ -13122,7 +13253,7 @@ function renderJobDetail(id) {
         <div class="jd-f">
           <div class="jd-fl">Panel / Breaker Make & Model</div>
           <select class="jd-fi" id="snap-panel-brand" onchange="document.getElementById('snap-panel-brand-other-wrap').style.display=this.value==='Other'?'block':'none'">
-            ${['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Other'].map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${PANEL_BRAND_OPTIONS.map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
             ${!snap.panelBrand?'<option value="" selected disabled>— Select —</option>':''}
           </select>
           <div id="snap-panel-brand-other-wrap" style="margin-top:6px;display:${snap.panelBrand==='Other'?'block':'none'}">
@@ -13132,7 +13263,7 @@ function renderJobDetail(id) {
         <div class="jd-f">
           <div class="jd-fl">Breaker Size</div>
           <select class="jd-fi" id="snap-breaker-size" onchange="document.getElementById('snap-breaker-size-other-wrap').style.display=this.value==='Other'?'block':'none'">
-            ${['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'].map(o=>`<option value="${o}"${(snap.breakerSize||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${BREAKER_SIZE_OPTIONS.map(o=>`<option value="${o}"${(snap.breakerSize||'')==o?' selected':''}>${o}</option>`).join('')}
             ${!snap.breakerSize?'<option value="" selected disabled>— Select —</option>':''}
           </select>
           <div id="snap-breaker-size-other-wrap" style="margin-top:6px;display:${snap.breakerSize==='Other'?'block':'none'}">
@@ -13338,26 +13469,63 @@ function renderJobDetail(id) {
 
   msHtml += msGrp('Post-Install');
   msHtml += msRow('photosUploaded','Photos uploaded to OneDrive / SharePoint');
+  // Closeout photos go OUT before the inspection — inspectors won't pull panel
+  // covers, open chargers, or crawl attics/crawlspaces, so these shots are how
+  // they see the work. Also required for Qmerit / Treehouse platform closeouts.
+  msHtml += msRow('photosSent','Photos sent to customer / inspector',{date:true});
   if (isPlatform) msHtml += msRow('platformCloseout',`${lead.source} platform closeout completed`,{date:true});
   msHtml += msRow('finalInspScheduled',`Final inspection scheduled${lead.inspectionRequired?' (in-person required)':''}`,{date:true});
   msHtml += msRow('finalInspPassed','Final inspection passed ✓',{date:true});
 
   if (isDirect) {
     msHtml += msGrp('Invoice & Payment');
-    msHtml += msRow('invoiceSent','Invoice sent to customer',{date:true,num:true,numKey:'amount',numLabel:'Amount $'});
+    msHtml += msRow('invoiceSent','Invoice recorded / sent (QuickBooks)',{date:true,num:true,numKey:'amount',numLabel:'Amount $'});
     msHtml += msRow('paymentReceived','Payment received',{date:true,num:true,numKey:'amount',numLabel:'Amount $'});
+    const _autoCfg = _paidInvoiceAuto();
+    const _paidSent = lead.payment && lead.payment.invoiceSentAt;
+    msHtml += `<div style="padding:8px 0 2px 30px">
+      <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="sendPaymentOptionsEmail('${id}')">✉ Send payment options</button>
+      <div style="font-size:11px;color:var(--text-muted);margin:4px 0 10px">Emails the customer both ways to pay — Zelle (no fee) and a card link (+3%).</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="sendPaidInvoiceTest('${id}')">🧪 Send test to me</button>
+        <button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="sendPaidInvoiceNow('${id}')">✉ Send paid invoice</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+        ${_paidSent ? `✓ Paid invoice sent ${new Date(lead.payment.invoiceSentAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})}. ` : ''}Test goes to you and doesn't mark the job as invoiced.
+      </div>
+      <label style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:11.5px;color:var(--text-secondary);cursor:pointer">
+        <input type="checkbox" ${_autoCfg.enabled ? 'checked' : ''} onchange="setPaidInvoiceAuto(this.checked)">
+        Auto-send paid invoices when a payment is recorded
+      </label>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:3px">Off by default. Turning it on only affects payments recorded <em>after</em> that moment — it can never go back and email past customers.</div>
+    </div>`;
   }
 
   const isArchived = lead.stage==='archived';
-  const archiveReady = (ms.finalInspPassed?.done) && (isDirect ? ms.paymentReceived?.done : true);
+  // Closeout readiness — informational. Archiving is a deliberate click (no
+  // auto-archive), so this just shows what's still outstanding.
+  const _closeItems = [
+    ['Photos sent to customer / inspector', !!ms.photosSent?.done],
+    ['Final inspection scheduled',          !!ms.finalInspScheduled?.done],
+    ['Final inspection passed',             !!ms.finalInspPassed?.done]
+  ];
+  if (isDirect) {
+    _closeItems.push(['Payment received',              !!ms.paymentReceived?.done]);
+    _closeItems.push(['Invoice recorded (QuickBooks)', !!ms.invoiceSent?.done]);
+  }
+  const _closeDone = _closeItems.filter(i => i[1]).length;
   msHtml += msGrp('Archive');
   msHtml += `<div class="ms-item" id="ms-item-archived">
     <input type="checkbox" class="ms-cb" ${isArchived?'checked':''} disabled>
     <div class="ms-body">
-      <div class="ms-lbl${isArchived?' done':''}">${isArchived?'Archived':'Archive'}</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
-        ${isArchived?`Auto-archived ${(ms.archived?.date||'').slice(0,10)||''}`:archiveReady?'✓ Conditions met — will auto-archive':'Auto-triggered: inspection passed + payment received'}
-      </div>
+      <div class="ms-lbl${isArchived?' done':''}">${isArchived?'Archived':'Ready to close?'}</div>
+      ${isArchived
+        ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">Archived ${(ms.archived?.date||'').slice(0,10)||''}</div>`
+        : `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${_closeDone} of ${_closeItems.length} done</div>
+           <div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">
+             ${_closeItems.map(([lbl,ok]) => `<div style="font-size:11.5px;color:${ok?'var(--green)':'var(--text-muted)'}">${ok?'✓':'○'} ${escHtml(lbl)}</div>`).join('')}
+           </div>
+           <button class="btn btn-p" style="margin-top:9px;padding:5px 12px;font-size:12px" onclick="archiveJobNow('${id}')">Archive job</button>`}
     </div>
   </div>`;
 
@@ -17148,6 +17316,21 @@ function scheduleNow(leadId) {
     }
   }
 
+  // SPEC BACKSTOP (2026-07-15, Jonathan): the tech can't buy or install without
+  // the breaker TYPE and SIZE, and in a hurry these get skipped. Rather than a
+  // hard block (which would trap you when the panel genuinely hasn't been seen),
+  // we capture it right here — with the job's photos shown, since the panel pic
+  // is the primary source. "Not known yet" records a reason and lets you through.
+  if (_specIncomplete(lead)) { openSpecPrompt(leadId); return; }
+  _proceedToScheduler(leadId);
+}
+
+function _specIncomplete(lead) {
+  const s = (lead && lead.electricalSnapshot) || {};
+  return !s.panelBrand || !s.breakerSize;
+}
+
+function _proceedToScheduler(leadId) {
   // Hand off to the Scheduler. _sched.preselectId tells renderSchedulerPage
   // to scroll-into-view and highlight this lead's row in the pool. Pre-select
   // ONLY this lead so clicking Build immediately gives a plan with just this
@@ -17160,6 +17343,100 @@ function scheduleNow(leadId) {
     window._sched = { preselectId: leadId };
   }
   navigate('scheduler');
+}
+
+// Inline spec capture. Shows the job's photos so the breaker type/size can be
+// read straight off the panel picture instead of hunting for it.
+function openSpecPrompt(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const s = lead.electricalSnapshot || {};
+  const imgs = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : [])
+    .filter(f => (f.mimeType || '').indexOf('image/') === 0 && (f.downloadUrl || f.dataUrl || f.spUrl))
+    .slice(0, 8);
+  const old = document.getElementById('spec-prompt-ov'); if (old) old.remove();
+  const ov = document.createElement('div');
+  ov.className = 'moverlay show';
+  ov.id = 'spec-prompt-ov';
+  const lbl = 'font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px';
+  ov.innerHTML = `<div class="modal" style="max-width:560px">
+    <div class="mtitle">Confirm install spec before scheduling</div>
+    <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px">
+      The tech needs the breaker <strong>type</strong> and <strong>size</strong> to bring the right parts. Read them off the panel photos below.
+    </div>
+    ${imgs.length ? `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px">
+        ${imgs.map(f => { const src = f.downloadUrl || f.dataUrl || f.spUrl;
+          return `<a href="${src}" target="_blank" rel="noopener" style="flex:0 0 auto"><img src="${src}" alt="" style="height:96px;border-radius:6px;border:1px solid var(--border);display:block"></a>`;
+        }).join('')}
+      </div>`
+      : `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">No photos on this job yet — check the panel on site or ask before scheduling.</div>`}
+    <div style="margin-bottom:10px">
+      <div style="${lbl}">Panel / Breaker Type</div>
+      <select id="sp-brand" class="jd-fi" style="width:100%" onchange="_specPromptCheckBRH()">
+        <option value="">— Select —</option>
+        ${PANEL_BRAND_OPTIONS.map(o => `<option value="${o}"${s.panelBrand === o ? ' selected' : ''}>${o}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:14px">
+      <div style="${lbl}">Breaker Size</div>
+      <select id="sp-size" class="jd-fi" style="width:100%" onchange="_specPromptCheckBRH()">
+        <option value="">— Select —</option>
+        ${BREAKER_SIZE_OPTIONS.map(o => `<option value="${o}"${s.breakerSize === o ? ' selected' : ''}>${o}</option>`).join('')}
+      </select>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Pick <strong>50-amp GFCI</strong> for NEMA 14-50 outlets that need GFCI protection.</div>
+      <div id="sp-brh-note" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid var(--green);background:var(--green-dim);border-radius:6px;font-size:11.5px;line-height:1.45">
+        <strong>Set to Eaton BRH.</strong> BR260 breakers have the potential to fail under continuous EV-charging loads, so a 60-amp Eaton BR is always installed as a <strong>BRH260</strong>.
+      </div>
+    </div>
+    <div class="mact">
+      <button class="btn btn-g" onclick="_specPromptSkip('${leadId}')">Not known yet →</button>
+      <button class="btn btn-p" onclick="_specPromptSave('${leadId}')">Save &amp; continue</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+}
+function _specPromptClose() { const ov = document.getElementById('spec-prompt-ov'); if (ov) ov.remove(); }
+// A 60 A Eaton BR can never be chosen — flip it to BRH on the spot and explain
+// why, so someone who doesn't yet know the rule learns it here.
+function _specPromptCheckBRH() {
+  const b = document.getElementById('sp-brand');
+  const s = document.getElementById('sp-size');
+  const n = document.getElementById('sp-brh-note');
+  if (!b || !s || !n) return;
+  if (_isBRHSubstitution(b.value, s.value)) b.value = 'Eaton BRH';
+  const is60 = String(s.value || '').indexOf('60-amp') === 0;
+  n.style.display = (b.value === 'Eaton BRH' && is60) ? 'block' : 'none';
+}
+function _specPromptSave(leadId) {
+  const brand = document.getElementById('sp-brand')?.value || '';
+  const size  = document.getElementById('sp-size')?.value || '';
+  if (!brand || !size) { toast('Pick both the breaker type and size — or choose "Not known yet"', 'warning'); return; }
+  const substituted = _isBRHSubstitution(brand, size);
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i >= 0) {
+    arr[i].electricalSnapshot = Object.assign({}, arr[i].electricalSnapshot || {}, { panelBrand: brand, breakerSize: size });
+    _enforceBRH(arr[i].electricalSnapshot);   // 60 A Eaton BR is always a BRH260
+    if (arr[i].specSkip) delete arr[i].specSkip;
+    arr[i].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+  }
+  _specPromptClose();
+  toast(substituted
+    ? 'Saved as Eaton BRH — BR260 is not used on EV loads'
+    : 'Install spec saved ✓', 'success');
+  _proceedToScheduler(leadId);
+}
+function _specPromptSkip(leadId) {
+  const why = prompt('Scheduling without the spec — why? (recorded on the job so the tech knows)', 'Panel not seen yet');
+  if (why === null) return;
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i >= 0) {
+    arr[i].specSkip = { why: (why || '').trim() || 'Not known yet', at: new Date().toISOString(), by: (S.user && S.user.name) || '' };
+    arr[i].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+  }
+  _specPromptClose();
+  toast('Noted — scheduled without the spec', 'warning');
+  _proceedToScheduler(leadId);
 }
 
 // Optional: capture a written reason for an out-of-order schedule. Now purely
@@ -22790,7 +23067,189 @@ function _applyStripePayment(row) {
   saveLeads(arr);
   try { checkAutoArchive(lead.id); } catch (_) {}
   try { toast('💳 Card payment received — ' + (row.customerName || lead.id) + (amt ? ' ($' + amt.toLocaleString('en-US') + ')' : ''), 'success'); } catch (_) {}
+  try { _maybeSendPaidInvoice(lead.id); } catch (_) {}
   return { ack: true };
+}
+
+// Canned "how to pay" email: offers Zelle (no fee) and a credit-card link
+// (+3% processing, matching the quote's card tier). The card link is minted by
+// the worker's /stripe/link route, so it's a real Stripe Payment Link for the
+// exact card amount. Used by Sherri for up-front collections.
+const GK_ZELLE_EMAIL = 'jonathan.allen@greenkey-usa.com';
+async function sendPaymentOptionsEmail(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const cust = getCustomer(lead.customerId);
+  const to = (cust && cust.email) || '';
+  if (!to) { toast('No email on file for this customer', 'error'); return; }
+  const q = lead.acceptedQuoteId ? getQuote(lead.acceptedQuoteId) : null;
+  const defNet = q && typeof q.preProcessingTotal === 'number'
+    ? Math.ceil(q.preProcessingTotal)
+    : (lead.jobValue && typeof lead.jobValue.amount === 'number' ? Math.ceil(lead.jobValue.amount) : 0);
+  const v = prompt('Amount to request — the no-fee (Zelle/cash) price:', defNet ? String(defNet) : '');
+  if (v === null) return;
+  const base = Math.ceil(parseFloat(v) || 0);
+  if (!base || base <= 0) { toast('Enter a valid amount', 'error'); return; }
+  const card = Math.ceil(base * 1.03);   // card tier adds 3%, rounded up like the quote engine
+  const who = custFullName(cust) || 'the customer';
+  if (!confirm(`Email ${who} payment options?\n\nZelle (no fee): $${base.toLocaleString('en-US')}\nCredit card (+3%): $${card.toLocaleString('en-US')}`)) return;
+  toast('Creating the card payment link…', 'info');
+  try {
+    const token = await _acquireSMSToken();
+    const r = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/stripe/link', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadId: lead.id, amount: card, customerName: who, description: 'GreenKey electrical work' })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.url) throw new Error(d.error || 'Could not create the payment link');
+    const first = (custFullName(cust) || '').split(' ')[0] || 'there';
+    const html = `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+      <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(first)},</p>
+      <p style="font-size:14px;margin:0 0 16px">Here are two easy ways to pay for your GreenKey project — whichever is most convenient for you.</p>
+      <div style="border:1px solid #d8e6dc;border-radius:8px;padding:14px 16px;margin:0 0 12px">
+        <div style="font-weight:700;color:#1f7a46;font-size:14px">Option 1 — Zelle (no fee)</div>
+        <div style="font-size:22px;font-weight:700;margin:6px 0">$${base.toLocaleString('en-US')}</div>
+        <div style="font-size:13px;color:#555">Open your bank's app, choose Zelle, and send to <strong>${escHtml(GK_ZELLE_EMAIL)}</strong>.</div>
+      </div>
+      <div style="border:1px solid #d8e6dc;border-radius:8px;padding:14px 16px;margin:0 0 16px">
+        <div style="font-weight:700;color:#1f7a46;font-size:14px">Option 2 — Credit card (+3% processing)</div>
+        <div style="font-size:22px;font-weight:700;margin:6px 0">$${card.toLocaleString('en-US')}</div>
+        <a href="${d.url}" style="display:inline-block;background:#1f7a46;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:600;font-size:14px;margin-top:4px">Pay by card &rarr;</a>
+      </div>
+      <p style="font-size:13px;margin:0 0 18px">Questions? Just reply to this email or call (804) 770-2210.</p>
+      <p style="font-size:12px;color:#666;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey · Class A Electrical Contractor · (804) 770-2210 · greenkey-usa.com</p>
+    </div>`;
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject: 'Payment options for your GreenKey project',
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }]
+        },
+        saveToSentItems: true
+      })
+    });
+    toast('Payment options emailed to ' + who, 'success');
+  } catch (e) {
+    toast('Could not send: ' + (e.message || e), 'error');
+  }
+}
+
+// Email the customer a PAID invoice PDF whenever a payment is recorded — any
+// method (card link, Tap to Pay, Zelle, cash, check). This is the document
+// customers need for tax credits, rebates and utility incentives: it shows what
+// was done AND that it was paid, which a quote alone doesn't.
+//
+// AUTOMATIC SENDING IS OFF BY DEFAULT and is NEVER retroactive (Jonathan,
+// 2026-07-15). Nothing goes to a customer until auto-send is explicitly switched
+// on, and even then it only ever fires for payments collected AFTER the moment
+// it was switched on — historical payments can never be swept up. Test first
+// with the manual buttons on the job ("Send test to me" / "Send paid invoice").
+function _paidInvoiceAuto() {
+  try { return JSON.parse(localStorage.getItem('gk_paid_invoice_auto') || '{}') || {}; }
+  catch (_) { return {}; }
+}
+function setPaidInvoiceAuto(on) {
+  const cur = _paidInvoiceAuto();
+  const next = on
+    ? { enabled: true, enabledAt: cur.enabledAt || new Date().toISOString() }
+    : { enabled: false };
+  localStorage.setItem('gk_paid_invoice_auto', JSON.stringify(next));
+  toast(on ? 'Auto paid-invoice ON — applies only to payments from now on' : 'Auto paid-invoice OFF', 'success');
+  try { if (S.jobDetailId) renderJobDetail(S.jobDetailId); } catch (_) {}
+  return next;
+}
+async function _maybeSendPaidInvoice(leadId) {
+  const cfg = _paidInvoiceAuto();
+  if (!cfg.enabled || !cfg.enabledAt) return;                                   // off by default
+  const lead = getLead(leadId);
+  if (!lead || !lead.payment || !lead.payment.collectedAt) return;
+  if (lead.payment.invoiceSentAt) return;                                       // never twice
+  if (new Date(lead.payment.collectedAt) <= new Date(cfg.enabledAt)) return;    // never retroactive
+  return _sendPaidInvoice(leadId);
+}
+
+// Manual send — always available so you can test before trusting automation.
+function sendPaidInvoiceNow(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const cust = getCustomer(lead.customerId);
+  const to = (cust && cust.email) || '';
+  if (!to) { toast('No email on file for this customer', 'error'); return; }
+  if (!confirm(`Email the paid invoice to ${custFullName(cust) || 'the customer'} at ${to}?`)) return;
+  _sendPaidInvoice(leadId, { force: true });
+}
+// Test send — goes to YOU, not the customer, and does not mark the job as sent.
+function sendPaidInvoiceTest(leadId) {
+  const me = (S.user && (S.user.username || S.user.email)) || '';
+  if (!me) { toast('Could not determine your email address', 'error'); return; }
+  toast('Sending a test copy to ' + me + '…', 'info');
+  _sendPaidInvoice(leadId, { to: me, test: true, force: true });
+}
+
+// Shared sender. opts.to overrides the recipient; opts.test skips the sent-stamp.
+async function _sendPaidInvoice(leadId, opts) {
+  opts = opts || {};
+  try {
+    const lead = getLead(leadId);
+    if (!lead || !lead.payment || !lead.payment.collectedAt) {
+      if (opts.force) toast('No payment recorded on this job yet', 'error');
+      return;
+    }
+    const cust = getCustomer(lead.customerId);
+    const to = opts.to || (cust && cust.email) || '';
+    if (!to) { console.warn('[GK] paid invoice skipped — no customer email:', leadId); return; }
+    const q = lead.acceptedQuoteId ? getQuote(lead.acceptedQuoteId) : null;
+    if (!q) { console.warn('[GK] paid invoice skipped — no accepted quote:', leadId); return; }
+
+    const p = lead.payment;
+    const methodLabel = ({card:'Card (Tap to Pay)','card-link':'Card (payment link)',zelle:'Zelle',cash:'Cash / check'})[p.method] || 'Payment';
+    const paidDate = new Date(p.collectedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const invNum = 'INV-' + String(lead.id).replace(/[^A-Za-z0-9]/g,'').slice(-8);
+    const res = generateInvoicePDF(q, cust, lead, invNum, { amount:p.amount, methodLabel, date:paidDate }, true);
+    if (!res || !res.dataUrl) return;
+    const b64 = res.dataUrl.split(',')[1];
+    const first = (custFullName(cust) || '').split(' ')[0] || 'there';
+    const amtStr = '$' + Number(p.amount || 0).toLocaleString('en-US');
+    const html = `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+      <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(first)},</p>
+      <p style="font-size:14px;margin:0 0 12px">Thank you — we've received your payment of <strong>${amtStr}</strong> on ${escHtml(paidDate)}.</p>
+      <p style="font-size:14px;margin:0 0 12px">Your paid invoice is attached. Please keep it for your records — you may need it for tax credits, rebates, or utility incentive programs.</p>
+      <p style="font-size:14px;margin:0 0 18px">It was a pleasure working with you. If you have any questions, just reply to this email or call (804) 770-2210.</p>
+      <p style="font-size:12px;color:#666;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey · Class A Electrical Contractor · (804) 770-2210 · greenkey-usa.com</p>
+    </div>`;
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject: `Your paid invoice from GreenKey — ${amtStr}`,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }],
+          attachments: [{
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            name: res.filename, contentType: 'application/pdf', contentBytes: b64
+          }]
+        },
+        saveToSentItems: true
+      })
+    });
+    if (opts.test) {
+      // Test copies never mark the job as invoiced — you can test repeatedly.
+      toast('Test paid invoice sent to ' + to, 'success');
+      return;
+    }
+    const arr = getLeads();
+    const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0 && arr[i].payment) {
+      arr[i].payment.invoiceSentAt = new Date().toISOString();
+      arr[i].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+    toast('Paid invoice emailed to ' + (custFullName(cust) || 'customer'), 'success');
+    try { if (S.jobDetailId === leadId) renderJobDetail(leadId); } catch (_) {}
+  } catch (e) {
+    console.warn('[GK] paid invoice email failed (will retry next poll):', leadId, e);
+  }
 }
 
 // Heal the pre-2026-07-15 wiring gap: field-app payments recorded BEFORE
@@ -22816,12 +23275,14 @@ function _reconcileFieldPayments() {
       lead.updatedAt = new Date().toISOString();
       changed = true;
     }
-    if (changed) {
-      saveLeads(arr);
-      for (const lead of arr) {
-        if (lead && lead.stage !== 'archived') { try { checkAutoArchive(lead.id); } catch (_) {} }
-      }
-    }
+    if (changed) saveLeads(arr);
+    // Paid invoices for field-collected payments (Zelle / cash / check / Tap to
+    // Pay). Card-link payments are handled at import in _applyStripePayment.
+    // Deliberately ONE per sweep: _maybeSendPaidInvoice re-reads and saves leads,
+    // so firing a batch concurrently could race on the save — and it avoids a
+    // burst of customer emails if several payments landed at once.
+    const _next = arr.find(l => l && l.payment && l.payment.collectedAt && !l.payment.invoiceSentAt);
+    if (_next) { try { _maybeSendPaidInvoice(_next.id); } catch (_) {} }
   } catch (_) {}
 }
 
