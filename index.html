@@ -4954,8 +4954,12 @@ const _PANEL_INFO_JOB_TYPES = ['ev-residential','nema-1450','hvac-circuit','circ
 // single source for both the Electrical Snapshot form and the pre-schedule spec
 // prompt. 'Eaton BRH' added 2026-07-15 (Jonathan). GFCI is a breaker-size option
 // rather than a separate flag because it only applies at the 50 A NEMA level.
-const PANEL_BRAND_OPTIONS  = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
-const BREAKER_SIZE_OPTIONS = ['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'];
+// ⚠ Named SNAP_* deliberately: the quote engine already has its own
+// PANEL_BRAND_OPTIONS (an {id,label} array, ~line 6360) for Quick Quote pricing.
+// These are the SNAPSHOT's plain-string options. Do not merge or rename them to
+// match — a duplicate top-level const kills the entire script.
+const SNAP_PANEL_BRAND_OPTIONS  = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+const SNAP_BREAKER_SIZE_OPTIONS = ['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'];
 
 // ⚠ SPEC RULE — BR260 IS NEVER USED ON EV LOADS.
 // Eaton BR260 breakers have the potential to fail under continuous EV-charging
@@ -13253,7 +13257,7 @@ function renderJobDetail(id) {
         <div class="jd-f">
           <div class="jd-fl">Panel / Breaker Make & Model</div>
           <select class="jd-fi" id="snap-panel-brand" onchange="document.getElementById('snap-panel-brand-other-wrap').style.display=this.value==='Other'?'block':'none'">
-            ${PANEL_BRAND_OPTIONS.map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${SNAP_PANEL_BRAND_OPTIONS.map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
             ${!snap.panelBrand?'<option value="" selected disabled>— Select —</option>':''}
           </select>
           <div id="snap-panel-brand-other-wrap" style="margin-top:6px;display:${snap.panelBrand==='Other'?'block':'none'}">
@@ -13263,7 +13267,7 @@ function renderJobDetail(id) {
         <div class="jd-f">
           <div class="jd-fl">Breaker Size</div>
           <select class="jd-fi" id="snap-breaker-size" onchange="document.getElementById('snap-breaker-size-other-wrap').style.display=this.value==='Other'?'block':'none'">
-            ${BREAKER_SIZE_OPTIONS.map(o=>`<option value="${o}"${(snap.breakerSize||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${SNAP_BREAKER_SIZE_OPTIONS.map(o=>`<option value="${o}"${(snap.breakerSize||'')==o?' selected':''}>${o}</option>`).join('')}
             ${!snap.breakerSize?'<option value="" selected disabled>— Select —</option>':''}
           </select>
           <div id="snap-breaker-size-other-wrap" style="margin-top:6px;display:${snap.breakerSize==='Other'?'block':'none'}">
@@ -17373,14 +17377,14 @@ function openSpecPrompt(leadId) {
       <div style="${lbl}">Panel / Breaker Type</div>
       <select id="sp-brand" class="jd-fi" style="width:100%" onchange="_specPromptCheckBRH()">
         <option value="">— Select —</option>
-        ${PANEL_BRAND_OPTIONS.map(o => `<option value="${o}"${s.panelBrand === o ? ' selected' : ''}>${o}</option>`).join('')}
+        ${SNAP_PANEL_BRAND_OPTIONS.map(o => `<option value="${o}"${s.panelBrand === o ? ' selected' : ''}>${o}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:14px">
       <div style="${lbl}">Breaker Size</div>
       <select id="sp-size" class="jd-fi" style="width:100%" onchange="_specPromptCheckBRH()">
         <option value="">— Select —</option>
-        ${BREAKER_SIZE_OPTIONS.map(o => `<option value="${o}"${s.breakerSize === o ? ' selected' : ''}>${o}</option>`).join('')}
+        ${SNAP_BREAKER_SIZE_OPTIONS.map(o => `<option value="${o}"${s.breakerSize === o ? ' selected' : ''}>${o}</option>`).join('')}
       </select>
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Pick <strong>50-amp GFCI</strong> for NEMA 14-50 outlets that need GFCI protection.</div>
       <div id="sp-brh-note" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid var(--green);background:var(--green-dim);border-radius:6px;font-size:11.5px;line-height:1.45">
