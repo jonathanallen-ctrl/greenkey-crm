@@ -17325,7 +17325,7 @@ function scheduleNow(leadId) {
   // hard block (which would trap you when the panel genuinely hasn't been seen),
   // we capture it right here — with the job's photos shown, since the panel pic
   // is the primary source. "Not known yet" records a reason and lets you through.
-  if (_specIncomplete(lead)) { openSpecPrompt(leadId); return; }
+  if (_specIncomplete(lead)) { openSpecPrompt(leadId, () => _proceedToScheduler(leadId)); return; }
   _proceedToScheduler(leadId);
 }
 
@@ -17351,7 +17351,18 @@ function _proceedToScheduler(leadId) {
 
 // Inline spec capture. Shows the job's photos so the breaker type/size can be
 // read straight off the panel picture instead of hunting for it.
-function openSpecPrompt(leadId) {
+// `next` is what to run once the spec is saved or skipped — there are TWO
+// scheduling entry points (the header button opens the Outlook modal; the
+// milestone row hands off to the Scheduler page) and both must pass through here.
+let _specPromptNext = null;
+function _specPromptContinue(leadId) {
+  const next = _specPromptNext;
+  _specPromptNext = null;
+  if (typeof next === 'function') { try { next(); return; } catch (_) {} }
+  _proceedToScheduler(leadId);
+}
+function openSpecPrompt(leadId, next) {
+  _specPromptNext = (typeof next === 'function') ? next : null;
   const lead = getLead(leadId); if (!lead) return;
   const s = lead.electricalSnapshot || {};
   const imgs = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : [])
@@ -17427,7 +17438,7 @@ function _specPromptSave(leadId) {
   toast(substituted
     ? 'Saved as Eaton BRH — BR260 is not used on EV loads'
     : 'Install spec saved ✓', 'success');
-  _proceedToScheduler(leadId);
+  _specPromptContinue(leadId);
 }
 function _specPromptSkip(leadId) {
   const why = prompt('Scheduling without the spec — why? (recorded on the job so the tech knows)', 'Panel not seen yet');
@@ -17440,7 +17451,7 @@ function _specPromptSkip(leadId) {
   }
   _specPromptClose();
   toast('Noted — scheduled without the spec', 'warning');
-  _proceedToScheduler(leadId);
+  _specPromptContinue(leadId);
 }
 
 // Optional: capture a written reason for an out-of-order schedule. Now purely
@@ -25561,9 +25572,20 @@ const _SCHED_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','AF1'];
 // Tracks which lead the open schedule modal is for.
 let _schedLeadId = null;
 
-function scheduleInOutlook(leadId) {
+function scheduleInOutlook(leadId, _specOk) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found', 'error'); return; }
+
+  // SPEC BACKSTOP — this is the entry point the header "Schedule" button uses,
+  // so it must gate here too (scheduleNow(), the milestone-row path, gates
+  // separately). _specOk is set on the way back from the prompt to avoid
+  // re-prompting forever when the user chooses "Not known yet".
+  // Walkdowns are exempt: the whole point of a walkdown is to GO FIND the spec.
+  const _isWalkdownVisit = ['lead-received','info-gathering','estimating'].includes(lead.stage);
+  if (!_specOk && !_isWalkdownVisit && _specIncomplete(lead)) {
+    openSpecPrompt(leadId, () => scheduleInOutlook(leadId, true));
+    return;
+  }
   _schedLeadId = leadId;
 
   // Default to installation type unless lead is in a pre-quote stage.
