@@ -725,11 +725,13 @@
         <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Message</div>
         <span id="sms-char-count" style="font-size:11px;color:var(--text-muted)"></span>
       </div>
-      <textarea id="sms-body" style="width:100%;min-height:160px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.6;transition:border-color 0.15s" oninput="document.getElementById('sms-char-count').textContent=this.value.length+' chars'"></textarea>
+      <textarea id="sms-body" style="width:100%;min-height:160px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.6;transition:border-color 0.15s" oninput="_smsUpdateCount()"></textarea>
     </div>
     <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <input type="file" id="sms-image-input" accept="image/*" style="display:none" onchange="_smsOnImagePick(this)">
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="document.getElementById('sms-image-input').click()">📎 Attach picture</button>
+      <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a smile" onclick="_smsInsertEmoji('🙂')">🙂</button>
+      <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a thumbs up" onclick="_smsInsertEmoji('👍')">👍</button>
       <div id="sms-image-preview" style="display:none;align-items:center;gap:8px">
         <img id="sms-image-thumb" alt="attachment" style="height:40px;border-radius:6px;border:1px solid var(--border)">
         <span id="sms-image-name" style="font-size:11.5px;color:var(--text-secondary);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
@@ -2337,11 +2339,17 @@ async function login(user) {
 // (which report as Mac with touch support).
 function _isMobileDevice() {
   try {
-    if (window.innerWidth < 900) return true;
     const ua = navigator.userAgent || '';
+    // Real phone / tablet user agents always win.
     if (/iPad|iPhone|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua)) return true;
     // iPadOS 13+ reports as Mac. Distinguish via touch points.
     if (/Macintosh/i.test(ua) && navigator.maxTouchPoints && navigator.maxTouchPoints > 1) return true;
+    // A narrow viewport only means "mobile" on an actual TOUCH device. A plain
+    // desktop window that happens to be narrow — DevTools docked, split screen,
+    // a half-width window — is NOT a phone and must not hijack the route into
+    // Tech Mode. (2026-07-15: bit Jonathan on refresh at innerWidth=483,
+    // maxTouchPoints=0 on Windows/Chrome.)
+    if (window.innerWidth < 900 && (navigator.maxTouchPoints || 0) > 0) return true;
   } catch (_) {}
   return false;
 }
@@ -2505,7 +2513,14 @@ function _handleDeepLinkHash() {
   if (!h) return;
   // #tech=LEAD_ID — drill into a specific job
   const techWithId = h.match(/^tech=(.+)$/);
-  if (techWithId) { openTechMode(decodeURIComponent(techWithId[1])); return; }
+  if (techWithId) {
+    openTechMode(decodeURIComponent(techWithId[1]));
+    // Consume the deep link — clear the hash so a later refresh lands on the
+    // normal start page (Dashboard, or the Tech Mode job LIST on mobile)
+    // rather than reopening this job every single time.
+    try { history.replaceState(null, '', location.pathname + location.search); } catch(_) {}
+    return;
+  }
   // Plain #tech / #tech= — stale URL state from clicking the sidebar tab.
   // Don't auto-route: refresh should land on Dashboard, user can click the
   // sidebar Tech Mode item again if they want.
@@ -2591,7 +2606,12 @@ function showPage(page) {
 // "Today's Jobs" dashboard card can call it.
 function openTechMode(leadId) {
   S.techLeadId = leadId;
-  location.hash = 'tech=' + encodeURIComponent(leadId);
+  // Deliberately NOT writing location.hash here. A '#tech=<id>' hash survives a
+  // refresh, so _handleDeepLinkHash would silently reopen this same job on every
+  // reload — forever (2026-07-15: Jonathan's refreshes kept landing on one job,
+  // on mobile too, where we want the My Jobs LIST, not a specific job).
+  // External calendar deep-links still work: they arrive with the hash already
+  // in the URL and are consumed once on load by _handleDeepLinkHash.
   showPage('tech');
 }
 
@@ -6526,7 +6546,7 @@ function onQQChange(qid){
   lm += (typeof _additionalTasksLM === 'function') ? _additionalTasksLM(q) : 0;
   runSegs.forEach(seg=>{
     const ft=Math.max(parseInt(seg.ft)||0,0);
-    if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') lm+=(ft/10)*p.addl10Surface;
+    if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') lm+=(ft/10)*p.addl10Surface;
     else if(seg.type==='hand-trench') lm+=(ft/10)*p.handDig10;
     else if(seg.type==='machine-trench'){const mft=Math.max(ft,50);lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10;}
   });
@@ -6645,7 +6665,7 @@ function _calcAdditionalTask_HVAC(task) {
   const disconnect = task.disconnect || 'none';
   // Run labor (surface / hand-trench / machine-trench rates from HVAC pricing)
   let labor = 0;
-  if (runType === 'surface' || runType === 'crawl' || runType === 'attic') labor = (runFt / 10) * p.hvacAddl10Surface;
+  if (runType === 'surface' || runType === 'crawl' || runType === 'attic' || runType === 'unfinished') labor = (runFt / 10) * p.hvacAddl10Surface;
   else if (runType === 'hand-trench')  labor = (runFt / 10) * p.hvacHandDig10;
   else if (runType === 'machine-trench') {
     const mft = Math.max(runFt, 50);
@@ -6716,6 +6736,7 @@ function _additionalTaskScope(task) {
     const _runDescMap = {
       'crawl': 'concealed through the crawl space',
       'attic': 'concealed through the attic',
+      'unfinished': 'through the unfinished space',
       'hand-trench': 'in conduit within a trench',
       'machine-trench': 'in conduit within a trench',
       'surface': 'in surface-mounted conduit'
@@ -6855,6 +6876,7 @@ function _renderAdditionalTaskCard(qid, task, idx) {
         <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runType', this.value)">
           <option value="crawl"${task.runType === 'crawl' ? ' selected' : ''}>Crawl space — concealed cable — $115/10 ft</option>
           <option value="attic"${task.runType === 'attic' ? ' selected' : ''}>Attic — concealed cable — $115/10 ft</option>
+          <option value="unfinished"${task.runType === 'unfinished' ? ' selected' : ''}>Unfinished space — cable — $115/10 ft</option>
           <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface conduit on walls — $115/10 ft</option>
           <option value="hand-trench"${task.runType === 'hand-trench' ? ' selected' : ''}>Trench — hand dig — $170/10 ft</option>
           <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Trench — machine — $620 base + $115/10 ft beyond 50</option>
@@ -7090,7 +7112,7 @@ function _onQQChange_HVAC(qid) {
   runSegs.forEach(seg => {
     const ft = Math.max(parseInt(seg.ft)||0, 0);
     totalRunFt += ft;
-    if (seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') lm += (ft/10) * p.hvacAddl10Surface;
+    if (seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') lm += (ft/10) * p.hvacAddl10Surface;
     else if (seg.type==='hand-trench') lm += (ft/10) * p.hvacHandDig10;
     else if (seg.type==='machine-trench') {
       const mft = Math.max(ft, 50);
@@ -7283,7 +7305,7 @@ function qqRunRates(q,p){
 function qqSegCost(seg,p,rates){
   rates = rates || qqRunRates(null,p);
   const ft=Math.max(parseInt(seg.ft)||0,0);
-  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic') return (ft/10)*rates.surface;
+  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') return (ft/10)*rates.surface;
   if(seg.type==='hand-trench') return (ft/10)*rates.handDig;
   if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return rates.machineBase+Math.max(0,Math.ceil((mft-50)/10))*rates.machine10;}
   return 0;
@@ -7299,6 +7321,7 @@ function renderQQRunSegs(segs,qid){
       <select class="fsel" style="flex:1;min-width:200px" onchange="updateQQRunSegType('${qid}',${i},this.value)">
         <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — concealed cable — $${rates.surface} per 10 ft</option>
         <option value="attic"${seg.type==='attic'?' selected':''}>Attic — concealed cable — $${rates.surface} per 10 ft</option>
+        <option value="unfinished"${seg.type==='unfinished'?' selected':''}>Unfinished space — cable — $${rates.surface} per 10 ft</option>
         <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $${rates.surface} per 10 ft</option>
         <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $${rates.handDig} per 10 ft of trench</option>
         <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $${rates.machineBase} base (first 50 ft)</option>
@@ -7439,12 +7462,13 @@ function _runRoutingSentence(segs, gauge, metal, includedFt){
   const PHRASE = {
     'crawl':'through the crawl space',
     'attic':'through the attic',
+    'unfinished':'through the unfinished space',
     'surface':'in surface-mounted conduit',
     'hand-trench':'in conduit through a trench',
     'machine-trench':'in conduit through a trench'
   };
   const INSUL = {
-    'crawl':'SEU','attic':'SEU',
+    'crawl':'SEU','attic':'SEU','unfinished':'SEU',
     'surface':'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2'
   };
   const list = (segs||[])
@@ -25764,13 +25788,44 @@ function applySMSTemplate(key, lead, cust) {
   const body = substituteTemplate(tpl.body, ctx);
   const ta = document.getElementById('sms-body');
   if (ta) ta.value = body;
-  const cc = document.getElementById('sms-char-count');
-  if (cc) cc.textContent = body.length + ' chars';
+  _smsUpdateCount();   // segment-aware (templates can contain emoji too)
 }
 
 // Outbound picture (MMS): pick + preview, reusing the photo resize helper so
 // the image stays small enough for MMS. Held until send, then uploaded.
 let _smsPendingImage = null; // { contentType, dataBase64, name }
+// Insert an emoji at the cursor in the text composer (keeps the caret after it).
+function _smsInsertEmoji(ch) {
+  const ta = document.getElementById('sms-body');
+  if (!ta) return;
+  const s = (ta.selectionStart != null) ? ta.selectionStart : ta.value.length;
+  const e = (ta.selectionEnd   != null) ? ta.selectionEnd   : ta.value.length;
+  ta.value = ta.value.slice(0, s) + ch + ta.value.slice(e);
+  const pos = s + ch.length;
+  ta.focus();
+  try { ta.setSelectionRange(pos, pos); } catch (_) {}
+  _smsUpdateCount();
+}
+
+// Char counter that also warns about SMS segments. Any emoji forces the message
+// from GSM-7 to UCS-2 encoding, which drops the per-segment limit from 160 to 70
+// characters — so one emoji can turn a 1-segment text into 2+ (Twilio bills per
+// segment). Surfacing it here so nobody is surprised by the message count.
+function _smsUpdateCount() {
+  const ta = document.getElementById('sms-body');
+  const el = document.getElementById('sms-char-count');
+  if (!ta || !el) return;
+  const v = ta.value || '';
+  const hasEmoji = /[\uD800-\uDFFF]/.test(v);            // surrogate pair => emoji => UCS-2
+  const units = Array.from(v).reduce((n, c) => n + (c.codePointAt(0) > 0xFFFF ? 2 : 1), 0);
+  const single = hasEmoji ? 70 : 160;
+  const multi  = hasEmoji ? 67 : 153;
+  const segs = units === 0 ? 0 : (units <= single ? 1 : Math.ceil(units / multi));
+  el.textContent = v.length + ' chars'
+    + (segs > 1 ? ' · ' + segs + ' segments' : '')
+    + (hasEmoji && units > 0 ? ' · emoji (70/seg)' : '');
+}
+
 async function _smsOnImagePick(input) {
   const file = input.files && input.files[0];
   if (!file) return;
