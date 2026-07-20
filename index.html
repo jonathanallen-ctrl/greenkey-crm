@@ -4766,11 +4766,83 @@ function saveQuotes(a){
   localStorage.setItem(QK,JSON.stringify(a));queueSPSync();
 }
 function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
+// ── ACCEPTED-QUOTE PRICE LOCK (2026-07-20) ──────────────────────────────────
+// Once a quote is approved / contingent-approved / invoiced, the customer holds
+// a PDF that is effectively the contract. Merely OPENING such a quote in the
+// builder used to recalculate and silently overwrite the stored totals — which
+// is exactly how qt-1784039240153 drifted from $1,289 (the accepted amount, and
+// what the customer's PDF says) to $1,339, and made it look like data loss.
+//
+// Pricing is now frozen on committed quotes. Non-pricing writes (status changes,
+// labels, customer-action stamps, invoice ids, the unlock itself) still pass
+// through untouched, so the accept / invoice / deliver flows keep working.
+// Unlocking takes TWO deliberate actions — see unlockQuoteForEdit().
+const QUOTE_PRICE_FIELDS = ['qq','lines','preProcessingTotal','quoteTotal','laborAndMaterials',
+  'laborTotal','laborHours','laborRate','matSubtotal','matAllowance','matTotal','rentalTotal',
+  'veteranDiscount','qmeritFee','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
+  'travelFeeType','depositAmount','isVeteran'];
+function _quoteIsCommitted(q){
+  return !!q && (q.status==='approved' || q.status==='contingent-approved' || q.status==='invoiced');
+}
+function quoteLocked(q){ return _quoteIsCommitted(q) && !(q && q.editUnlockedAt); }
+let _quoteLockWarnAt = 0;
+function _warnQuoteLocked(){
+  const t = Date.now();
+  if (t - _quoteLockWarnAt < 4000) return;   // one warning per burst of edits
+  _quoteLockWarnAt = t;
+  try { toast('Quote is accepted and locked — pricing change NOT saved. Use “🔓 Unlock to edit” if it really must change.', 'warning'); } catch(_){}
+}
+
+// Unlocking an accepted quote takes TWO deliberate actions — a confirm that
+// spells out the consequence, then a typed reason that's recorded on the quote.
+// It should never happen by accident or without a trail.
+function unlockQuoteForEdit(qid){
+  const q = getQuote(qid); if(!q) return;
+  if(!_quoteIsCommitted(q)){ toast('This quote isn’t locked','info'); return; }
+  const netStr = '$' + ((typeof _quoteNet==='function' ? _quoteNet(q) : (q.preProcessingTotal||0))||0).toLocaleString('en-US');
+  if(!confirm(
+      `Unlock ${qid} for editing?\n\n`
+    + `The customer has already accepted this quote and holds a PDF showing ${netStr}. `
+    + `Changing it now makes the CRM disagree with the document they have.\n\n`
+    + `If the price genuinely changed, the right move is usually a NEW quote instead.\n\n`
+    + `You'll be asked for a reason next.`)) return;
+  const why = prompt('Why does this accepted quote need to change? (recorded on the quote)','');
+  if(why===null) return;
+  if(!why.trim()){ toast('A reason is required to unlock','warning'); return; }
+  upsertQuote({ id:qid, editUnlockedAt:new Date().toISOString(),
+                editUnlockedBy:(S.user&&S.user.name)||'', editUnlockReason:why.trim(),
+                __allowPriceEdit:true });
+  toast('Unlocked — re-send the customer an updated PDF if the total changes','warning');
+  try { openQuoteBuilder(qid); } catch(_){}
+}
+function relockQuote(qid){
+  const q = getQuote(qid); if(!q) return;
+  upsertQuote({ id:qid, editUnlockedAt:'', __allowPriceEdit:true });
+  toast('Quote re-locked','success');
+  try { openQuoteBuilder(qid); } catch(_){}
+}
+
 function upsertQuote(data){
   const a=getQuotes(),idx=a.findIndex(q=>q.id===data.id),now=new Date().toISOString();
   const prevStatus = idx >= 0 ? a[idx].status : null;
-  if(idx>=0){a[idx]={...a[idx],...data,updatedAt:now};}
-  else{a.push({...data,id:data.id||'qt-'+Date.now(),createdAt:now,updatedAt:now});}
+  // __allowPriceEdit is a transient flag, never stored on the record.
+  const { __allowPriceEdit, ...clean } = data || {};
+  if(idx>=0){
+    let incoming = clean;
+    if (quoteLocked(a[idx]) && !__allowPriceEdit) {
+      const blocked = QUOTE_PRICE_FIELDS.filter(f =>
+        Object.prototype.hasOwnProperty.call(incoming, f) &&
+        JSON.stringify(incoming[f]) !== JSON.stringify(a[idx][f]));
+      if (blocked.length) {
+        incoming = { ...incoming };
+        blocked.forEach(f => delete incoming[f]);
+        console.warn('[GK] Locked quote — pricing writes blocked:', a[idx].id, blocked);
+        _warnQuoteLocked();
+      }
+    }
+    a[idx]={...a[idx],...incoming,updatedAt:now};
+  }
+  else{a.push({...clean,id:clean.id||'qt-'+Date.now(),createdAt:now,updatedAt:now});}
   saveQuotes(a);
   // Side effect: when a quote transitions INTO an approved state, fire the
   // pre-install task generator. Detects the transition from any non-approved
@@ -5759,6 +5831,26 @@ function renderQuoteBuilder(qid){
       ${(q.status==='approved'||q.status==='invoiced'||q.status==='contingent-approved')?'':`<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;color:var(--red);flex-shrink:0" onclick="deleteQuoteFromBuilder('${q.id}','${q.leadId||''}')" title="Delete this quote (removes its saved PDFs too)">🗑 Delete</button>`}
     </div>
     ${revBanner}
+    ${(() => {
+      // Accepted-quote lock banner. Locked = pricing frozen; unlocked = loud
+      // warning that the CRM can now drift from the customer's PDF.
+      if (!_quoteIsCommitted(q)) return '';
+      const _net = '$' + ((typeof _quoteNet==='function' ? _quoteNet(q) : (q.preProcessingTotal||0))||0).toLocaleString('en-US');
+      if (quoteLocked(q)) {
+        return `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--border);background:var(--bg-elevated);border-radius:var(--r);display:flex;align-items:center;gap:10px;font-size:12.5px">
+          <span style="font-size:16px">🔒</span>
+          <div style="flex:1;line-height:1.45"><strong>Locked — customer accepted this quote at ${_net}.</strong>
+            <span style="color:var(--text-secondary)">Pricing is frozen so the CRM can't drift from the PDF they hold. You can still change the label, status and notes.</span></div>
+          <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="unlockQuoteForEdit('${q.id}')">🔓 Unlock to edit</button>
+        </div>`;
+      }
+      return `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--amber);background:var(--amber-dim);border-radius:var(--r);display:flex;align-items:center;gap:10px;font-size:12.5px">
+        <span style="font-size:16px">🔓</span>
+        <div style="flex:1;line-height:1.45"><strong>UNLOCKED — edits to an accepted quote will be saved.</strong>
+          <span style="color:var(--text-secondary)">${q.editUnlockReason?('“'+escHtml(q.editUnlockReason)+'” — '):''}${q.editUnlockedBy?escHtml(q.editUnlockedBy)+', ':''}${(q.editUnlockedAt||'').slice(0,10)}. Re-send the customer an updated PDF if the total changes.</span></div>
+        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="relockQuote('${q.id}')">🔒 Re-lock</button>
+      </div>`;
+    })()}
     ${_renderPanelSuggestionBanner(q, lead)}
     <div style="display:grid;grid-template-columns:1fr 320px;gap:20px;align-items:start">
       <div>
@@ -24559,7 +24651,13 @@ async function _notifyTeamOfQuoteAction(quoteId, data) {
                    : 'ACCEPTED';
   const subject = `Quote ${actionLabel.toLowerCase()} — ${custName} (${quoteId})`;
 
-  const totalNum = q.quoteTotal || q.preProcessingTotal || 0;
+  // MUST be the NET (no-fee) price — this is the number Sherri and Jonathan read
+  // when a quote is accepted, and it has to match the customer's PDF TOTAL.
+  // 2026-07-20 (Sherri): this line still preferred q.quoteTotal, which INCLUDES
+  // the 3% card fee, so an accepted $1,289 quote was reported as $1,328. It was
+  // missed by the 2026-07-11 "_quoteNet everywhere" sweep because it lives in the
+  // team-notification path rather than a customer-facing display.
+  const totalNum = (typeof _quoteNet === 'function') ? _quoteNet(q) : (q.preProcessingTotal || q.quoteTotal || 0);
   const totalStr = totalNum.toLocaleString('en-US', { style:'currency', currency:'USD', minimumFractionDigits:2, maximumFractionDigits:2 });
   const addrStr = lead
     ? [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean).join(', ')
@@ -25982,13 +26080,34 @@ async function openSchedInOutlook(_specOk) {
   // yet" doesn't re-prompt forever.
   if (!_specOk && _isInstall && _specIncomplete(lead)) {
     const _lid = _schedLeadId;
-    openSpecPrompt(_lid, () => { _schedLeadId = _lid; openSchedInOutlook(true); });
+    // Snapshot the modal and restore it on the way back. Re-entry must not
+    // depend on the DOM still holding these — in particular sched-type, which
+    // defaults to 'walkdown' on pre-quote jobs. If it were silently reset, the
+    // event would be created as busy with no confirmation email and no
+    // installScheduled stamp, which looks exactly like "it didn't work".
+    const _keep = {
+      'sched-type': document.getElementById('sched-type')?.value || '',
+      'sched-subject': subject,
+      'sched-body': bodyPlain,
+      'sched-date-input': date,
+      'sched-start-input': start,
+      'sched-end-input': end
+    };
+    openSpecPrompt(_lid, () => {
+      _schedLeadId = _lid;
+      Object.keys(_keep).forEach(k => { const el = document.getElementById(k); if (el && _keep[k] !== '') el.value = _keep[k]; });
+      openSchedInOutlook(true);
+    });
     return;
   }
 
   const _cust = (lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
   const _custEmail = (_cust?.email || lead.customerEmail || '').trim();
   let _wantConfirm = false;
+  // Diagnostic (2026-07-15): these four values decide whether the customer gets
+  // a confirmation request and whether the event is created tentative. If a
+  // confirmation ever fails to send, this line says which one was wrong.
+  console.log('[GK] Sched decision:', { specOk: !!_specOk, isInstall: _isInstall, custEmail: _custEmail || '(none)', schedType: document.getElementById('sched-type')?.value || '(none)' });
   if (_isInstall && _custEmail) {
     _wantConfirm = confirm(
       `Send ${_cust ? custFullName(_cust) : (lead.customerName || 'the customer')} a confirmation request for this appointment?\n\n` +
