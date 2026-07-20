@@ -1105,10 +1105,15 @@
       <label id="lc-photo-drop" for="lc-photo-input" style="display:flex;align-items:center;gap:12px;border:1.5px dashed var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.6"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         <div style="flex:1"><div style="font-weight:600;font-size:13px" id="lc-photo-title">Panel photo (required)</div>
-        <div style="font-size:11px;color:var(--text-muted)" id="lc-photo-sub">Tap to take or choose a photo — the calc can't start without one</div></div>
+        <div style="font-size:11px;color:var(--text-muted)" id="lc-photo-sub">Tap to take or choose a photo — or drag one in / paste with Ctrl+V</div></div>
         <img id="lc-photo-thumb" style="display:none;width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
       </label>
       <input type="file" id="lc-photo-input" accept="image/*" capture="environment" style="display:none">
+      <div style="margin-top:8px">
+        <button class="btn btn-g" style="padding:5px 11px;font-size:11.5px" onclick="openLcJobPhotoPicker()"
+          title="Pick a photo already filed on this job — no downloading or dragging needed">📁 Use a photo already on this job</button>
+      </div>
+      <div id="lc-jobphotos" style="display:none;gap:6px;flex-wrap:wrap;margin-top:8px;max-height:158px;overflow-y:auto"></div>
     </div>
 
     <div id="lc-thread" style="flex:1;overflow-y:auto;min-height:140px;max-height:44vh;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:12px;margin-bottom:10px">
@@ -1123,11 +1128,21 @@
         style="flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.45"></textarea>
       <button class="btn btn-p" id="lc-send-btn" onclick="sendLoadCalcMsg()" disabled title="Attach the panel photo first">Send</button>
     </div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-      <button class="btn btn-g" onclick="closeLoadCalcModal()">Close</button>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-g" style="margin-right:auto" onclick="startOverLoadCalc()" title="Discard this conversation and begin a new calc">↺ Start over</button>
+      <button class="btn btn-g" onclick="minimizeLoadCalc()" title="Tuck this away so you can look around the CRM — nothing is lost">— Minimize</button>
+      <button class="btn btn-g" onclick="closeLoadCalcModal()" title="Closes but keeps your progress — reopening this job resumes where you left off">Close</button>
       <button class="btn btn-p" id="lc-save-btn" onclick="saveLoadCalcToJob()" style="display:none">💾 Save PDF + photo to Documents</button>
     </div>
   </div>
+</div>
+
+<!-- Floating resume pill — shown while the load calc is minimized so you can
+     browse the CRM (open photos, check the snapshot) and jump back in one tap. -->
+<div id="lc-resume-pill" onclick="resumeLoadCalc()" style="display:none;position:fixed;right:18px;bottom:18px;z-index:9999;
+     background:var(--green);color:#08130c;font-weight:700;font-size:12.5px;padding:10px 16px;border-radius:24px;
+     box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer;display:none;align-items:center;gap:8px">
+  ⚡ <span>Load Calc in progress — tap to resume</span>
 </div>
 
 <div class="moverlay" id="ai-draft-modal">
@@ -24968,9 +24983,10 @@ let _lcPhotoDataUrl = null;  // same, with data: prefix (for save + thumb)
 let _lcResult = null;        // { inputs, assumptions } once Claude says done
 let _lcBusy = false;
 
-function openLoadCalcModal(jobId) {
+function openLoadCalcModal(jobId, forceFresh) {
   const lead = getLead(jobId); if (!lead) { toast('Job not found', 'error'); return; }
   _lcJobId = jobId; _lcMessages = []; _lcPhotoB64 = null; _lcPhotoDataUrl = null; _lcResult = null; _lcBusy = false;
+  _lcShowPill(false);
   const cust = lead.customerId ? getCustomer(lead.customerId) : null;
   const label = lead.address || (cust ? customFullNameSafe(cust) : '');
   const lbl = document.getElementById('lc-job-label'); if (lbl) lbl.textContent = label ? '— ' + label : '';
@@ -24985,40 +25001,213 @@ function openLoadCalcModal(jobId) {
   document.getElementById('lc-input').value = '';
   const send = document.getElementById('lc-send-btn'); send.disabled = true; send.title = 'Attach the panel photo first';
   document.getElementById('lc-save-btn').style.display = 'none';
+
+  // Resume an in-progress calc for THIS job unless we were told to start fresh.
+  const saved = forceFresh ? null : _lcLoadSession(jobId);
+  if (saved) {
+    _lcMessages = saved.messages || [];
+    if (saved.photoDataUrl) {
+      _lcPhotoDataUrl = saved.photoDataUrl;
+      _lcPhotoB64 = String(saved.photoDataUrl).split(',')[1] || null;
+      _lcApplyPhotoUI(saved.photoDataUrl);
+    }
+    // Rebuild the visible transcript from the stored turns.
+    const hint = document.getElementById('lc-hint'); if (hint && _lcMessages.length) hint.remove();
+    _lcMessages.forEach(m => {
+      const txt = Array.isArray(m.content)
+        ? m.content.filter(c => c && c.type === 'text').map(c => c.text).join('\n')
+        : (typeof m.content === 'string' ? m.content : '');
+      if (txt) _lcAppendBubble(m.role, txt);
+    });
+    if (saved.result) { _lcResult = saved.result; try { _lcRenderResult(); } catch (_) {} }
+    if (_lcMessages.length) toast('Picked up where you left off — ↺ Start over for a fresh calc', 'info');
+  }
   document.getElementById('loadcalc-modal').classList.add('show');
 }
+// Close KEEPS the session (see _lcSaveSession) — reopening this job resumes it.
+// Use ↺ Start over to deliberately discard.
 function closeLoadCalcModal() {
+  _lcSaveSession();
   document.getElementById('loadcalc-modal').classList.remove('show');
-  _lcJobId = null; _lcMessages = []; _lcPhotoB64 = null; _lcPhotoDataUrl = null; _lcResult = null; _lcBusy = false;
+  _lcShowPill(!!(_lcJobId && _lcMessages && _lcMessages.length));
+  _lcBusy = false;
 }
 
 // Photo attach → resize through the CRM's existing MMS pipeline (~1600px jpeg).
+// One shared path so the file picker, drag-and-drop and paste all behave the same.
+async function _lcAcceptPhotoFile(f) {
+  if (!f) return;
+  if (!/^image\//.test(f.type || '')) { toast('That isn\'t an image file', 'warning'); return; }
+  try {
+    const rawUrl = await new Promise((res, rej) => {
+      const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(f);
+    });
+    const out = await _resizeAndConvertImage(f, rawUrl, { maxDimension: 1600, quality: 0.82 });
+    const jpgUrl = await new Promise((res, rej) => {
+      const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(out.blob);
+    });
+    _lcPhotoDataUrl = jpgUrl;
+    _lcPhotoB64 = jpgUrl.split(',')[1];
+    _lcApplyPhotoUI(jpgUrl);
+    _lcSaveSession();
+  } catch (e) {
+    console.warn('[GK] load calc photo failed:', e);
+    toast('Couldn\'t read that photo (' + (e.message || e) + ') — try a different one', 'error');
+  }
+}
+function _lcApplyPhotoUI(jpgUrl) {
+  const thumb = document.getElementById('lc-photo-thumb'); if (thumb) { thumb.src = jpgUrl; thumb.style.display = ''; }
+  const t = document.getElementById('lc-photo-title'); if (t) t.textContent = '✓ Panel photo attached';
+  const s = document.getElementById('lc-photo-sub');   if (s) s.textContent = 'Tap to change — or drag/paste another';
+  const send = document.getElementById('lc-send-btn'); if (send) { send.disabled = false; send.title = ''; }
+}
 document.addEventListener('DOMContentLoaded', () => {
   const inp = document.getElementById('lc-photo-input');
-  if (!inp) return;
-  inp.addEventListener('change', async () => {
-    const f = inp.files && inp.files[0];
-    if (!f) return;
-    try {
-      const rawUrl = await new Promise((res, rej) => {
-        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(f);
-      });
-      const out = await _resizeAndConvertImage(f, rawUrl, { maxDimension: 1600, quality: 0.82 });
-      const jpgUrl = await new Promise((res, rej) => {
-        const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(out.blob);
-      });
-      _lcPhotoDataUrl = jpgUrl;
-      _lcPhotoB64 = jpgUrl.split(',')[1];
-      const thumb = document.getElementById('lc-photo-thumb'); thumb.src = jpgUrl; thumb.style.display = '';
-      document.getElementById('lc-photo-title').textContent = '✓ Panel photo attached';
-      document.getElementById('lc-photo-sub').textContent = 'Tap to change';
-      const send = document.getElementById('lc-send-btn'); send.disabled = false; send.title = '';
-    } catch (e) {
-      console.warn('[GK] load calc photo failed:', e);
-      toast('Couldn\'t read that photo (' + (e.message || e) + ') — try a different one', 'error');
+  if (inp) inp.addEventListener('change', () => _lcAcceptPhotoFile(inp.files && inp.files[0]));
+
+  // Drag & drop straight onto the dropzone — no file-picker hunting.
+  const drop = document.getElementById('lc-photo-drop');
+  if (drop) {
+    const stop = e => { e.preventDefault(); e.stopPropagation(); };
+    ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
+      stop(e); drop.style.borderColor = 'var(--green)'; drop.style.background = 'var(--green-dim)';
+    }));
+    ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
+      stop(e); drop.style.borderColor = ''; drop.style.background = '';
+    }));
+    drop.addEventListener('drop', e => {
+      const dt = e.dataTransfer; if (!dt) return;
+      const f = (dt.files && dt.files[0]) || null;
+      if (f) _lcAcceptPhotoFile(f);
+      else toast('Drag an image file in — dragging from another browser tab doesn\'t carry the file', 'warning');
+    });
+  }
+
+  // Whole-dialog drop target. Dragging from File Explorer (often across
+  // monitors) is the normal case, and aiming at the small dropzone is fiddly —
+  // so dropping ANYWHERE on the calc window works. Guarded on 'Files' so it
+  // only lights up for real file drags, not text selections.
+  const lcModal = document.getElementById('loadcalc-modal');
+  if (lcModal) {
+    const box = lcModal.querySelector('.modal');
+    const isFileDrag = e => {
+      try { return Array.from((e.dataTransfer && e.dataTransfer.types) || []).indexOf('Files') !== -1; }
+      catch (_) { return false; }
+    };
+    ['dragenter','dragover'].forEach(ev => lcModal.addEventListener(ev, e => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      if (box) { box.style.outline = '2px dashed var(--green)'; box.style.outlineOffset = '-6px'; }
+    }));
+    ['dragleave','drop'].forEach(ev => lcModal.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation();
+      if (box) { box.style.outline = ''; box.style.outlineOffset = ''; }
+    }));
+    lcModal.addEventListener('drop', e => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) _lcAcceptPhotoFile(f);
+    });
+  }
+
+  // Paste an image (Ctrl+V) while the calc is open — handy for screenshots.
+  document.addEventListener('paste', e => {
+    const modal = document.getElementById('loadcalc-modal');
+    if (!modal || !modal.classList.contains('show')) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const it of items) {
+      if (it.kind === 'file' && /^image\//.test(it.type || '')) {
+        const f = it.getAsFile(); if (f) { e.preventDefault(); _lcAcceptPhotoFile(f); return; }
+      }
     }
   });
 });
+
+// ── Pull a photo straight off the job ────────────────────────────────────────
+// Dragging from the CRM into the CRM can't work — a same-page drag hands over a
+// URL, not a file. But these photos are already in our own store, so we just
+// read them directly. This is the normal path when the panel shot was texted in
+// or uploaded by the tech; no downloading to a folder first.
+function openLcJobPhotoPicker() {
+  const wrap = document.getElementById('lc-jobphotos'); if (!wrap) return;
+  if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }   // toggle
+  if (!_lcJobId) { toast('No job bound to the load calc', 'error'); return; }
+  const imgs = (typeof getJobFiles === 'function' ? getJobFiles(_lcJobId) : [])
+    .filter(f => f && (f.mimeType || '').indexOf('image/') === 0 && (f.dataUrl || f.downloadUrl || f.spUrl));
+  if (!imgs.length) {
+    wrap.innerHTML = '<div style="font-size:11.5px;color:var(--text-muted)">No photos filed on this job yet — use ↻ Sync on the job if you expect some.</div>';
+    wrap.style.display = 'flex'; return;
+  }
+  wrap.innerHTML = imgs.slice(0, 30).map(f => {
+    const src = f.dataUrl || f.downloadUrl || f.spUrl;
+    return `<img src="${src}" alt="" title="${escHtml(f.name || '')}" onclick="_lcUseJobPhoto('${f.id}')"
+      style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer;flex:0 0 auto">`;
+  }).join('');
+  wrap.style.display = 'flex';
+}
+async function _lcUseJobPhoto(fileId) {
+  const f = (typeof getJobFiles === 'function' ? getJobFiles(_lcJobId) : []).find(x => x && x.id === fileId);
+  if (!f) { toast('Photo not found', 'error'); return; }
+  try {
+    const url = f.dataUrl || f.downloadUrl || f.spUrl;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const b = await r.blob();
+    const file = new File([b], f.name || 'panel.jpg', { type: b.type || 'image/jpeg' });
+    await _lcAcceptPhotoFile(file);
+    const wrap = document.getElementById('lc-jobphotos'); if (wrap) wrap.style.display = 'none';
+    toast('Panel photo pulled from this job', 'success');
+  } catch (e) {
+    console.warn('[GK] load calc job-photo pull failed:', e);
+    toast('Couldn\'t load that photo (' + (e.message || e) + ') — open it from Photos & Files and drag it in instead', 'error');
+  }
+}
+
+// ── Session persistence ──────────────────────────────────────────────────────
+// The calc often asks a question you can only answer by looking at something
+// ELSE in the CRM (a photo, the snapshot). Previously Close wiped the whole
+// conversation, so you lost the transcript to go check one number. Now the
+// session survives closing, minimising, and even a page refresh.
+const LC_SESSION_KEY = 'gk_loadcalc_session';
+function _lcSaveSession() {
+  try {
+    if (!_lcJobId) return;
+    localStorage.setItem(LC_SESSION_KEY, JSON.stringify({
+      jobId: _lcJobId, messages: _lcMessages || [], photoDataUrl: _lcPhotoDataUrl || '',
+      result: _lcResult || null, savedAt: new Date().toISOString()
+    }));
+  } catch (e) { console.warn('[GK] load calc session save failed (probably storage full):', e); }
+}
+function _lcLoadSession(jobId) {
+  try {
+    const raw = localStorage.getItem(LC_SESSION_KEY); if (!raw) return null;
+    const s = JSON.parse(raw);
+    return (s && s.jobId === jobId && Array.isArray(s.messages)) ? s : null;
+  } catch (_) { return null; }
+}
+function _lcClearSession() { try { localStorage.removeItem(LC_SESSION_KEY); } catch (_) {} }
+function _lcShowPill(show) {
+  const pill = document.getElementById('lc-resume-pill');
+  if (pill) pill.style.display = show ? 'flex' : 'none';
+}
+function minimizeLoadCalc() {
+  _lcSaveSession();
+  document.getElementById('loadcalc-modal').classList.remove('show');
+  _lcShowPill(true);
+  toast('Load calc tucked away — tap the ⚡ pill to come back', 'info');
+}
+function resumeLoadCalc() {
+  _lcShowPill(false);
+  const s = _lcLoadSession(_lcJobId) || (() => { try { return JSON.parse(localStorage.getItem(LC_SESSION_KEY) || 'null'); } catch (_) { return null; } })();
+  if (!_lcJobId && s && s.jobId) { openLoadCalcModal(s.jobId); return; }
+  document.getElementById('loadcalc-modal').classList.add('show');
+}
+function startOverLoadCalc() {
+  if (!confirm('Discard this load-calc conversation and start fresh?')) return;
+  _lcClearSession();
+  const jid = _lcJobId;
+  _lcShowPill(false);
+  if (jid) openLoadCalcModal(jid, true);
+}
 
 function _lcAppendBubble(role, text) {
   const wrap = document.getElementById('lc-thread');
@@ -25071,6 +25260,7 @@ async function sendLoadCalcMsg() {
     if (!resp.ok) throw new Error(data.error || ('Worker returned ' + resp.status));
     _lcMessages.push({ role: 'assistant', content: data.reply + (data.done && data.result ? '\n```json\n' + JSON.stringify(data.result) + '\n```' : '') });
     thinking.textContent = data.reply || (data.done ? 'Got everything I need.' : '…');
+    _lcSaveSession();   // persist after every turn, so nothing is lost mid-conversation
     if (data.done && data.result && data.result.inputs) {
       _lcResult = data.result;
       _lcRenderResult();
