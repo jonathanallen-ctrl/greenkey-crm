@@ -11890,9 +11890,19 @@ function saveExternalQuote(leadId, quoteId){
     upsertQuote(patch);
     closeDrawer();
     const _lead=getLead(leadId);
-    if (isPending && _lead?.acceptedQuoteId===quoteId && ex.status!=='invoiced') {
+    if (isPending && ex.status!=='invoiced') {
       // No longer the accepted quote — un-mark it (Job Value left as-is).
-      try{ upsertLead({..._lead, acceptedQuoteId:null}); }catch(_){}
+      if (_lead?.acceptedQuoteId===quoteId) { try{ upsertLead({..._lead, acceptedQuoteId:null}); }catch(_){} }
+      // ALSO clear the derived "Quote Approved" status chip. The pre-install
+      // strip reads `latestApproved || ms.quoteApproved?.done`, and accepting
+      // stamps that milestone — so without this the chip stayed green after
+      // flipping back to pending (Jonathan, 2026-07-20: "changed the active
+      // quotes box but not the status button"). Only clear it when NO other
+      // approved quote remains, so a job with a second accepted option keeps its
+      // chip, and a manually-marked approval isn't silently undone.
+      const _stillApproved = getQuotes().some(q => q && q.leadId===leadId && q.id!==quoteId
+        && (q.status==='approved' || q.status==='contingent-approved'));
+      if (!_stillApproved) { try { _setMilestone(leadId,'quoteApproved',false); } catch(_){} }
     } else if (!isPending) {
       if (_lead?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, amount, quoteId);
       else if (!wasApproved) { try{ acceptJobQuote(leadId, quoteId); }catch(_){} }
