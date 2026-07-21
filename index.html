@@ -26495,8 +26495,11 @@ async function openSchedInOutlook(_specOk) {
       }
     }
     // Fire the customer confirmation request (after the event exists).
+    // MUST use lead.id, not _schedLeadId — closeSchedModal() above nulls the
+    // global, which made getLead(null) fail and silently killed every
+    // confirmation send from this path (root-caused 2026-07-21).
     if (_wantConfirm) {
-      _sendOutlookConfirmRequest(_schedLeadId, { date, start, end, custEmail: _custEmail, cust: _cust, eventId });
+      _sendOutlookConfirmRequest(lead.id, { date, start, end, custEmail: _custEmail, cust: _cust, eventId });
     }
   } catch (e) {
     console.warn('[GK] Calendar event creation failed:', e);
@@ -26516,7 +26519,14 @@ async function openSchedInOutlook(_specOk) {
 // email builder), and records it on the lead in the same shape the day-route
 // Scheduler uses (`lead.scheduling.confirmations[date]`).
 async function _sendOutlookConfirmRequest(leadId, { date, start, end, custEmail, cust, eventId }) {
-  const lead = getLead(leadId); if (!lead || !custEmail) return;
+  const lead = getLead(leadId);
+  if (!lead || !custEmail) {
+    // Never fail silently — a customer expecting a confirmation email is a
+    // customer-facing miss. This exact guard swallowed the 2026-07-21 bug.
+    console.warn('[GK] Outlook confirmation NOT sent — missing ' + (!lead ? ('lead (id=' + leadId + ')') : 'customer email'));
+    toast('Confirmation email NOT sent — ' + (!lead ? 'job not found' : 'no customer email on file'), 'error');
+    return;
+  }
   try {
     const workerToken = await _acquireSMSToken();
     if (!workerToken) { toast('Confirmation not sent — could not reach the scheduling service.', 'warning'); return; }
