@@ -14915,7 +14915,8 @@ function getNotification(id) { return getNotifications().find(n=>n.id===id)||nul
 const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
   'cust-quote-accepted', 'cust-quote-declined',
-  'web-lead'
+  'web-lead',
+  'insp-sms'          // inspector replied to a permitting text (2026-07-20)
 ]);
 function isCustomerNotif(n) { return !!(n && CUST_NOTIF_TYPES.has(n.type)); }
 // PER-USER ACKNOWLEDGMENT (2026-07-11). Customer notifications are shared
@@ -20939,6 +20940,48 @@ function _clearPendingPush() {
   try { localStorage.removeItem(PENDING_PUSH_KEY); } catch (_) {}
   _renderSyncStatusDot();
 }
+// PATCH one sync key, retrying on SharePoint's 409 "resourceModified" (eTag
+// mismatch). That 409 means another client — Sherri's CRM, the field app, a
+// second tab — wrote this same list item between our read and our PATCH. It is
+// NORMAL with more than one person working, and was surfacing as a scary red
+// "Push to SharePoint failed" banner with the push left unsynced.
+//
+// On conflict we re-read THEIR current value, merge ours into it with the same
+// id+timestamp merge the pre-push step uses, and try again. Both sides' work
+// survives — this is a resolvable collision, not a data problem.
+async function _spPatchWithRetry(key, itemId, val, canMerge, attempts) {
+  attempts = attempts || 3;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items/${itemId}/fields`, {
+        method: 'PATCH', body: JSON.stringify({ DataValue: val })
+      });
+      if (i > 0) console.log(`[GK] SP conflict on ${key} resolved on attempt ${i + 1}`);
+      return;
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const isConflict = /\b409\b|resourceModified|eTag/i.test(msg);
+      if (!isConflict || i === attempts - 1) throw e;
+      console.warn(`[GK] SP conflict on ${key} — re-reading and merging (retry ${i + 1}/${attempts - 1})`);
+      await new Promise(r => setTimeout(r, 400 * (i + 1)));   // brief backoff
+      try {
+        const fresh = await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items/${itemId}?$expand=fields`);
+        const theirs = fresh && fresh.fields && fresh.fields.DataValue;
+        if (canMerge && theirs) {
+          const t = JSON.parse(theirs), o = JSON.parse(val);
+          if (Array.isArray(t) && Array.isArray(o)) {
+            const { merged } = _mergeArrayByIdAndTs(o, t);
+            val = JSON.stringify(merged);
+            localStorage.setItem(key, val);   // keep local consistent with what we're pushing
+          }
+        }
+      } catch (re) {
+        console.warn('[GK] conflict re-read failed, retrying with local value:', re);
+      }
+    }
+  }
+}
+
 function queueSPSync() {
   if (!_gToken) return;
   _setPendingPush();
@@ -21030,9 +21073,7 @@ async function _syncToSP() {
         }
       }
       if (existMap[key]) {
-        await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items/${existMap[key]}/fields`, {
-          method: 'PATCH', body: JSON.stringify({ DataValue: val })
-        });
+        await _spPatchWithRetry(key, existMap[key], val, MERGE_KEYS.includes(key));
       } else {
         await _graphFetch(`/sites/${_spSite}/lists/${_spList}/items`, {
           method: 'POST', body: JSON.stringify({ fields: { Title: key, DataValue: val } })
@@ -22879,6 +22920,26 @@ async function _bellPollOnce() {
     fresh.forEach(m => {
       if (m && (m.direction === 'outbound')) return;  // only inbound
       try {
+        // Inspector threads are keyed 'insp-<inspectorId>' rather than a lead id,
+        // so getLead() returns null and this used to surface as a bare phone
+        // number that clicked through to nothing. Permitting isn't a page anyone
+        // visits often (Jonathan, 2026-07-20), so an inspector reply needs to
+        // reach the bell properly — named, and clickable back into the thread.
+        const _inspId = /^insp-(.+)$/.exec(m.lead_id || '');
+        if (_inspId) {
+          const insp = (typeof getInspector === 'function') ? getInspector(_inspId[1]) : null;
+          const ahj  = (insp && typeof getAHJs === 'function') ? getAHJs().find(a => a.id === insp.ahjId) : null;
+          upsertNotification({
+            id: 'insp-sms-' + (m.id || (m.created_at + '-' + (m.from_number||''))),
+            type: 'insp-sms',
+            title: 'Inspector reply — ' + ((insp && insp.name) || m.from_number || m.phone || 'Inspector')
+                   + (ahj ? ' (' + ahj.name + ')' : ''),
+            description: (m.body || '').replace(/\s+/g,' ').slice(0, 200),
+            jobId: m.lead_id || null,
+            at: m.created_at || new Date().toISOString()
+          });
+          return;
+        }
         const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
         const cust = (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
         const who = cust ? (typeof custFullName === 'function' ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim())
@@ -23632,14 +23693,21 @@ function _bellFireNotifications(messages) {
   // Show one notification per new message (capped at 3 to avoid spam).
   const toShow = messages.slice(0, 3);
   toShow.forEach(m => {
-    const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
+    // Inspector threads are keyed 'insp-<id>', not a lead — resolve the name
+    // from the inspector directory, otherwise this popup shows a bare phone
+    // number. (Separate lookup from the bell dropdown; both needed fixing.)
+    const _iMatch = /^insp-(.+)$/.exec(m.lead_id || '');
+    const _insp = (_iMatch && typeof getInspector === 'function') ? getInspector(_iMatch[1]) : null;
+    const lead = (!_iMatch && typeof getLead === 'function') ? getLead(m.lead_id) : null;
     const cust = (lead?.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
-    const name = cust
+    const name = _insp
+      ? (_insp.name || 'Inspector') + ' (inspector)'
+      : cust
       ? (typeof custFullName === 'function' ? custFullName(cust) : (cust.firstName+' '+cust.lastName).trim())
       : (lead?.customerName || m.from_number || 'Customer');
     const preview = (m.body || '').slice(0, 100);
     try {
-      const n = new Notification('New text — GreenKey CRM', {
+      const n = new Notification(_insp ? 'Inspector reply — GreenKey CRM' : 'New text — GreenKey CRM', {
         body: `${name}: ${preview}`,
         icon: typeof GK_LOGO_B64 !== 'undefined' ? GK_LOGO_B64 : undefined,
         tag:  'gk-sms-' + (m.id || Date.now()),  // prevents duplicate stacking
@@ -23685,6 +23753,7 @@ function _bellTypeMeta(type) {
   switch (type) {
     case 'cust-sched-reschedule': return { ico:'📅', accent:'var(--amber,#f59e0b)' };
     case 'cust-sched-confirmed':  return { ico:'✅', accent:'var(--green,#22c55e)' };
+    case 'insp-sms':              return { ico:'🔍', accent:'var(--blue,#3498db)' };
     case 'cust-quote-accepted':   return { ico:'📝', accent:'var(--green,#22c55e)' };
     case 'cust-quote-declined':   return { ico:'❌', accent:'var(--red,#dc2626)' };
     case 'cust-sms':              return { ico:'💬', accent:'var(--blue,#3498db)' };
@@ -23778,6 +23847,15 @@ function _bellSelectNotif(id, jobId) {
 
 function _bellOpenLead(leadId) {
   if (!leadId) return;
+  // Inspector threads aren't leads — route them to the inspector's text window
+  // (Permitting → AHJ Directory) instead of the "no matching job" dead end.
+  const _insp = /^insp-(.+)$/.exec(leadId);
+  if (_insp) {
+    toggleSmsBell();
+    if (typeof openInspectorSMS === 'function') openInspectorSMS(_insp[1]);
+    else if (typeof toast === 'function') toast('Open Permitting → AHJ Directory to see this reply', 'info');
+    return;
+  }
   // Guard: an unresolvable id (e.g. 'unrouted' texts) must not open a blank
   // detail page — acknowledge-only with an honest toast instead.
   if (typeof getLead === 'function' && !getLead(leadId)) {
