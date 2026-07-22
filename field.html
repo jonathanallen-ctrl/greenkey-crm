@@ -63,7 +63,10 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-15 field-6';
+const BUILD = '2026-07-21 field-9';
+// Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
+// MUST match payMemoCode() in the CRM's index.html.
+function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
 const AZURE_CLIENT_ID = '61b4a86a-2b6f-4e14-90f9-a8df8ecadf69';
 const AZURE_TENANT_ID = '48b33cc0-0d51-46d6-8b85-53b6ebfc0b0f';
 const FIELD_URL       = location.origin + location.pathname; // this page
@@ -384,21 +387,37 @@ function renderDetail(id){
       + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'cash\',0)">Cash / check</button>'
       + '<div style="height:8px"></div>'
-      + '<button class="btn ghost" onclick="toggleZelleQR()">▦ Show Zelle QR for customer</button>'
+      + '<button class="btn ghost" onclick="toggleZelleQR(\''+esc(l.id)+'\')">▦ Show Zelle QR for customer</button>'
       + '<div id="zelleqr" style="display:none;background:#fff;border-radius:12px;padding:16px;margin-top:10px;text-align:center">'
       +   '<div id="zelleqr-img" style="display:flex;justify-content:center"></div>'
       +   '<div style="color:#1e6e38;font-weight:700;font-size:14px;margin-top:10px;word-break:break-all">'+esc(ZELLE_EMAIL)+'</div>'
+      +   '<div style="color:#111;font-weight:800;font-size:16px;margin-top:8px">Payment note code: '+payMemoCode(l.id)+'</div>'
+      +   '<div style="color:#555;font-size:12px;margin-top:2px;line-height:1.45">Ask the customer to add this code to the Zelle note so the office can match the payment instantly.</div>'
       +   '<div style="color:#555;font-size:12px;margin-top:4px;line-height:1.45">Scan with your banking app’s Zelle, or search the email. Send the exact quote amount.</div>'
       + '</div>'
       + '<div class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">Card: open the <b>Stripe</b> app and charge the card amount with Tap to Pay (tap the customer’s card or phone), then tap “Card paid”. Zelle to '+esc(ZELLE_EMAIL)+'.</div>'
       + '</div>';
   }
   const ms = l.milestones||{}; const complete = !!(ms.installCompleted && ms.installCompleted.done);
-  const statusCard = '<div class="card"><div class="lab">Job status</div>'
-    + (complete
-      ? '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Install complete'+(ms.installCompleted.date?(' · '+esc(ms.installCompleted.date)):'')+'</div><button class="btn ghost" style="margin-top:10px" onclick="doComplete(\''+esc(l.id)+'\',false)">Undo</button>'
-      : '<button class="btn green" onclick="doComplete(\''+esc(l.id)+'\',true)">✓ Mark install complete</button>')
-    + '</div>';
+  const arrived = !!(ms.techArrived && ms.techArrived.done);
+  let statusCard = '<div class="card"><div class="lab">Job status</div>';
+  if (complete) {
+    statusCard += '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Install complete'
+      + (ms.installCompleted.date?(' · '+esc(ms.installCompleted.date)+(ms.installCompleted.time?(' '+esc(ms.installCompleted.time)):'')):'')+'</div>'
+      + (arrived?'<div class="muted" style="font-size:12.5px;margin-top:3px">Arrived '+esc((ms.techArrived.date||'')+' '+(ms.techArrived.time||''))+'</div>':'')
+      + '<button class="btn ghost" style="margin-top:10px" onclick="doComplete(\''+esc(l.id)+'\',false)">Undo</button>';
+  } else if (arrived) {
+    statusCard += '<div style="color:#ffc861;font-size:15px;font-weight:600">🚐 On site'
+      + (ms.techArrived.time?(' · arrived '+esc(ms.techArrived.time)):'')+'</div>'
+      + '<button class="btn green" style="margin-top:10px" onclick="doCompleteGated(\''+esc(l.id)+'\')">✓ Mark install complete</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="undoArrived(\''+esc(l.id)+'\')">Undo arrival</button>';
+  } else {
+    statusCard += '<button class="btn green" onclick="markArrived(\''+esc(l.id)+'\')">🚐 I\u2019ve arrived — start job</button>'
+      + '<div style="height:8px"></div>'
+      + '<button class="btn ghost" onclick="doCompleteGated(\''+esc(l.id)+'\')">✓ Mark install complete</button>';
+  }
+  statusCard += '</div>';
   // Amount to collect (direct jobs) — quote price or the tech's on-site adjustment.
   const _amt = jobPayAmounts(l); const _qa = quoteAmounts(l); const _ov = l.priceOverride;
   const _collect = (_amt.net!=null?_amt.net:_amt.card);
@@ -418,6 +437,21 @@ function renderDetail(id){
       + _spec.map(r=>'<div class="muted" style="white-space:nowrap">'+esc(r[0])+'</div><div style="color:#e8eaed">'+esc(r[1])+'</div>').join('')
       + '</div></div>'
     : '';
+  // Customer texts card — one thread per customer, sent from the business
+  // number via the worker (number-agnostic: the 770-2210 flip changes nothing
+  // here). The office sees the same thread in the CRM, attributed per sender.
+  const smsCard = phone ? ('<div class="card"><div class="lab">Customer texts</div>'
+    + '<button class="btn green" onclick="sendOnMyWay(\''+esc(l.id)+'\')">🚐 Text \u201cOn my way\u201d</button>'
+    + '<div style="height:8px"></div>'
+    + '<button class="btn ghost" id="fld-sms-toggle" onclick="toggleFldThread(\''+esc(l.id)+'\')">💬 Open conversation</button>'
+    + '<div id="fld-sms-box" style="display:none">'
+    +   '<div id="fld-sms-thread" style="max-height:320px;overflow-y:auto;background:#0d1117;border:1px solid #1d222c;border-radius:10px;padding:8px;margin-top:10px;-webkit-overflow-scrolling:touch"></div>'
+    +   '<div style="display:flex;gap:8px;margin-top:8px">'
+    +     '<input id="fld-sms-reply" type="text" placeholder="Text the customer…" autocomplete="off" style="flex:1;min-width:0;background:#0d1117;border:1px solid #2a3140;border-radius:10px;color:#e8eaed;font-size:15px;padding:11px 12px">'
+    +     '<button class="btn green" style="width:auto;flex:0 0 auto;padding:11px 16px" onclick="sendFldReply(\''+esc(l.id)+'\')">Send</button>'
+    +   '</div>'
+    +   '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.45">Sends from the GreenKey business number. The office sees this conversation in the CRM too.</div>'
+    + '</div></div>') : '';
   $app().innerHTML = header('Job')
     + '<div class="wrap">'
     + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
@@ -428,6 +462,7 @@ function renderDetail(id){
     + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
     + '</div>'
+    + smsCard
     + (isDirect(l)?amountCard:'')
     + payCard
     + statusCard
@@ -454,7 +489,7 @@ function renderDetail(id){
   }).catch(()=>{ const el=document.getElementById('photos'); if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn’t load photos.</div>'; });
   window.scrollTo(0,0);
 }
-function goJobs(){ location.hash=''; renderJobs(); }
+function goJobs(){ _stopFldSms(); location.hash=''; renderJobs(); }
 async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
 function route(){ const m=/#job=([^&]+)/.exec(location.hash); if(m) renderDetail(decodeURIComponent(m[1])); else renderJobs(); }
 window.addEventListener('hashchange', route);
@@ -538,7 +573,7 @@ async function markComplete(jobId, done){
   try{ await syncFromSP(); }catch(e){}                          // re-pull fresh first
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
   if(!arr[i].milestones) arr[i].milestones={};
-  if(done){ arr[i].milestones.installCompleted={done:true,date:new Date().toISOString().slice(0,10)}; arr[i].stage='post-install-docs'; }
+  if(done){ const _n=new Date(); arr[i].milestones.installCompleted={done:true,date:_n.toISOString().slice(0,10),time:_n.toTimeString().slice(0,5),at:_n.toISOString()}; arr[i].stage='post-install-docs'; }
   else { delete arr[i].milestones.installCompleted; }
   arr[i].updatedAt=new Date().toISOString();
   localStorage.setItem('gk_leads', JSON.stringify(arr));
@@ -551,14 +586,191 @@ async function doComplete(jobId, done){
   renderDetail(jobId);
 }
 
+// ---------- Two-status flow: Arrived (roadmap #4) ----------
+// Arrived stamps milestones.techArrived and advances Scheduling/Pre-Install
+// jobs to Installation (advance-only — later stages are never pulled back).
+async function markArrived(jobId){
+  loading('Marking arrival…');
+  try{
+    try{ await syncFromSP(); }catch(e){}
+    const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+    if(!arr[i].milestones) arr[i].milestones={};
+    const _n=new Date();
+    arr[i].milestones.techArrived={done:true,date:_n.toISOString().slice(0,10),time:_n.toTimeString().slice(0,5),at:_n.toISOString()};
+    if(arr[i].stage==='scheduled'||arr[i].stage==='pre-install'){ arr[i].stage='installation'; arr[i].stageAt=_n.toISOString(); }
+    arr[i].updatedAt=_n.toISOString();
+    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    await pushLeads();
+  }catch(e){ alert('Could not mark arrival: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+async function undoArrived(jobId){
+  if(!confirm('Remove the arrival stamp?')) return;
+  loading('Updating…');
+  try{
+    try{ await syncFromSP(); }catch(e){}
+    const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+    if(arr[i].milestones) delete arr[i].milestones.techArrived;
+    arr[i].updatedAt=new Date().toISOString();
+    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    await pushLeads();
+  }catch(e){ alert('Could not update: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+// Completed, with a soft pre-flight checklist (never a hard block — the tech
+// can always complete, but has to acknowledge what's missing).
+async function doCompleteGated(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
+  const missing=[];
+  try{
+    const ph=await loadJobPhotos(jobId);
+    const miss=INSTALL_SHOTS.filter(s=>!_shotDone(ph,s.key)).length;
+    if(miss>0) missing.push(miss+' of '+INSTALL_SHOTS.length+' required photos not taken');
+  }catch(e){ missing.push('Could not verify required photos (no signal?)'); }
+  if(isDirect(l) && !l.payment) missing.push('Payment not recorded (collect or text a pay link first)');
+  if(!(l.milestones&&l.milestones.techArrived&&l.milestones.techArrived.done)) missing.push('\u201cI\u2019ve arrived\u201d was never tapped (completion will still record)');
+  let msg;
+  if(missing.length){
+    msg='Before you complete this job:\n\n\u2022 '+missing.join('\n\u2022 ')
+      +'\n\nIf the scope changed on site, use \u201cAdjust amount\u201d first so the office bills right.\n\nComplete anyway?';
+  }else{
+    msg='Everything checks out — photos done'+(isDirect(l)?', payment recorded':'')+'.\n\nMark this install complete? It moves the job to Post-Install for the office.';
+  }
+  if(!confirm(msg)) return;
+  loading('Marking complete…');
+  try{ await markComplete(jobId, true); }catch(e){ alert('Could not update: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+
+// ---------- In-job customer SMS thread (roadmap #8) ----------
+// Same worker + same thread the office CRM uses (/sms/thread keyed by leadId);
+// sender attribution comes from the signed-in account server-side. Works on
+// the current Twilio number and unchanged after the 770-2210 hosted-SMS flip.
+let _fldSmsPoll=null;
+function _stopFldSms(){ if(_fldSmsPoll){ clearInterval(_fldSmsPoll); _fldSmsPoll=null; } }
+function toggleFldThread(jobId){
+  const box=document.getElementById('fld-sms-box'); const btn=document.getElementById('fld-sms-toggle');
+  if(!box) return;
+  const opening = box.style.display==='none';
+  box.style.display = opening?'block':'none';
+  if(btn) btn.textContent = opening?'💬 Hide conversation':'💬 Open conversation';
+  _stopFldSms();
+  if(opening){
+    _fetchFldThread(jobId,false);
+    _fldSmsPoll=setInterval(function(){ if(!document.hidden) _fetchFldThread(jobId,true); }, 8000);
+  }
+}
+async function _fetchFldThread(jobId, quiet){
+  const el=document.getElementById('fld-sms-thread');
+  if(!el){ _stopFldSms(); return; }                    // screen changed — stop polling
+  if(!quiet) el.innerHTML='<div class="muted" style="font-size:13px">Loading conversation…</div>';
+  try{
+    const token=await _acquireWorkerToken();
+    const r=await fetch(SMS_WORKER_URL+'/sms/thread?leadId='+encodeURIComponent(jobId),{headers:{Authorization:'Bearer '+token}});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.error||'Could not load');
+    const msgs=d.messages||[];
+    const el2=document.getElementById('fld-sms-thread'); if(!el2){ _stopFldSms(); return; }
+    if(!msgs.length){ el2.innerHTML='<div class="muted" style="font-size:13px">No messages yet — say hello or send \u201cOn my way\u201d.</div>'; return; }
+    const pinned=(el2.scrollHeight-el2.scrollTop-el2.clientHeight)<30;
+    el2.innerHTML=msgs.map(function(m){
+      const out=m.direction==='out';
+      const who=out?((m.user_upn?m.user_upn.split('@')[0]:'GreenKey')):'Customer';
+      const dt=new Date(m.created_at);
+      const ts=dt.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+      let media='';
+      if(m.media_json){ try{ const items=JSON.parse(m.media_json)||[];
+        media=items.map(function(it){ const u=(it&&it.url)?String(it.url):''; if(!u) return '';
+          return /twilio\.com/i.test(u)
+            ? '<div data-twmedia="'+esc(u)+'" class="muted" style="font-size:12px">📷 photo — loading…</div>'
+            : '<img src="'+esc(u)+'" style="max-width:150px;border-radius:8px;display:block;margin:2px 0" alt="photo">';
+        }).join(''); }catch(e){} }
+      return '<div style="display:flex;justify-content:'+(out?'flex-end':'flex-start')+';margin:3px 0">'
+        + '<div style="max-width:78%;padding:6px 10px;border-radius:10px;font-size:14px;line-height:1.35;white-space:pre-wrap;word-break:break-word;'
+        + (out?'background:#12351f;border:1px solid #2b6a41;color:#d9f2e2':'background:#161b24;border:1px solid #2a3140;color:#e8eaed')+'">'
+        + media + (m.body?esc(m.body):'')
+        + '<div style="font-size:10px;color:#8b94a3;margin-top:2px">'+esc(who)+' · '+esc(ts)+'</div>'
+        + '</div></div>';
+    }).join('');
+    _hydrateFldMedia(el2);
+    if(!quiet || pinned) el2.scrollTop=el2.scrollHeight;
+  }catch(e){
+    const el3=document.getElementById('fld-sms-thread');
+    if(el3 && !quiet) el3.innerHTML='<div class="muted" style="font-size:13px">Couldn\u2019t load texts ('+esc(e.message||'error')+'). Check signal and try again.</div>';
+  }
+}
+async function _hydrateFldMedia(root){
+  const nodes=root.querySelectorAll('[data-twmedia]'); if(!nodes.length) return;
+  let token; try{ token=await _acquireWorkerToken(); }catch(e){ return; }
+  for(const n of nodes){
+    const u=n.getAttribute('data-twmedia'); n.removeAttribute('data-twmedia');
+    try{
+      const r=await fetch(SMS_WORKER_URL+'/sms/media?url='+encodeURIComponent(u),{headers:{Authorization:'Bearer '+token}});
+      if(!r.ok) throw new Error();
+      const b=await r.blob(); const obj=URL.createObjectURL(b);
+      const img=document.createElement('img'); img.src=obj; img.alt='photo';
+      img.style.cssText='max-width:150px;border-radius:8px;display:block;margin:2px 0';
+      n.replaceWith(img);
+    }catch(e){ n.textContent='📷 photo — view in the office CRM'; }
+  }
+}
+async function _sendFldSMS(jobId, message, templateKey){
+  const l=getLeads().find(x=>x.id===jobId); if(!l) throw new Error('Job not found');
+  const phone=leadPhone(l); if(!phone) throw new Error('No phone number on file');
+  const token=await _acquireWorkerToken();
+  const r=await fetch(SMS_WORKER_URL+'/sms/send',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:JSON.stringify({leadId:l.id,to:phone,message:message,templateKey:templateKey||'field_thread',customerName:custName(l)})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||'Send failed');
+}
+async function sendFldReply(jobId){
+  const inp=document.getElementById('fld-sms-reply'); if(!inp) return;
+  const msg=(inp.value||'').trim(); if(!msg) return;
+  inp.disabled=true;
+  try{ await _sendFldSMS(jobId,msg,'field_thread'); inp.value=''; await _fetchFldThread(jobId,true); }
+  catch(e){ alert('Could not send: '+(e.message||e)); }
+  inp.disabled=false; inp.focus();
+}
+async function sendOnMyWay(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
+  const phone=leadPhone(l);
+  if(!phone){ alert('No phone number on file for this customer — add one in the CRM first.'); return; }
+  const first=(custName(l).trim().split(/\s+/)[0])||'there';
+  let tech='your GreenKey technician';
+  try{ const a=_msal.getAllAccounts()[0]; if(a&&a.name) tech=a.name.split(/\s+/)[0]+' with GreenKey'; }catch(e){}
+  const draft='Hi '+first+', this is '+tech+' — I\u2019m on my way to you now. See you soon!';
+  const msg=prompt('Send this text to '+custName(l)+'?', draft);
+  if(msg===null || !msg.trim()) return;
+  loading('Sending…');
+  let _ok=false;
+  try{ await _sendFldSMS(jobId,msg.trim(),'field_onmyway'); _ok=true; }
+  catch(e){ alert('Could not send: '+(e.message||e)); }
+  renderDetail(jobId);
+  if(_ok) alert('✓ Sent. Replies show under “Customer texts” on this job.');
+}
+
 // Zelle QR (customer scans off this screen). qrcodejs loads lazily from the
 // same CDN the standalone GreenKey_Zelle_Payment.html card uses; the QR just
 // encodes the Zelle email — banking apps resolve it in their Zelle search.
 let _qrLoaded=false;
-function toggleZelleQR(){
+function toggleZelleQR(jobId){
   const box=document.getElementById('zelleqr'); if(!box) return;
   const show = box.style.display==='none';
   box.style.display = show?'':'none';
+  // Timestamp the ask (Jonathan 2026-07-21): an in-person Zelle deposit lands
+  // within minutes of the QR being shown, so job + amount + THIS timestamp is
+  // the office's strongest match signal if the tech forgets to record it.
+  if(show && jobId){
+    (async()=>{ try{
+      const arr=getLeads(); const j=arr.findIndex(x=>x.id===jobId);
+      if(j>=0 && !(arr[j].payment&&arr[j].payment.collectedAt)){
+        arr[j].paymentExpected={amount:(jobPayAmounts(arr[j]).net||0),methods:['zelle'],at:new Date().toISOString(),source:'field-qr',memoCode:payMemoCode(jobId)};
+        arr[j].updatedAt=new Date().toISOString();
+        localStorage.setItem('gk_leads',JSON.stringify(arr));
+        await pushLeads();
+      }
+    }catch(e){ console.warn('[field] qr-shown stamp',e); } })();
+  }
   const img=document.getElementById('zelleqr-img');
   if(!show || !img || img.childNodes.length) return;   // hidden, or already drawn in THIS render
   const draw=()=>{ try{ new QRCode(img,{text:ZELLE_EMAIL,width:180,height:180,colorDark:'#1e6e38',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }catch(e){ console.warn('[field] qr',e); } };
@@ -669,6 +881,16 @@ async function textPayLink(jobId){
     const sd=await sr.json().catch(()=>({}));
     if(!sr.ok) throw new Error(sd.error||'Link created but the text failed to send');
     alert('✓ Payment link texted to '+custName(l)+'.\nThey pay by card — it shows here in the office once it clears.');
+    // Track the ask on the office Payments page (cleared when payment lands).
+    try{
+      const arr2=getLeads(); const j=arr2.findIndex(x=>x.id===l.id);
+      if(j>=0 && !(arr2[j].payment&&arr2[j].payment.collectedAt)){
+        arr2[j].paymentExpected={amount:amt,methods:['card-link'],at:new Date().toISOString(),source:'field-link',memoCode:payMemoCode(l.id)};
+        arr2[j].updatedAt=new Date().toISOString();
+        localStorage.setItem('gk_leads',JSON.stringify(arr2));
+        await pushLeads();
+      }
+    }catch(_){}
   }catch(e){ alert('Could not send pay link: '+(e.message||e)); }
   renderDetail(jobId);
 }

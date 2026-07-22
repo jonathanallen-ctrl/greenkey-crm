@@ -1258,7 +1258,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-21b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-21e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1538,6 +1538,8 @@
 
       <!-- SCHEDULER -->
       <div class="page" id="page-scheduler"></div>
+
+      <div class="page" id="page-payments"></div>
 
       <!-- TECH MODE — mobile-first job view for field work -->
       <div class="page" id="page-tech"></div>
@@ -2087,6 +2089,15 @@ function getLeads() {
   try { return JSON.parse(localStorage.getItem(LK)||'[]'); } catch{ return []; }
 }
 function saveLeads(arr) { localStorage.setItem(LK, JSON.stringify(arr)); queueSPSync(); }
+
+// ── PAYMENTS CENTER stores (2026-07-21) ──
+// Memo code printed on every payment ask so Zelle deposits self-identify.
+function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
+// Unmatched-payments parking lot — money that arrived with no obvious job.
+// Synced + merged like the other record arrays (added to SYNC_KEYS/MERGE_KEYS).
+const UPK = 'gk_unmatched_payments';
+function getUnmatchedPayments(){ try { return JSON.parse(localStorage.getItem(UPK)||'[]'); } catch { return []; } }
+function saveUnmatchedPayments(arr){ localStorage.setItem(UPK, JSON.stringify(arr)); queueSPSync(); }
 function getLead(id) { return getLeads().find(l=>l.id===id)||null; }
 
 function upsertLead(data) {
@@ -2434,6 +2445,7 @@ const NAV_DEF = [
     {page:'files',label:'Photos & Files',roles:['admin','tech'],icon:'folder'},
     {page:'permitting',label:'Permitting',roles:['admin','tech'],icon:'permit'},
     {page:'scheduler',label:'Scheduler',roles:['admin'],icon:'cal'},
+    {page:'payments',label:'Payments',roles:['admin'],icon:'chart'},
     {page:'reports',label:'Reports',roles:['admin'],icon:'chart'},
   ]},
   { sec:'System', items:[
@@ -2584,7 +2596,7 @@ function navigate(page) {
   if (el) navEl(el); else showPage(page);
 }
 
-const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
+const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',payments:'Payments',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
 
 function showPage(page) {
   // Any cross-page navigation should also tear down the SMS poller. If the
@@ -2622,6 +2634,7 @@ function showPage(page) {
   else if (page==='files') { renderFilesPage(); }
   else if (page==='permitting') renderPermittingPage();
   else if (page==='scheduler') renderSchedulerPage();
+  else if (page==='payments') renderPaymentsPage();
   else if (page==='reports') renderReportsPage();
   else if (page==='tech') renderTechPage(S.techLeadId);
 }
@@ -3667,6 +3680,16 @@ function renderKanban(leads) {
       const panelChip = leadPanelInfoMissing(l) ? `<span class="chip chip-flag" title="Panel make / breaker size not recorded — fill in the Electrical Snapshot on the job detail page">⚠ Panel info</span>` : '';
       const _custAct = getLeadCustomerAction(l.id);
       const actChip  = customerActionChip(_custAct, { compact: true });
+      // Field two-status chip (2026-07-21): what the tech stamped, straight from milestones.
+      const _fms = l.milestones||{};
+      let techChip = '';
+      if (['scheduled','pre-install','installation','post-install-docs'].includes(l.stage)) {
+        if (_fms.installCompleted && _fms.installCompleted.done) {
+          techChip = `<span class="chip" style="background:rgba(46,204,113,.12);color:#2ecc71;border:1px solid rgba(46,204,113,.35)" title="Tech marked the install complete${_fms.installCompleted.date?(' '+_fms.installCompleted.date):''}${_fms.installCompleted.time?(' at '+_fms.installCompleted.time):''}">✓ Field done${_fms.installCompleted.time?(' '+_fms.installCompleted.time):''}</span>`;
+        } else if (_fms.techArrived && _fms.techArrived.done) {
+          techChip = `<span class="chip" style="background:rgba(255,200,97,.12);color:#ffc861;border:1px solid rgba(255,200,97,.35)" title="Tech tapped Arrived${_fms.techArrived.date?(' '+_fms.techArrived.date):''}${_fms.techArrived.time?(' at '+_fms.techArrived.time):''}">🚐 On site${_fms.techArrived.time?(' '+_fms.techArrived.time):''}</span>`;
+        }
+      }
       const _niK = STAGES.findIndex(s=>s.id===stage.id)+1; const isLast = !STAGES[_niK] || STAGES[_niK].id==='not-won' || STAGES[_niK].id==='archived';
       return `<div class="kcard" draggable="true" data-lead-id="${l.id}"
         ondragstart="kcardDragStart(event,'${l.id}')"
@@ -3675,7 +3698,7 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${muChip}${panelChip}${actChip}</div>
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}</div>
         <div class="kcard-foot" style="pointer-events:none">
           <span class="kcard-days">${daysAgo(l.stageAt||l.createdAt)}</span>
           ${!isLast?`<span class="knext" style="pointer-events:auto" onclick="event.stopPropagation();advanceStage('${l.id}')">Next →</span>`:''}
@@ -13590,6 +13613,7 @@ function renderJobDetail(id) {
   msHtml += msRow('installScheduled','Install scheduled',{date:true,time:true});
 
   msHtml += msGrp('Installation');
+  msHtml += msRow('techArrived','Tech arrived on site (field app stamps this)',{date:true,time:true});
   msHtml += msRow('intInspScheduled','Intermediate inspection scheduled (if needed)',{date:true,text:true,textKey:'type',textPlaceholder:'Type e.g. Trench'});
   msHtml += msRow('intInspPassed','Intermediate inspection passed',{date:true});
   msHtml += msRow('installCompleted','Installation completed',{date:true,num:true,numKey:'actualHours',numLabel:'Actual hrs'});
@@ -20444,7 +20468,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates'];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -20754,7 +20778,7 @@ async function _spEnsureDrive() {
 // can no longer be clobbered by a stale device. Material ids are stable
 // (m-###, m-ce-<CEid>); add/edit/import now stamp updatedAt so price edits win
 // across devices by recency.
-const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors'];
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments'];
 function _mergeArrayByIdAndTs(localArr, remoteArr) {
   if (!Array.isArray(localArr)) localArr = [];
   if (!Array.isArray(remoteArr)) remoteArr = [];
@@ -23312,6 +23336,8 @@ async function sendPaymentOptionsEmail(leadId) {
         <div style="font-weight:700;color:#1f7a46;font-size:14px">Option 1 — Zelle (no fee)</div>
         <div style="font-size:22px;font-weight:700;margin:6px 0">$${base.toLocaleString('en-US')}</div>
         <div style="font-size:13px;color:#555">Open your bank's app, choose Zelle, and send to <strong>${escHtml(GK_ZELLE_EMAIL)}</strong>.</div>
+        <div style="font-size:13px;color:#1f7a46;font-weight:700;margin-top:6px">Please include this code in the payment note: ${payMemoCode(lead.id)}</div>
+        <div style="font-size:12px;color:#888">The code makes sure your payment is credited to your project right away.</div>
       </div>
       <div style="border:1px solid #d8e6dc;border-radius:8px;padding:14px 16px;margin:0 0 16px">
         <div style="font-weight:700;color:#1f7a46;font-size:14px">Option 2 — Credit card (+3% processing)</div>
@@ -23333,6 +23359,15 @@ async function sendPaymentOptionsEmail(leadId) {
       })
     });
     toast('Payment options emailed to ' + who, 'success');
+    // Track the ask on the Payments page — the row clears once payment lands.
+    try {
+      const _pa = getLeads(); const _pi = _pa.findIndex(x => x.id === leadId);
+      if (_pi >= 0 && !(_pa[_pi].payment && _pa[_pi].payment.collectedAt)) {
+        _pa[_pi].paymentExpected = { amount: base, methods: ['zelle', 'card-link'], at: new Date().toISOString(), source: 'options-email', memoCode: payMemoCode(leadId) };
+        _pa[_pi].updatedAt = new Date().toISOString();
+        saveLeads(_pa);
+      }
+    } catch(_){}
   } catch (e) {
     toast('Could not send: ' + (e.message || e), 'error');
   }
@@ -23459,6 +23494,196 @@ async function _sendPaidInvoice(leadId, opts) {
 // field.html started stamping the paymentReceived milestone. For any active
 // direct job with a recorded payment but no paymentReceived.done, stamp it and
 // re-check auto-archive. Idempotent; writes only when something actually changes.
+// ═══════════════ PAYMENTS CENTER PAGE (2026-07-21) ═══════════════
+// Visibility for money arriving OUTSIDE the auto-reconciled Stripe-link flow
+// (Zelle, Tap-to-Pay, checks). Three pieces: memo codes on every ask, an
+// expected-payments list, and an unmatched parking lot. Bookkeeping only —
+// no hard gates, nothing blocks, no margins shown (customer-facing $ only).
+function _pcFmt$(n){ return '$' + (Math.round(Number(n)||0)).toLocaleString('en-US'); }
+
+function _pcStampPayment(leadId, method, amount){
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) { toast('Job not found', 'error'); return false; }
+  const now = new Date().toISOString();
+  arr[i].payment = { method: method, amount: Math.round(Number(amount)||0), collectedAt: now };
+  const plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(arr[i].source);
+  if (!plat) {
+    if (!arr[i].milestones) arr[i].milestones = {};
+    arr[i].milestones.paymentReceived = { done: true, date: now.slice(0,10), amount: Math.round(Number(amount)||0) };
+  }
+  arr[i].updatedAt = now;
+  saveLeads(arr);
+  return true;
+}
+
+function _pcMarkPaid(leadId){
+  const lead = getLead(leadId); if (!lead) return;
+  const exp = lead.paymentExpected || {};
+  const amtStr = prompt('Amount received ($):', exp.amount != null ? String(exp.amount) : '');
+  if (amtStr === null) return;
+  const amt = Math.round(parseFloat(amtStr) || 0);
+  if (!amt || amt <= 0) { toast('Enter a valid amount', 'warning'); return; }
+  const mIn = prompt('Method — type one of: zelle / card / cash / check:', (exp.methods && exp.methods[0] === 'card-link') ? 'card' : 'zelle');
+  if (mIn === null) return;
+  const method = ({zelle:'zelle', card:'card', cash:'cash', check:'cash'})[String(mIn).trim().toLowerCase()] || 'zelle';
+  if (!confirm('Record ' + _pcFmt$(amt) + ' ' + method + ' payment on ' + (lead.customerName || leadId) + '?')) return;
+  if (_pcStampPayment(leadId, method, amt)) { toast('Payment recorded', 'success'); renderPaymentsPage(); }
+}
+
+function _pcClearExpected(leadId){
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
+  if (!confirm('Remove this expected-payment entry? (Does not touch any recorded payment.)')) return;
+  delete arr[i].paymentExpected;
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr); renderPaymentsPage();
+}
+
+function _pcAddUnmatched(){
+  const amt = Math.round(parseFloat(document.getElementById('pc-un-amt')?.value) || 0);
+  const date = document.getElementById('pc-un-date')?.value || new Date().toISOString().slice(0,10);
+  const time = document.getElementById('pc-un-time')?.value || '';   // optional deposit time — powers time-proximity matching
+  const method = document.getElementById('pc-un-method')?.value || 'zelle';
+  const note = (document.getElementById('pc-un-note')?.value || '').trim();
+  if (!amt || amt <= 0) { toast('Enter the amount that arrived', 'warning'); return; }
+  const arr = getUnmatchedPayments();
+  arr.push({ id: 'up-' + Date.now(), amount: amt, method, seenAt: date, seenTime: time, note, status: 'open', updatedAt: new Date().toISOString() });
+  saveUnmatchedPayments(arr);
+  toast('Parked — match it to a job when you know whose it is', 'success');
+  renderPaymentsPage();
+}
+
+function _pcMatchUnmatched(upId){
+  const sel = document.getElementById('pc-match-' + upId);
+  const leadId = sel && sel.value;
+  if (!leadId) { toast('Pick the job it belongs to first', 'warning'); return; }
+  const ups = getUnmatchedPayments(); const u = ups.find(x => x.id === upId); if (!u) return;
+  const lead = getLead(leadId); if (!lead) { toast('Job not found', 'error'); return; }
+  if (lead.payment && lead.payment.collectedAt && !confirm((lead.customerName || leadId) + ' already has a recorded payment of ' + _pcFmt$(lead.payment.amount) + '. Overwrite with this one?')) return;
+  if (!confirm('Match ' + _pcFmt$(u.amount) + ' (' + u.method + (u.note ? ', "' + u.note + '"' : '') + ') to ' + (lead.customerName || leadId) + '?')) return;
+  if (!_pcStampPayment(leadId, u.method === 'card' ? 'card' : u.method, u.amount)) return;
+  u.status = 'matched'; u.matchedLeadId = leadId; u.updatedAt = new Date().toISOString();
+  saveUnmatchedPayments(ups);
+  toast('Matched and recorded', 'success');
+  renderPaymentsPage();
+}
+
+function _pcDismissUnmatched(upId){
+  const ups = getUnmatchedPayments(); const u = ups.find(x => x.id === upId); if (!u) return;
+  if (!confirm('Remove this unmatched entry? Only do this if it turned out not to be a job payment.')) return;
+  u.status = 'dismissed'; u.updatedAt = new Date().toISOString();
+  saveUnmatchedPayments(ups);
+  renderPaymentsPage();
+}
+
+function renderPaymentsPage(){
+  const el = document.getElementById('page-payments'); if (!el) return;
+  const leads = getLeads();
+  const active = leads.filter(l => l.stage !== 'archived');
+
+  // 1) Waiting on payment — asks that went out and haven't landed.
+  const expected = active.filter(l => l.paymentExpected && !(l.payment && l.payment.collectedAt))
+    .sort((a,b) => new Date(b.paymentExpected.at||0) - new Date(a.paymentExpected.at||0));
+  const srcLabel = { 'options-email': 'Options email', 'field-link': 'Field pay link', 'field-qr': 'Field Zelle QR' };
+  const expRows = expected.map(l => {
+    const e = l.paymentExpected;
+    return `<tr>
+      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(l.customerName||l.id)}</a><div style="font-size:11px;color:var(--text-muted)">${l.id}</div></td>
+      <td style="font-weight:700">${_pcFmt$(e.amount)}</td>
+      <td>${(e.methods||[]).join(' / ')}</td>
+      <td>${srcLabel[e.source]||e.source||''}</td>
+      <td>${e.at ? new Date(e.at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + new Date(e.at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : ''}</td>
+      <td style="font-weight:700;color:var(--green)">${e.memoCode||payMemoCode(l.id)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="_pcMarkPaid('${l.id}')">✓ Record received</button>
+        <button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcClearExpected('${l.id}')" title="Remove this expected entry">✕</button>
+      </td></tr>`;
+  }).join('');
+
+  // 2) Unmatched parking lot — job picker sorted with same-amount expecteds first.
+  const ups = getUnmatchedPayments().filter(u => u.status === 'open')
+    .sort((a,b) => new Date(b.seenAt||0) - new Date(a.seenAt||0));
+  const candidates = active.slice().sort((a,b) => String(a.customerName||'').localeCompare(String(b.customerName||'')));
+  const unRows = ups.map(u => {
+    // Rank candidates: exact amount match first, then time proximity between
+    // the deposit and each job's ask timestamp (Jonathan 2026-07-21 — an
+    // in-person Zelle lands minutes after the QR is shown, so time is often
+    // the strongest signal when the memo code is missing).
+    const depTs = u.seenTime ? new Date(u.seenAt + 'T' + u.seenTime).getTime() : (u.seenAt ? new Date(u.seenAt + 'T12:00').getTime() : null);
+    const score = l => {
+      const amtHit = (l.paymentExpected && Math.round(l.paymentExpected.amount) === Math.round(u.amount)) ? 0 : 1;
+      let dt = Infinity;
+      if (depTs && l.paymentExpected && l.paymentExpected.at) dt = Math.abs(new Date(l.paymentExpected.at).getTime() - depTs);
+      return [amtHit, dt];
+    };
+    const opts = candidates.slice().sort((a,b) => {
+      const sa = score(a), sb = score(b);
+      return (sa[0] - sb[0]) || (sa[1] - sb[1]);
+    }).map(l => {
+      const s = score(l);
+      let hint = '';
+      if (s[0] === 0) hint = ' ← expecting ' + _pcFmt$(u.amount);
+      if (s[1] < 6 * 3600 * 1000) {
+        const mins = Math.round(s[1] / 60000);
+        hint += (hint ? ',' : ' ←') + ' asked ' + (mins < 60 ? mins + ' min' : Math.round(mins/60) + ' h') + ' apart';
+      }
+      return `<option value="${l.id}">${escHtml(l.customerName||l.id)} · ${l.id}${hint}</option>`;
+    }).join('');
+    return `<tr>
+      <td style="font-weight:700">${_pcFmt$(u.amount)}</td>
+      <td>${u.method}</td>
+      <td>${u.seenAt||''}${u.seenTime ? ' ' + u.seenTime : ''}</td>
+      <td style="max-width:220px">${escHtml(u.note||'')}</td>
+      <td style="white-space:nowrap">
+        <select id="pc-match-${u.id}" class="jd-fi" style="max-width:240px;font-size:12px"><option value="">— pick the job —</option>${opts}</select>
+        <button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="_pcMatchUnmatched('${u.id}')">Match</button>
+        <button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcDismissUnmatched('${u.id}')" title="Not a job payment">🗑</button>
+      </td></tr>`;
+  }).join('');
+
+  // 3) Recent recorded payments — confidence check.
+  const recent = leads.filter(l => l.payment && l.payment.collectedAt)
+    .sort((a,b) => new Date(b.payment.collectedAt) - new Date(a.payment.collectedAt)).slice(0, 12);
+  const recRows = recent.map(l => `<tr>
+      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(l.customerName||l.id)}</a></td>
+      <td style="font-weight:700">${_pcFmt$(l.payment.amount)}</td>
+      <td>${l.payment.method||''}</td>
+      <td>${new Date(l.payment.collectedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>
+    </tr>`).join('');
+
+  const th = 'text-align:left;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;padding:6px 10px;border-bottom:1px solid var(--border)';
+  const card = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:18px';
+  el.innerHTML = `
+  <div style="${card}">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;font-size:15px">⏳ Waiting on payment (${expected.length})</h3>
+      <div style="font-size:12px;color:var(--text-muted)">Every payment ask now carries a memo code (e.g. <strong>${payMemoCode('GK-2026-1234')}</strong>) so Zelle deposits identify themselves.</div>
+    </div>
+    ${expected.length ? `<table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
+      <tr><th style="${th}">Job</th><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Asked via</th><th style="${th}">When</th><th style="${th}">Memo code</th><th style="${th}"></th></tr>${expRows}</table>`
+    : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0">Nothing outstanding. Rows appear here when a payment-options email or field pay link goes out.</p>`}
+  </div>
+  <div style="${card}">
+    <h3 style="margin:0 0 4px;font-size:15px">❓ Unmatched payments (${ups.length})</h3>
+    <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 10px">Money arrived (bank app, Stripe) and you're not sure whose it is? Park it here so it's never lost, then match it when you know.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <input id="pc-un-amt" class="jd-fi" type="number" placeholder="Amount $" style="width:110px">
+      <input id="pc-un-date" class="jd-fi" type="date" value="${new Date().toISOString().slice(0,10)}" style="width:150px">
+      <input id="pc-un-time" class="jd-fi" type="time" title="Time the deposit hit (from the bank app) — sharpens the match" style="width:110px">
+      <select id="pc-un-method" class="jd-fi" style="width:110px"><option value="zelle">Zelle</option><option value="card">Card</option><option value="cash">Cash/check</option></select>
+      <input id="pc-un-note" class="jd-fi" type="text" placeholder="Sender name / memo text from the bank app" style="flex:1;min-width:200px">
+      <button class="btn btn-p" style="padding:6px 14px;font-size:13px" onclick="_pcAddUnmatched()">+ Park it</button>
+    </div>
+    ${ups.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Seen</th><th style="${th}">Sender / memo</th><th style="${th}"></th></tr>${unRows}</table>` : ''}
+  </div>
+  <div style="${card}">
+    <h3 style="margin:0 0 10px;font-size:15px">✓ Recently recorded (${recent.length})</h3>
+    ${recent.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr><th style="${th}">Job</th><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Date</th></tr>${recRows}</table>`
+    : `<p style="font-size:13px;color:var(--text-muted);margin:0">No recorded payments yet.</p>`}
+  </div>`;
+}
+
 function _reconcileFieldPayments() {
   try {
     const arr = getLeads();
