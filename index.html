@@ -1259,7 +1259,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1715,6 +1715,7 @@ const JOB_TYPES = [
   {id:'panel-replacement',   label:'Panel Replacement',             description:'Swap panel, same service size',          qqEnabled:true,  permitDefault:500, permitQmerit:500, category:'Panel & Service'},
   {id:'service-upgrade',     label:'Service Upgrade',               description:'Upgrade existing service amperage',      qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'service-upgrade', category:'Panel & Service'},
   {id:'new-service',         label:'New Service Install',           description:'New utility service entrance + meter',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'new-service',     category:'Panel & Service'},
+  {id:'subpanel',            label:'Subpanel / Feeder',             description:'Add a subpanel — beside the main panel for space, or in a detached structure', qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'subpanel', category:'Panel & Service'},
 
   // Energy systems (Detailed Quote with templates — Quick Quote forms in a future round)
   {id:'battery-system',      label:'Battery System',                description:'Powerwall / Enphase / Generac / FranklinWH',qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'battery',         category:'Energy Systems'},
@@ -2001,6 +2002,7 @@ const _PROJECT_PHRASES = {
   'battery-system':      'battery system installation',
   'v2h-system':          'V2H system installation',
   'new-service':         'new electrical service installation',
+  'subpanel':            'subpanel and feeder installation',
   'service-upgrade':     'electrical service upgrade',
   'generator':           'generator installation',
   'energy-management':   'energy management device installation',
@@ -8046,6 +8048,13 @@ const SCOPE_TEMPLATES = {
     lines:[ {desc:'Meter base + main panel',qty:1,unit:'each',unitCost:300,markup:30},
             {desc:'Service mast / lateral materials',qty:1,unit:'per job',unitCost:200,markup:30},
             {desc:'Grounding electrode system',qty:1,unit:'per job',unitCost:75,markup:30} ] },
+  'subpanel': { label:'Subpanel / Feeder',
+    scope:'Furnish and install a subpanel fed from the main panel with a properly sized 4-wire feeder, including the feeder breaker, raceway pathway as specified, and all required bonding and grounding. For a detached structure this includes a main-breaker disconnect, a grounding electrode system at the structure, and removal or re-feed of any existing 120-volt line so the building keeps a single source of power as required by code (NEC 225.30) — delete what does not apply for a subpanel adjacent to the main panel. All work is performed to NEC and local code.',
+    lines:[ {desc:'100A main-breaker subpanel (12–20 space)',qty:1,unit:'each',unitCost:150,markup:30},
+            {desc:'Feeder conductors, 4-wire — per ft',qty:60,unit:'per foot',unitCost:3.00,markup:30},
+            {desc:'Sch 40 PVC conduit + fittings — per ft',qty:60,unit:'per foot',unitCost:1.20,markup:30},
+            {desc:'Feeder breaker (2-pole) in main panel',qty:1,unit:'each',unitCost:70,markup:40},
+            {desc:'Grounding electrode system (2 rods + GEC)',qty:1,unit:'per job',unitCost:75,markup:30} ] },
   'battery': { label:'Battery Storage',
     scope:'Furnish and install a battery storage system with associated disconnect, conductors, and interconnection. All work is performed to NEC and local code.',
     lines:[ {desc:'Battery system equipment',qty:1,unit:'each',unitCost:0,markup:15},
@@ -12962,7 +12971,8 @@ const JOB_TYPE_SKILLS = {
   'circuit-replacement':  ['circuit-replacement'],
   'panel-replacement':    ['panel-replacement'],
   'service-upgrade':      ['service-upgrade'],
-  'new-service':          ['new-service']
+  'new-service':          ['new-service'],
+  'subpanel':             ['service-upgrade']
 };
 
 function getSkillsVocab() {
