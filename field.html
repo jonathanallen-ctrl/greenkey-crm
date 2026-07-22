@@ -63,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-21 field-9';
+const BUILD = '2026-07-22 field-10';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -749,10 +749,12 @@ async function sendOnMyWay(jobId){
   if(_ok) alert('✓ Sent. Replies show under “Customer texts” on this job.');
 }
 
-// Zelle QR (customer scans off this screen). qrcodejs loads lazily from the
-// same CDN the standalone GreenKey_Zelle_Payment.html card uses; the QR just
-// encodes the Zelle email — banking apps resolve it in their Zelle search.
-let _qrLoaded=false;
+// OFFICIAL bank-issued Zelle QR (decodes to enroll.zellepay.com payment token
+// for GREENKEY RICHMOND VA, LLC). Customer banking apps ONLY accept this format
+// — a plain email QR shows "not a Zelle QR" (field lesson, 2026-07-22).
+// Regenerated pixel-perfect from the bank PDF (Primary Zelle/Zelle QR.pdf),
+// round-trip verified. Embedded as data URI so it renders offline.
+const ZELLE_QR_DATAURI='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAqwAAAKsAQMAAAATDH1zAAAABlBMVEUAAAD///+l2Z/dAAAAAnRSTlP//8i138cAAAAJcEhZcwAACxIAAAsSAdLdfvwAAAR1SURBVHic7dlBjuMwDERR3sD3v6VvoEFHZLHk9GqAXtD4QhA4lvToVYFyYv3JCFhYWFhYWNh3sKFxrZ/P5+Jn3KHrvnOt7zsPBBYWdja7F6wyI/Z6fX4W3HV/L/us1JYHAgsLO51VzmSYxAdcfZE/L8uWAjXVCCws7FtYz5lthrcZCpz6uaohgYWFfSXrSSIkF0R40R1E5cDCwr6K3aOp3XKsSp5akxv1fbK2EhYWdjKroUbiPz6GwMLCjmZ9RIR3F13UouZn3J05fWwxBhYWdi67FxwHEC3Ti4jCt7PqfWZ4f1KLYWFhR7N7NqIX582zXC5TUZfv6AeAhYUdzvau6jHcDxsfLlOlsyXsqfZGWFjY0axHx1oqpPtdN55a173qMS5YWNjxbE+VHwqWsDzRecSj5vpaAwsLO5ld1VH0x9Jmr+3AqbqePHE2MLCwsKPZvTGuA8np6Co95fFyrV++YWFh57O5fl+v1VUUJneVVpfiTUhkzsDCwk5ndVO+ZF1rqG4vs8zRKlhY2MHsqvPIvlULFDVdy+Iog8VLdODAwsLOZz1bKjqso7CuQ99Vej0HLCzsZFaHi3WylSQqd9SNry2fAQsLO56t0ZFSheJsOZQz7hxTJcHCws5mb3vPYDmj9XF1UU8hlVhHKwILCzuYVaRIzjbj6tiRk8lS/2s89sLCwr6AzY0WF2IF7nhREAnMEnWRYQULCzuZVUrskYWOdsI2rlp8WUMS53ZYWNjJbK6sNfqu3FgueKdx3K9E+lzDwsIOZ2tveF+h9FDLEfnGUlse3UiVgIWFncze9Z7hjJqD+o6Uquj3YWFhX8KuPnSIyvbjznjp2LFzSkaNZnPAwsJOZislNuIx0pkjUFXqYLLqkLIqc2BhYUeziajfUI+hvdf5MzKRFDt+HxYW9gVsp0o8L9bd8bL0T6iubaPJsLCwk9kr248KCms2VvcYeX9VrWUppKjJBbCwsG9gtTHitxixfuO48OakngsWFnYuu/Tm4ZEw59nkyJO7b3qXUo8HCws7mN0L1t2xk3s1tRqM6jdUXQ9gAxYWdjabG+18sfRGoioKWZU/vstnYWFhX8BmdyF5T/txQ/g6ksc0HW1gYWFns1HHjd51LZVwPOKMoNoVdk6BhYUdzeaUtRy5q75ze2WRB0sH1JFFsLCwg1kJ/bF3FB0pVaIvIoyqB4CFhR3O9pS1E6t6ibChBRHPLT17wcLCzmYjeuqYLfmo8n08uaP9vRgWFnYy2z/vNtV4yNkbGrHvLgcLC/sCthbsm5k8ihofqqV0+upP4oKFhZ3P1tBUWLaktn7JHJXLvflssLCwg9nQsNxI0CPFPrV9PWezKCws7GQ2zxHHLpmaygXxrOWz3n7AwsLOZXvNbSGz+qjSEaT3GN6faOQTwsLCvoT10Gj8LBSKGjnnO0xYWNg3saGu4+5de7T5/STWq8DCwk5n84edO1adUBLfsv3MPR0vLsPCwk5mNb5BDxC9sogu1LgdYWBhYUezfzBgYWFhYWFhX8D+A2inaxeijyiAAAAAAElFTkSuQmCC';
 function toggleZelleQR(jobId){
   const box=document.getElementById('zelleqr'); if(!box) return;
   const show = box.style.display==='none';
@@ -773,13 +775,8 @@ function toggleZelleQR(jobId){
   }
   const img=document.getElementById('zelleqr-img');
   if(!show || !img || img.childNodes.length) return;   // hidden, or already drawn in THIS render
-  const draw=()=>{ try{ new QRCode(img,{text:ZELLE_EMAIL,width:180,height:180,colorDark:'#1e6e38',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }catch(e){ console.warn('[field] qr',e); } };
-  if(_qrLoaded || window.QRCode){ draw(); return; }
-  const s=document.createElement('script');
-  s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
-  s.onload=()=>{ _qrLoaded=true; draw(); };
-  s.onerror=()=>{ const el=document.getElementById('zelleqr-img'); if(el) el.innerHTML='<div style="color:#555;font-size:13px">QR unavailable offline — use the email below.</div>'; };
-  document.head.appendChild(s);
+  const draw=()=>{ img.innerHTML='<img src="'+ZELLE_QR_DATAURI+'" alt="Zelle QR" style="width:200px;height:200px;image-rendering:pixelated">'; };
+  draw();   // embedded data URI — no CDN, no network needed
 }
 
 // ---------- payment (Phase 3): record collected payment, sync back ----------

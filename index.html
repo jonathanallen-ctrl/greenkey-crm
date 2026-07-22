@@ -1258,7 +1258,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-21e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4820,7 +4820,7 @@ function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 // through untouched, so the accept / invoice / deliver flows keep working.
 // Unlocking takes TWO deliberate actions — see unlockQuoteForEdit().
 const QUOTE_PRICE_FIELDS = ['qq','lines','preProcessingTotal','quoteTotal','laborAndMaterials',
-  'laborTotal','laborHours','laborRate','matSubtotal','matAllowance','matTotal','rentalTotal',
+  'laborTotal','laborHours','laborRate','laborLines','matSubtotal','matAllowance','matTotal','rentalTotal',
   'veteranDiscount','qmeritFee','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
   'travelFeeType','depositAmount','isVeteran'];
 function _quoteIsCommitted(q){
@@ -8005,16 +8005,11 @@ function renderDetailedQuoteForm(q){
       </button>
     </div>
     <div class="qq-section">
-      <div class="qq-title">Labor</div>
-      <div class="frow2">
-        <div class="fg"><div class="fl">Hours</div><input class="fi" type="number" id="dq-hours" value="${q.laborHours||0}" min="0" step="0.5" oninput="onDQChange('${q.id}')"></div>
-        <div class="fg"><div class="fl">Rate</div>
-          <select class="fsel" id="dq-rate" onchange="onDQChange('${q.id}')">
-            <option value="160"${(q.laborRate||160)==160?' selected':''}>Standard crew — $160/hr</option>
-            <option value="100"${q.laborRate==100?' selected':''}>Solo (Jonathan) — $100/hr</option>
-          </select>
-        </div>
-      </div>
+      <div class="qq-title">Labor <span style="font-size:11px;color:var(--text-muted);font-weight:400">(separate lines for crew install vs. solo coordination/inspections — each bills hours × its own rate)</span></div>
+      <div id="labor-wrap">${_laborRowsHTML(q)}</div>
+      <button class="li-add" style="margin-top:8px" onclick="addLaborLine('${q.id}')">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add labor line
+      </button>
     </div>
     <div class="qq-section">
       <div class="qq-title">Rentals <span style="font-size:11px;color:var(--text-muted);font-weight:400">(trencher, saw, jackhammer, etc.)</span></div>
@@ -8266,6 +8261,58 @@ function matAcKey(e, input) {
 // Reposition dropdown if the page scrolls or the window resizes while it's open.
 window.addEventListener('scroll', () => { if (_matAcInput) matAcOpen(_matAcInput); }, true);
 window.addEventListener('resize', () => { if (_matAcInput) matAcOpen(_matAcInput); });
+// ── MULTI-LINE LABOR (Jonathan 2026-07-22) ────────────────────────────────
+// q.laborLines = [{desc, hours, rate}] — e.g. 10 hrs @ crew $160 (install) +
+// 4 hrs @ solo $100 (utility coordination & inspections). Legacy quotes with
+// only laborHours/laborRate render as a single line. Derived compat fields
+// kept in sync on every recompute: laborHours = Σ hours (drives scheduling
+// duration + cost heuristics), laborRate = first line's rate, laborTotal =
+// Σ hours×rate (all pricing math downstream is unchanged).
+function _laborLines(q){
+  if (Array.isArray(q.laborLines) && q.laborLines.length) return q.laborLines;
+  return [{desc:'', hours:(parseFloat(q.laborHours)||0), rate:(parseFloat(q.laborRate)||160)}];
+}
+function _laborRowsHTML(q){
+  const lns=_laborLines(q);
+  return lns.map((ln,i)=>{
+    const r=parseFloat(ln.rate)||160;
+    const isStd=[160,100,200].includes(r);
+    return `<div class="dq-labrow" data-i="${i}" style="display:grid;grid-template-columns:1.5fr .55fr 1fr 30px;gap:8px;align-items:end;margin-bottom:6px">
+    <div class="fg"><div class="fl">${i===0?'Description':''}</div><input class="fi dq-lab-desc" placeholder="${i===0?'e.g. Install — 2-tech crew':'e.g. Utility coordination & inspections'}" value="${escHtml(ln.desc||'')}" oninput="onDQChange('${q.id}')"></div>
+    <div class="fg"><div class="fl">${i===0?'Hours':''}</div><input class="fi dq-lab-hours" type="number" min="0" step="0.5" value="${ln.hours||0}" oninput="onDQChange('${q.id}')"></div>
+    <div class="fg"><div class="fl">${i===0?'Rate':''}</div><select class="fsel dq-lab-rate" onchange="onDQChange('${q.id}')">
+      <option value="160"${r==160?' selected':''}>Standard crew — $160/hr</option>
+      <option value="100"${r==100?' selected':''}>Solo (Jonathan) — $100/hr</option>
+      <option value="200"${r==200?' selected':''}>Trenching — $200/hr</option>
+      ${isStd?'':`<option value="${r}" selected>Custom — $${r}/hr</option>`}
+    </select></div>
+    <button class="btn btn-g" style="padding:5px 8px;font-size:12px;color:var(--red);align-self:end;${lns.length<2?'visibility:hidden':''}" onclick="delLaborLine('${q.id}',${i})" title="Remove this labor line">×</button>
+  </div>`;}).join('');
+}
+function _readLaborRows(fallback){
+  const rows=[...document.querySelectorAll('.dq-labrow')];
+  if(!rows.length) return fallback;
+  return rows.map(r=>({
+    desc:(r.querySelector('.dq-lab-desc')?.value||'').trim(),
+    hours:parseFloat(r.querySelector('.dq-lab-hours')?.value)||0,
+    rate:parseFloat(r.querySelector('.dq-lab-rate')?.value)||160
+  }));
+}
+function addLaborLine(qid){
+  const q=getQuote(qid); if(!q) return;
+  const laborLines=[..._readLaborRows(_laborLines(q)),{desc:'',hours:0,rate:160}];
+  upsertQuote({...q,laborLines});
+  renderDetailedQuoteForm(getQuote(qid));
+  onDQChange(qid);
+}
+function delLaborLine(qid,idx){
+  const q=getQuote(qid); if(!q) return;
+  const laborLines=_readLaborRows(_laborLines(q)).filter((_,i)=>i!==idx);
+  if(!laborLines.length) laborLines.push({desc:'',hours:0,rate:160});
+  upsertQuote({...q,laborLines});
+  renderDetailedQuoteForm(getQuote(qid));
+  onDQChange(qid);
+}
 function addRental(qid){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[]),{id:'ren-'+Date.now(),desc:'',cost:0}];upsertQuote({...q,rentals});renderDetailedQuoteForm(getQuote(qid));}
 function removeRental(qid,idx){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[])];rentals.splice(idx,1);upsertQuote({...q,rentals});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function updateRental(qid,idx,field,val){const q=getQuote(qid);if(!q)return;const rentals=[...(q.rentals||[])];rentals[idx]={...rentals[idx],[field]:field==='cost'?parseFloat(val)||0:val};upsertQuote({...q,rentals});onDQChange(qid);}
@@ -8298,8 +8345,9 @@ function onDQChange(qid){
   const _permitFallback = (typeof q.permitFee === 'number' && (q.permitFee > 0 || q._permitSetByUser || (_jtDQ && _jtDQ.noPermit)))
     ? q.permitFee
     : defaultPermitFee(q);
-  const laborHours = _readNum('dq-hours', q.laborHours||0);
-  const laborRate  = _readNum('dq-rate',  q.laborRate||160);
+  const laborLines = _readLaborRows(_laborLines(q));
+  const laborHours = laborLines.reduce((s,l)=>s+(parseFloat(l.hours)||0),0);
+  const laborRate  = parseFloat(laborLines[0]&&laborLines[0].rate)||160;
   const permitFee  = _readNum('dq-permit', _permitFallback);
   const travelFee  = _readNum('dq-travel', q.travelFee||0);
   const travelFeeType=document.getElementById('dq-travtype')?.value||q.travelFeeType||'baked';
@@ -8313,7 +8361,7 @@ function onDQChange(qid){
     : (q.jobType === 'energy-management' || q.jobType === 'custom');
   const matAllowance = _skipMatAllowance ? 0 : (matSub*p.materialsBuffer);
   const matTotal=matSub+matAllowance;
-  const laborTotal=laborHours*laborRate;
+  const laborTotal=laborLines.reduce((s,l)=>s+((parseFloat(l.hours)||0)*(parseFloat(l.rate)||160)),0);
   const rentalTotal=rentals.reduce((s,r)=>s+(parseFloat(r.cost)||0),0);
   const travelBaked=travelFeeType==='baked'?travelFee:0;
   const lm=laborTotal+matTotal+rentalTotal+travelBaked;
@@ -8326,7 +8374,7 @@ function onDQChange(qid){
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
-  upsertQuote({...q,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
+  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
   // Live-refresh auto-generated scope text on the Detailed Quote form too.
   if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
@@ -11610,6 +11658,22 @@ function _quoteNet(q){
   if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.round(Math.max(0, q.quoteTotal - fee));
   return 0;
 }
+// What GreenKey actually KEEPS from a quote (Jonathan 2026-07-22): for Qmerit
+// quotes the customer/platform total includes Qmerit's admin fee ($199 flat or
+// 12%, whichever is greater) which never reaches us — exclude it from Job
+// Value / revenue. CRM-built Qmerit quotes store the exact fee (q.qmeritFee);
+// external/legacy ones derive it from the total with the Settings rates.
+function _quoteJobNet(q){
+  const n = _quoteNet(q);
+  if (!q || q.source !== 'Qmerit') return n;
+  let fee = (typeof q.qmeritFee === 'number' && isFinite(q.qmeritFee) && q.qmeritFee > 0) ? q.qmeritFee : 0;
+  if (!fee) {
+    let flat = 199, pct = 0.12;
+    try { const p = getQQPricing(); flat = p.qmeritFlat || 199; pct = p.qmeritPct || 0.12; } catch(_){}
+    fee = Math.max(flat, n * pct);
+  }
+  return Math.max(0, Math.round(n - fee));
+}
 function getJobValue(lead){
   return (lead && lead.jobValue && typeof lead.jobValue === 'object') ? lead.jobValue : null;
 }
@@ -11670,7 +11734,7 @@ function backfillJobValues(){
       .filter(q => q.leadId === l.id && (q.status === 'invoiced' || q.status === 'approved' || q.status === 'contingent-approved'))
       .sort((a,b) => new Date(b.customerActionAt || b.updatedAt || 0) - new Date(a.customerActionAt || a.updatedAt || 0))[0];
     if (!cand) return;
-    l.jobValue = { amount: _quoteNet(cand), source: 'quote', quoteId: cand.id, setAt: new Date().toISOString(), backfilled: true };
+    l.jobValue = { amount: _quoteJobNet(cand), source: 'quote', quoteId: cand.id, setAt: new Date().toISOString(), backfilled: true };
     if (cand.status === 'invoiced') l.invoiced = { done: true, at: cand.invoiceDate || cand.updatedAt || new Date().toISOString(), backfilled: true };
     n++;
   });
@@ -11756,8 +11820,9 @@ function _renderJobRail(lead){
       ? ` · <span style="color:var(--amber,#f59e0b)">option still open</span>` : '';
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)${isAcc?';border-left:3px solid var(--green);padding-left:7px':''}">
       <div style="min-width:0;cursor:pointer" onclick="${openAction}">
-        <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')} (outside)</span>`:''}</div>
-        <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${qLbl?' · '+escHtml(qLbl):''}</div>
+        <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?' · <span style="color:var(--blue)">(outside)</span>':''}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${(()=>{const s=q.source||'';if(!s)return '';const plat=['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink'].includes(s);return ` <span style="font-size:10px;font-weight:700;letter-spacing:.3px;padding:1px 7px;border-radius:9px;vertical-align:1px;${plat?'background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)':'background:rgba(46,204,113,.12);color:var(--green);border:1px solid rgba(46,204,113,.3)'}">${escHtml(s)}</span>`;})()}${qLbl?' · '+escHtml(qLbl):''}</div>
+        ${(q.source==='Qmerit'&&_quoteJobNet(q)!==_quoteNet(q))?`<div style="font-size:10.5px;color:var(--text-muted)">→ $${_quoteJobNet(q).toLocaleString()} to GreenKey after Qmerit's $${(_quoteNet(q)-_quoteJobNet(q)).toLocaleString()} admin fee</div>`:''}
         <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
       </div>
       <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
@@ -11845,8 +11910,9 @@ function acceptJobQuote(leadId, quoteId){
     renderJobDetail(leadId); return;
   }
   const cur=getJobValueAmount(lead);
-  const _net=_quoteNet(q);
-  if(cur && cur!==_net && !confirm(`Accept this quote and set Job Value to $${_net.toLocaleString()}?\n\n(Job Value is net of the 3% service fee. Current Job Value is $${cur.toLocaleString()}.)`)) return;
+  const _net=_quoteJobNet(q);
+  const _qmNote=(q.source==='Qmerit' && _quoteNet(q)!==_net)?` Qmerit's admin fee of $${(_quoteNet(q)-_net).toLocaleString()} is excluded — $${_quoteNet(q).toLocaleString()} quoted, $${_net.toLocaleString()} to GreenKey.`:'';
+  if(cur && cur!==_net && !confirm(`Accept this quote and set Job Value to $${_net.toLocaleString()}?\n\n(Job Value is net of the 3% service fee.${_qmNote} Current Job Value is $${cur.toLocaleString()}.)`)) return;
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
   if(i>=0){ arr[i].acceptedQuoteId=quoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
   setJobValueFromQuote(leadId, _net, quoteId);
@@ -11934,7 +12000,7 @@ function saveExternalQuote(leadId, quoteId){
         && (q.status==='approved' || q.status==='contingent-approved'));
       if (!_stillApproved) { try { _setMilestone(leadId,'quoteApproved',false); } catch(_){} }
     } else if (!isPending) {
-      if (_lead?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, amount, quoteId);
+      if (_lead?.acceptedQuoteId===quoteId) setJobValueFromQuote(leadId, _quoteJobNet(getQuote(quoteId)), quoteId);
       else if (!wasApproved) { try{ acceptJobQuote(leadId, quoteId); }catch(_){} }
     }
     renderJobDetail(leadId);
@@ -24912,7 +24978,7 @@ async function hydrateQuoteStatusFromServer(qid) {
         if (earlyStages.includes(lead.stage)) { upd.stage = 'quote-approved'; upd.stageAt = new Date().toISOString(); dirty = true; }
         if (lead.acceptedQuoteId !== qid) { upd.acceptedQuoteId = qid; dirty = true; }
         if (!(lead.jobValue && typeof lead.jobValue.amount === 'number') && typeof _quoteNet === 'function') {
-          upd.jobValue = { amount: _quoteNet(q), source: 'quote', quoteId: qid, setAt: new Date().toISOString(), setBy: 'customer-accept' };
+          upd.jobValue = { amount: _quoteJobNet(q), source: 'quote', quoteId: qid, setAt: new Date().toISOString(), setBy: 'customer-accept' };
           dirty = true;
         }
         if (dirty) { upd.updatedAt = new Date().toISOString(); upsertLead(upd); }
@@ -26019,6 +26085,7 @@ function applyAIDraft() {
     rentals,
     laborHours: _aiNum(draft.laborHours, 0),
     laborRate:  _aiNum(draft.laborRate, 160),
+    laborLines: [{desc:'', hours:_aiNum(draft.laborHours, 0), rate:_aiNum(draft.laborRate, 160)}],
     permitFee:  _aiNum(draft.permitFee, _aiPermitFallback),
     scope: draft.scopeRewrite || q.scope,
     aiAssumptions: Array.isArray(draft.assumptions) ? draft.assumptions : [],
