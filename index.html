@@ -790,6 +790,7 @@
         <option value="installation">Installation / Job Day</option>
         <option value="walkdown">Walkdown / Site Visit (pre-quote)</option>
         <option value="troubleshoot">Troubleshooting / Service Call</option>
+        <option value="maintenance">Maintenance Visit</option>
         <option value="inspection">Final Inspection</option>
         <option value="quote-review">Quote Review with Customer</option>
         <option value="material-pickup">Material Pickup</option>
@@ -1258,7 +1259,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1721,9 +1722,47 @@ const JOB_TYPES = [
   {id:'generator',           label:'Generator Install',             description:'Standby or portable generator wiring',   qqEnabled:false, permitDefault:200, permitQmerit:250, detailedTemplate:'generator',       category:'Energy Systems'},
   {id:'energy-management',   label:'Energy Management Device',      description:'EV Tap, DCC, SimpleSwitch, etc. (load-shed / branch-circuit EMS)', qqEnabled:false, permitDefault:0, permitQmerit:0, noPermit:true, category:'Energy Systems'},
 
+  // Service & maintenance (2026-07-22 — repair/maintenance lead handling)
+  {id:'troubleshooting',     label:'Troubleshooting / Repair',      description:'Diagnose & repair — service-call pricing, first hour included', qqEnabled:true, permitDefault:0, permitQmerit:0, noPermit:true, category:'Service & Maintenance'},
+  {id:'maintenance-visit',   label:'Maintenance Visit',             description:'Scheduled maintenance / periodic checks',   qqEnabled:true,  permitDefault:0, permitQmerit:0, noPermit:true, category:'Service & Maintenance'},
+
   // Catch-all for one-off scopes that don't fit any of the above
   {id:'custom',              label:'Custom / Other',                description:'One-off scope — write your own line items', qqEnabled:false, permitDefault:0, permitQmerit:0, noPermit:true, category:'Other'}
 ];
+
+// Service-call pricing (Jonathan 2026-07-22): the fee covers the trip + FIRST
+// HOUR on site; additional hours bill at the crew's hourly. Out-of-area rides
+// the existing travel-minutes adder, after-hours multiplier = future.
+const SERVICE_CALL_RATES = {
+  solo: { first: 150, addl: 100, label: 'Solo tech — $150 first hour, $100/hr after' },
+  crew: { first: 180, addl: 160, label: 'Two-person crew — $180 first hour, $160/hr after' }
+};
+
+// Work-kind / property chips shown on kanban cards + lead rows (2026-07-22).
+function kindChips(l){
+  if(!l) return '';
+  let h='';
+  if(l.workKind==='repair') h+=`<span class="chip" style="background:rgba(231,76,60,.12);color:#e74c3c;border:1px solid rgba(231,76,60,.35)" title="Troubleshooting / repair — rapid-response promise applies">🔧 Repair</span>`;
+  else if(l.workKind==='maintenance') h+=`<span class="chip" style="background:rgba(52,152,219,.12);color:#3498db;border:1px solid rgba(52,152,219,.35)" title="Maintenance work">🛠 Maint</span>`;
+  if(l.propertyType==='commercial') h+=`<span class="chip" style="background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)" title="Commercial${l.businessName?(' — '+String(l.businessName).replace(/"/g,'&quot;')):''}">🏢</span>`;
+  return h;
+}
+// Kind-aware stage label for a SINGLE lead's stage display (kanban columns
+// stay global — mixed kinds share the board; cards carry the chips instead).
+function stageLabelFor(lead, stageId){
+  const id = stageId || (lead && lead.stage);
+  const base = (STAGE_MAP[id] && STAGE_MAP[id].label) || id || '';
+  if(!lead) return base;
+  const MAPS = {
+    repair:      {'info-gathering':'Diagnosis','estimating':'Repair Quote','quote-delivered':'Awaiting Go-Ahead','scheduled':'Scheduling Visit','installation':'Repair Visit','post-install-docs':'Wrap-Up'},
+    maintenance: {'info-gathering':'Site Review','estimating':'Maintenance Quote','scheduled':'Scheduling Visit','installation':'Maintenance Visit','post-install-docs':'Visit Wrap-Up'}
+  };
+  let lbl = lead.workKind && MAPS[lead.workKind] && MAPS[lead.workKind][id];
+  if(!lbl && lead.propertyType==='commercial'){
+    lbl = {'info-gathering':'Site Walk','estimating':'Proposal','quote-delivered':'Proposal Delivered'}[id];
+  }
+  return lbl || base;
+}
 
 // Lookup helper
 function getJobType(id){ return JOB_TYPES.find(t => t.id === id) || null; }
@@ -3698,7 +3737,7 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}</div>
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}</div>
         <div class="kcard-foot" style="pointer-events:none">
           <span class="kcard-days">${daysAgo(l.stageAt||l.createdAt)}</span>
           ${!isLast?`<span class="knext" style="pointer-events:auto" onclick="event.stopPropagation();advanceStage('${l.id}')">Next →</span>`:''}
@@ -3754,9 +3793,9 @@ function renderPipeList(leads) {
     return `<tr onclick="openLeadDetail('${l.id}')">
       <td style="font-family:var(--mono);font-size:12px">${l.id}</td>
       <td>${name}</td><td>${addr}</td>
-      <td>${typeChip(l.jobType)}</td>
+      <td>${typeChip(l.jobType)}${kindChips(l)}</td>
       <td>${sourceChip(l.source)}</td>
-      <td>${stageChip(l.stage)}</td>
+      <td>${(l.workKind&&l.workKind!=='install')||l.propertyType==='commercial'?`<span class="chip">${escHtml(stageLabelFor(l))}</span>`:stageChip(l.stage)}</td>
       <td style="font-size:12px;color:var(--text-muted)">${daysAgo(l.stageAt||l.createdAt)}</td>
       <td style="font-size:12px;color:var(--text-muted)">${assignee?assignee.name.split(' ')[0]:'—'}</td>
     </tr>`;
@@ -3787,7 +3826,15 @@ function renderLeadsPage() {
            addr.includes(search) ||
            l.id.toLowerCase().includes(search);
   });
-  leads.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  // Active repairs pin to the top (rapid-response promise) — done/closed ones
+  // fall back into the normal date order.
+  const _DONE_STAGES=['post-install-docs','final-inspection','invoiced','archived','not-won'];
+  const _isActiveRepair=l=>l.workKind==='repair' && !_DONE_STAGES.includes(l.stage);
+  leads.sort((a,b)=>{
+    const ar=_isActiveRepair(a)?1:0, br=_isActiveRepair(b)?1:0;
+    if(ar!==br) return br-ar;
+    return new Date(b.createdAt)-new Date(a.createdAt);
+  });
   const wrap = document.getElementById('leads-list-wrap');
   if (!wrap) return;
   if (!leads.length) {
@@ -3810,9 +3857,9 @@ function renderLeadsPage() {
       <td style="font-family:var(--mono);font-size:12px">${l.id}</td>
       <td style="font-weight:500">${name}</td>
       <td style="font-size:12px;color:var(--text-muted)">${l.siteCity||'—'}</td>
-      <td>${typeChip(l.jobType)}</td>
+      <td>${typeChip(l.jobType)}${kindChips(l)}</td>
       <td>${sourceChip(l.source)}</td>
-      <td>${stageChip(l.stage)}</td>
+      <td>${(l.workKind&&l.workKind!=='install')||l.propertyType==='commercial'?`<span class="chip">${escHtml(stageLabelFor(l))}</span>`:stageChip(l.stage)}</td>
       <td>${infoFlag}</td>
       <td style="font-size:12px;color:var(--text-muted)">${l.createdAt?l.createdAt.slice(0,10):'—'}</td>
     </tr>`;
@@ -4212,6 +4259,28 @@ function showLeadForm(lead, prefillCustId) {
     <div class="fsec">
       <div class="fsec-title">Job Details</div>
       <div class="frow2">
+        <div class="fg"><div class="fl">Property</div>
+          <select class="fsel" id="lf-proptype" onchange="onLFPropTypeChange(this.value)">
+            <option value="residential"${(l.propertyType||prefillCust?.propertyType||'residential')!=='commercial'?' selected':''}>Residential</option>
+            <option value="commercial"${(l.propertyType||prefillCust?.propertyType)==='commercial'?' selected':''}>Commercial (business)</option>
+          </select>
+        </div>
+        <div class="fg"><div class="fl">Work Kind</div>
+          <select class="fsel" id="lf-workkind" onchange="onLFWorkKindChange(this.value)">
+            <option value="install"${(l.workKind||'install')==='install'?' selected':''}>New install / project</option>
+            <option value="repair"${l.workKind==='repair'?' selected':''}>Troubleshooting / repair</option>
+            <option value="maintenance"${l.workKind==='maintenance'?' selected':''}>Maintenance</option>
+          </select>
+        </div>
+      </div>
+      <div id="lf-biz-sec" style="display:${(l.propertyType||prefillCust?.propertyType)==='commercial'?'block':'none'}">
+        <div class="frow2" style="margin-top:10px">
+          <div class="fg"><div class="fl">Business Name</div><input class="fi" id="lf-bizname" placeholder="e.g. Acme Property Group" value="${(l.businessName||prefillCust?.businessName||'').replace(/"/g,'&quot;')}"></div>
+          <div class="fg"><div class="fl">POC Title</div><input class="fi" id="lf-poctitle" placeholder="e.g. Facilities Manager" value="${(l.pocTitle||'').replace(/"/g,'&quot;')}"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin:4px 0 8px">The contact name/phone/email above is the point of contact at this business.</div>
+      </div>
+      <div class="frow2" style="margin-top:10px">
         <div class="fg"><div class="fl">Source</div>
           <select class="fsel" id="lf-source" onchange="onSourceChange(this.value)">
             ${(() => {
@@ -4357,6 +4426,22 @@ function showNewCustFields() {
   document.getElementById('cust-fields').style.display = 'block';
 }
 
+// Request-section handlers (2026-07-22). Picking repair/maintenance nudges the
+// Job Type to the matching type ONLY if the type is still the default —
+// deliberate choices are never overwritten.
+function onLFPropTypeChange(v){
+  const sec=document.getElementById('lf-biz-sec');
+  if(sec) sec.style.display = (v==='commercial')?'block':'none';
+}
+function onLFWorkKindChange(v){
+  const t=document.getElementById('lf-type'); if(!t) return;
+  const cur=t.value;
+  const isDefaultish = ['ev-residential','custom','troubleshooting','maintenance-visit'].includes(cur);
+  if(!isDefaultish) return;
+  if(v==='repair') t.value='troubleshooting';
+  else if(v==='maintenance') t.value='maintenance-visit';
+  else if(cur==='troubleshooting'||cur==='maintenance-visit') t.value='ev-residential';
+}
 function saveLead() {
   const custId = document.getElementById('lf-custid').value;
   const fn = (document.getElementById('lf-fn')||{}).value||'';
@@ -4376,6 +4461,10 @@ function saveLead() {
   const existingId = document.getElementById('lf-id').value;
   const stageEl = document.getElementById('lf-stage');
   const stage = stageEl ? stageEl.value : 'lead-received';
+  const propertyType = document.getElementById('lf-proptype')?.value || 'residential';
+  const workKind = document.getElementById('lf-workkind')?.value || 'install';
+  const bizName = (document.getElementById('lf-bizname')?.value || '').trim();
+  const pocTitle = (document.getElementById('lf-poctitle')?.value || '').trim();
 
   // Require at least a name
   const custName = document.getElementById('lf-custname').value.trim();
@@ -4413,7 +4502,8 @@ function saveLead() {
       id: 'cust-'+Date.now(),
       firstName, lastName, email, phone,
       street, city, state, zip,
-      propertyType: 'residential'
+      propertyType,
+      businessName: propertyType==='commercial' ? bizName : ''
     });
   } else if (finalCustId) {
     // Existing customer — update phone/email if they were changed
@@ -4441,6 +4531,9 @@ function saveLead() {
     source, jobType, description: desc,
     siteStreet: street, siteCity: city, siteState: state, siteZip: zip,
     assignedTo, infoComplete, stage,
+    propertyType, workKind,
+    businessName: propertyType==='commercial' ? bizName : '',
+    pocTitle: propertyType==='commercial' ? pocTitle : '',
     specialJurisdiction, jurisdiction, permitFee, inspectionRequired,
     qmerit,
     createdAt: date ? new Date(date).toISOString() : new Date().toISOString(),
@@ -6068,6 +6161,7 @@ function renderQuickQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
   if (q.jobType === 'hvac-circuit')         return _renderQQ_HVAC(q);
   if (q.jobType === 'panel-replacement')    return _renderQQ_PanelReplacement(q);
+  if (q.jobType === 'troubleshooting' || q.jobType === 'maintenance-visit') return _renderQQ_ServiceCall(q);
   const t = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
   if (t && t.qqEnabled === false)            return _renderQQ_DetailedRedirect(q);
   // Fallthrough: EV Charger / NEMA 14-50 (existing behavior).
@@ -6632,6 +6726,74 @@ function _renderQQ_PanelReplacement(q) {
 // V2H, New Service, Service Upgrade, Generator). Shows a guidance card and a
 // one-click switch to Detailed mode with material pre-fills.
 // ────────────────────────────────────────────────────────────────────────
+// ── SERVICE CALL quick quote (2026-07-22, Jonathan's model) ───────────────
+// Fee covers trip + FIRST hour; additional on-site hours bill hourly. Crew
+// choice drives both numbers (SERVICE_CALL_RATES). Parts billed as entered
+// (tech's number, incl. any markup he wants). Travel beyond 60 min round-trip
+// rides the same $80/30-min adder as the install quick quotes.
+function _renderQQ_ServiceCall(q) {
+  const wrap = document.getElementById('qb-form'); if (!wrap) return;
+  const qq = q.qq || {};
+  const crew = qq.scCrew || 'solo';
+  const hours = (typeof qq.scHours === 'number' && isFinite(qq.scHours)) ? qq.scHours : 1;
+  const parts = qq.scParts || 0;
+  const travelMinutes = qq.travelMinutes || 0;
+  const r = SERVICE_CALL_RATES[crew] || SERVICE_CALL_RATES.solo;
+  const isMaint = q.jobType === 'maintenance-visit';
+  wrap.innerHTML = `
+    <div class="qq-section">
+      <div class="qq-title">${isMaint ? 'Maintenance Visit' : 'Service Call'}</div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Crew</div>
+          <select class="fsel" id="qq-sc-crew" onchange="onQQChange('${q.id}')">
+            <option value="solo"${crew==='solo'?' selected':''}>${SERVICE_CALL_RATES.solo.label}</option>
+            <option value="crew"${crew==='crew'?' selected':''}>${SERVICE_CALL_RATES.crew.label}</option>
+          </select>
+        </div>
+        <div class="fg"><div class="fl">Total on-site hours</div><input class="fi" type="number" id="qq-sc-hours" value="${hours}" min="0.5" step="0.5" oninput="onQQChange('${q.id}')"></div>
+      </div>
+      <div class="frow2" style="margin-top:10px">
+        <div class="fg"><div class="fl">Parts &amp; materials ($, as billed)</div><input class="fi" type="number" id="qq-sc-parts" value="${parts}" min="0" step="1" oninput="onQQChange('${q.id}')"></div>
+        <div class="fg"><div class="fl">Round-trip travel (min)</div><input class="fi" type="number" id="qq-travel-min" value="${travelMinutes}" min="0" step="5" oninput="onQQChange('${q.id}')">
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Beyond 60 min adds <span id="qq-travel-calc">$0</span> ($80 / 30 min)</div></div>
+      </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">How this bills</div>
+      <div id="qq-sc-breakdown" style="font-size:12px;color:var(--text-secondary);line-height:1.6"></div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">No permit on service calls. If the diagnosis turns into a bigger scope (panel work, new circuits), quote that separately as its own job type.</div>
+    </div>`;
+  _onQQChange_ServiceCall(q.id);
+}
+function _onQQChange_ServiceCall(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const crew = document.getElementById('qq-sc-crew')?.value || (q.qq?.scCrew) || 'solo';
+  const r = SERVICE_CALL_RATES[crew] || SERVICE_CALL_RATES.solo;
+  const hoursRaw = parseFloat(document.getElementById('qq-sc-hours')?.value);
+  const hours = (isFinite(hoursRaw) && hoursRaw > 0) ? hoursRaw : 1;
+  const parts = parseFloat(document.getElementById('qq-sc-parts')?.value) || 0;
+  const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
+  const travelAdder = Math.round(Math.max(0, travelMinutes - 60) / 30) * 80;
+  const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
+  const addlHours = Math.max(0, hours - 1);
+  const addlCharge = Math.round(addlHours * r.addl);
+  const lm = r.first + addlCharge + parts + travelAdder;
+  const bd = document.getElementById('qq-sc-breakdown');
+  if (bd) bd.innerHTML =
+    `Service fee (trip + first hour): <strong>$${r.first}</strong><br>` +
+    (addlHours > 0 ? `Additional ${addlHours} hr × $${r.addl}: <strong>$${addlCharge.toLocaleString()}</strong><br>` : '') +
+    (parts > 0 ? `Parts &amp; materials: <strong>$${Math.round(parts).toLocaleString()}</strong><br>` : '') +
+    (travelAdder > 0 ? `Travel adder: <strong>$${travelAdder}</strong><br>` : '') +
+    `<span style="color:var(--text-primary)">Labor &amp; materials subtotal: <strong>$${Math.round(lm).toLocaleString()}</strong></span>`;
+  _finalizeQQTotals(q, lm, {
+    scCrew: crew,
+    scHours: hours,
+    scParts: parts,
+    travelMinutes,
+    travelAdder,
+    extras: q.qq?.extras || []
+  }, 0);
+}
 function _renderQQ_DetailedRedirect(q) {
   const wrap = document.getElementById('qb-form'); if (!wrap) return;
   const t = getJobType(q.jobType);
@@ -6668,6 +6830,7 @@ function onQQChange(qid){
   if (q.jobType === 'hvac-circuit')         return _onQQChange_HVAC(qid);
   if (q.jobType === 'circuit-replacement')  return _onQQChange_CircuitReplacement(qid);
   if (q.jobType === 'panel-replacement')    return _onQQChange_PanelReplacement(qid);
+  if (q.jobType === 'troubleshooting' || q.jobType === 'maintenance-visit') return _onQQChange_ServiceCall(qid);
   // Fallthrough: EV Charger / NEMA 14-50 (existing math)
   const p=getQQPricing();
   // _readNum honors an explicit 0 typed into the input. The old
@@ -11658,21 +11821,18 @@ function _quoteNet(q){
   if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.round(Math.max(0, q.quoteTotal - fee));
   return 0;
 }
-// What GreenKey actually KEEPS from a quote (Jonathan 2026-07-22): for Qmerit
-// quotes the customer/platform total includes Qmerit's admin fee ($199 flat or
-// 12%, whichever is greater) which never reaches us — exclude it from Job
-// Value / revenue. CRM-built Qmerit quotes store the exact fee (q.qmeritFee);
-// external/legacy ones derive it from the total with the Settings rates.
+// What GreenKey actually KEEPS from a quote (Jonathan 2026-07-22): CRM-BUILT
+// Qmerit quotes add Qmerit's admin fee ($199 flat or 12%, whichever is
+// greater) INTO the total at quote time and store it as q.qmeritFee — that fee
+// never reaches us, so it comes OFF the Job Value. Outside-recorded Qmerit
+// quotes (Sherri's path) are entered as OUR amount, already net of the fee —
+// subtract NOTHING there (Jonathan's correction, same day). Rule: deduct only
+// a stored, positive q.qmeritFee; never derive one.
 function _quoteJobNet(q){
   const n = _quoteNet(q);
-  if (!q || q.source !== 'Qmerit') return n;
-  let fee = (typeof q.qmeritFee === 'number' && isFinite(q.qmeritFee) && q.qmeritFee > 0) ? q.qmeritFee : 0;
-  if (!fee) {
-    let flat = 199, pct = 0.12;
-    try { const p = getQQPricing(); flat = p.qmeritFlat || 199; pct = p.qmeritPct || 0.12; } catch(_){}
-    fee = Math.max(flat, n * pct);
-  }
-  return Math.max(0, Math.round(n - fee));
+  if (!q || q.source !== 'Qmerit' || q.external) return n;
+  const fee = (typeof q.qmeritFee === 'number' && isFinite(q.qmeritFee) && q.qmeritFee > 0) ? q.qmeritFee : 0;
+  return fee ? Math.max(0, Math.round(n - fee)) : n;
 }
 function getJobValue(lead){
   return (lead && lead.jobValue && typeof lead.jobValue === 'object') ? lead.jobValue : null;
@@ -11830,7 +11990,19 @@ function _renderJobRail(lead){
     </div>`;
   }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
   const quotesSec = `<div class="jd-sec"><div class="jd-sh" style="display:flex;align-items:center;justify-content:space-between"><div class="jd-st">Active Quotes</div><button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button></div><div class="jd-sb" style="padding:6px 14px 12px">${qRows}</div></div>`;
-  return valueSec + propSec + quotesSec;
+  let pocSec='';
+  if(lead.propertyType==='commercial'){
+    const cust=getCustomer(lead.customerId);
+    const pocName=(cust?custFullName(cust):lead.customerName)||'—';
+    const bizNm=lead.businessName||cust?.businessName||'';
+    pocSec=`<div class="jd-sec"><div class="jd-sh"><div class="jd-st">🏢 Commercial</div></div><div class="jd-sb" style="padding:10px 14px 12px">
+      <div style="font-size:13.5px;font-weight:600">${escHtml(bizNm||'Business name not set')}</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);margin-top:3px">POC: ${escHtml(pocName)}${lead.pocTitle?` · ${escHtml(lead.pocTitle)}`:''}</div>
+      ${lead.workKind==='maintenance'?'<div style="font-size:11.5px;color:#3498db;margin-top:4px">🛠 Maintenance account — recurring-schedule tooling is on the roadmap; track visits via the Scheduler for now.</div>':''}
+      <a class="btn btn-g" style="display:inline-block;margin-top:10px;padding:5px 11px;font-size:11.5px;text-decoration:none" href="proposal.html?lead=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="Commercial Proposal Studio — opens in a new tab with this job id in the URL for future linkage">📐 Open Proposal Studio</a>
+    </div></div>`;
+  }
+  return pocSec + valueSec + propSec + quotesSec;
 }
 async function _loadJobRailMap(leadId){
   const lead=getLead(leadId); if(!lead) return;
@@ -11937,7 +12109,7 @@ function openExternalQuote(leadId, quoteId){
   const amt = ex ? _quoteNet(ex) : '';
   const body = `
     <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px">Record a quote created OUTSIDE the CRM so its value shows in Active Quotes and counts as revenue when the job is invoiced. No 3% fee is added (platform-paid or fixed price).</div>
-    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Amount ($) — what GreenKey collects/keeps</label>
+    <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Amount ($) — what GreenKey collects/keeps <span style="color:var(--text-muted)">(Qmerit: enter OUR payout, already after their admin fee — nothing is deducted from this number)</span></label>
     <input class="fi" id="ext-q-amt" type="number" step="1" min="0" value="${amt}" placeholder="e.g. 1850" style="width:100%;margin-bottom:12px">
     <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Source</label>
     <select class="fsel" id="ext-q-src" style="width:100%;margin-bottom:12px">${SRCS.map(s=>`<option${s===curSrc?' selected':''}>${escHtml(s)}</option>`).join('')}</select>
@@ -23235,6 +23407,7 @@ const _WEB_SERVICE_TO_JOBTYPE = {
   'new_service':     'new-service',
   'service_upgrade': 'service-upgrade',
   'electrical':      'custom',
+  'repair':          'troubleshooting',
   'generator':       'generator',
   'solar':           'custom',
   'commercial':      'custom',
@@ -23874,6 +24047,8 @@ function _importWebLead(row) {
     customerPhone: phone,
     source: 'Website',
     jobType,
+    workKind: (String(row.service_type||'').toLowerCase()==='repair') ? 'repair' : 'install',
+    propertyType: (String(row.service_type||'').toLowerCase()==='commercial') ? 'commercial' : 'residential',
     description: descBits.join('\n'),
     siteStreet: row.address || '',
     siteCity: city,
@@ -26293,7 +26468,8 @@ function scheduleInOutlook(leadId) {
 const _SCHED_TYPE_DEFAULT_HOURS = {
   installation:    3,     // was 8 — Jonathan 2026-07-21: installs block 3 h
   walkdown:        0.5,   // was 1 — Jonathan 2026-07-21: walkdowns are 30 min
-  troubleshoot:    2,
+  troubleshoot:    1.5,   // service-call fee covers the first hour; 1.5 blocks drive-away room (2026-07-22)
+  maintenance:     2,
   inspection:      0.5,
   'quote-review':  1,
   'material-pickup': 0.5,
@@ -26444,6 +26620,15 @@ function _buildSchedContent(lead, cust, quote, type) {
       sections.push('Goals: measure run lengths (panel-to-load, including verticals), photo the existing panel and surrounding area, identify obstacles, confirm scope with customer, note any code issues.');
       if (!isDirect) sections.push(`Lead source: ${source} — coordinate any platform-specific intake requirements.`);
       if (permitLine) sections.push(`Likely jurisdiction: ${permitLoc}`);
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'maintenance': {
+      subject = `${lastName} - Maintenance Visit`;
+      sections.push('Scheduled maintenance visit.');
+      if (desc) sections.push('Notes:\n' + desc);
+      if (recentNote) sections.push(recentNote);
+      sections.push('Review prior visit notes before arrival; photo anything out of spec.');
       if (contactLine) sections.push(contactLine);
       break;
     }
