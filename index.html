@@ -1259,7 +1259,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-22c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-24a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6073,9 +6073,12 @@ function renderQuoteBuilder(qid){
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="10" height="10" rx="1"/><path d="M2 10V3a1 1 0 0 1 1-1h7"/></svg>
             Duplicate as New Option
           </button>
-          ${isDirect?`<button class="btn btn-g btn-full" onclick="generateInvoice('${q.id}')">
+          ${isDirect?`${q.invoiceId?`<button class="btn btn-g btn-full" onclick="emailInvoice('${q.id}')" title="${q.invoiceEmailedAt?`Last emailed ${q.invoiceEmailedAt.slice(0,10)} to ${q.invoiceEmailedTo||''}`:'Email the invoice PDF to the bill-to party'}">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
+            Email Invoice ${(typeof isQuoteBilledToReferrer==='function'&&isQuoteBilledToReferrer(q))?`to ${q.source}`:'to Customer'}${q.invoiceEmailedAt?' ✓':''}
+          </button>`:''}<button class="btn btn-g btn-full" onclick="generateInvoice('${q.id}')">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 6h6M5 9h4"/></svg>
-            Generate Invoice
+            ${q.invoiceId?`Re-download Invoice PDF (${q.invoiceId})`:'Generate Invoice'}
           </button>`:'<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:4px">Platform job — invoiced through ${q.source}</div>'}
           ${q.status!=='invoiced'?`<button class="btn btn-g btn-full" style="font-size:12px" onclick="markQuoteStatus('${q.id}','${nextStatus}')">${nextStatusLabel}</button>`:''}
         </div>
@@ -6733,12 +6736,53 @@ function _renderQQ_PanelReplacement(q) {
 // choice drives both numbers (SERVICE_CALL_RATES). Parts billed as entered
 // (tech's number, incl. any markup he wants). Travel beyond 60 min round-trip
 // rides the same $80/30-min adder as the install quick quotes.
+// ── SERVICE-CALL MATERIALS (2026-07-24, Jonathan) ──
+// Techs enter their material COST; the customer-billed price applies a
+// standard markup automatically (was a manual ×1.3 mental step before).
+const SC_MAT_MARKUP_PCT = 30;
+function _scMatBilled(cost){ return Math.round((parseFloat(cost)||0) * (1 + SC_MAT_MARKUP_PCT/100) * 100) / 100; }
+function _renderSCMatRows(mats, qid){
+  if(!mats || !mats.length) return `<div style="font-size:12px;color:var(--text-muted)">No materials — labor-only call.</div>`;
+  return mats.map((m,i)=>`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <input class="fi" style="flex:1;min-width:0" placeholder="Material description (prints on invoice)" value="${escHtml(m.d||'')}" data-scmat-d="${i}" oninput="onQQChange('${qid}')">
+      <input class="fi" type="number" style="width:104px;flex-shrink:0" placeholder="Cost $" value="${m.c!=null?m.c:''}" min="0" step="0.01" data-scmat-c="${i}" oninput="onQQChange('${qid}')">
+      <span style="font-family:var(--mono);font-size:12px;color:var(--green);width:84px;text-align:right;flex-shrink:0" data-scmat-b="${i}" title="Billed (cost + ${SC_MAT_MARKUP_PCT}%)">$${_scMatBilled(m.c).toLocaleString()}</span>
+      <button class="btn btn-g" style="padding:3px 9px;font-size:12px;flex-shrink:0" title="Remove material" onclick="removeSCMaterial('${qid}',${i})">✕</button>
+    </div>`).join('');
+}
+function addSCMaterial(qid){
+  const q=getQuote(qid); if(!q) return;
+  const mats=Array.isArray(q.qq?.scMaterials)?[...q.qq.scMaterials]:[];
+  mats.push({d:'',c:null});
+  upsertQuote({...q, qq:{...(q.qq||{}), scMaterials:mats}});
+  _rerenderSCMats(qid);
+}
+function removeSCMaterial(qid,i){
+  const q=getQuote(qid); if(!q) return;
+  const mats=Array.isArray(q.qq?.scMaterials)?[...q.qq.scMaterials]:[];
+  mats.splice(i,1);
+  upsertQuote({...q, qq:{...(q.qq||{}), scMaterials:mats}});
+  _rerenderSCMats(qid);
+}
+function _rerenderSCMats(qid){
+  const q=getQuote(qid);
+  const box=document.getElementById('qq-sc-mats');
+  if(box&&q) box.innerHTML=_renderSCMatRows(Array.isArray(q.qq?.scMaterials)?q.qq.scMaterials:[], qid);
+  _onQQChange_ServiceCall(qid);
+}
+
 function _renderQQ_ServiceCall(q) {
   const wrap = document.getElementById('qb-form'); if (!wrap) return;
   const qq = q.qq || {};
   const crew = qq.scCrew || 'solo';
   const hours = (typeof qq.scHours === 'number' && isFinite(qq.scHours)) ? qq.scHours : 1;
   const parts = qq.scParts || 0;
+  // Materials rows (2026-07-24): itemized cost-basis entries with auto 30% markup.
+  // Legacy quotes that only have scParts (a billed amount) get one seeded row
+  // whose cost back-solves to the same billed total, so totals don't move.
+  const mats = Array.isArray(qq.scMaterials) ? qq.scMaterials
+             : (parts > 0 ? [{ d:'Parts & materials', c: Math.round(parts/(1+SC_MAT_MARKUP_PCT/100)*100)/100 }] : []);
   const travelMinutes = qq.travelMinutes || 0;
   const r = SERVICE_CALL_RATES[crew] || SERVICE_CALL_RATES.solo;
   const isMaint = q.jobType === 'maintenance-visit';
@@ -6755,10 +6799,20 @@ function _renderQQ_ServiceCall(q) {
         <div class="fg"><div class="fl">Total on-site hours</div><input class="fi" type="number" id="qq-sc-hours" value="${hours}" min="0.5" step="0.5" oninput="onQQChange('${q.id}')"></div>
       </div>
       <div class="frow2" style="margin-top:10px">
-        <div class="fg"><div class="fl">Parts &amp; materials ($, as billed)</div><input class="fi" type="number" id="qq-sc-parts" value="${parts}" min="0" step="1" oninput="onQQChange('${q.id}')"></div>
         <div class="fg"><div class="fl">Round-trip travel (min)</div><input class="fi" type="number" id="qq-travel-min" value="${travelMinutes}" min="0" step="5" oninput="onQQChange('${q.id}')">
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Beyond 60 min adds <span id="qq-travel-calc">$0</span> ($80 / 30 min)</div></div>
+        <div class="fg"></div>
       </div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Materials <span style="font-weight:400;color:var(--text-muted)">— enter YOUR cost; ${SC_MAT_MARKUP_PCT}% markup applies automatically</span></div>
+      <div id="qq-sc-mats">${_renderSCMatRows(mats, q.id)}</div>
+      <button class="btn btn-g" style="margin-top:8px;padding:5px 12px;font-size:12px" onclick="addSCMaterial('${q.id}')">+ Add material</button>
+      <div id="qq-sc-mats-total" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
+    </div>
+    <div class="qq-section">
+      <div class="qq-title">Work performed / notes <span style="font-weight:400;color:var(--text-muted)">— prints on the invoice and in the invoice email</span></div>
+      <textarea class="fi" id="qq-sc-notes" rows="4" placeholder="e.g. Diagnosed tripping 30A 2-pole — found failed AC disconnect; replaced disconnect, torqued lugs, verified 24A draw. System operating normally." style="resize:vertical;min-height:84px;width:100%;box-sizing:border-box" oninput="onQQChange('${q.id}')">${escHtml(qq.scNotes||'')}</textarea>
     </div>
     <div class="qq-section">
       <div class="qq-title">How this bills</div>
@@ -6773,24 +6827,45 @@ function _onQQChange_ServiceCall(qid) {
   const r = SERVICE_CALL_RATES[crew] || SERVICE_CALL_RATES.solo;
   const hoursRaw = parseFloat(document.getElementById('qq-sc-hours')?.value);
   const hours = (isFinite(hoursRaw) && hoursRaw > 0) ? hoursRaw : 1;
-  const parts = parseFloat(document.getElementById('qq-sc-parts')?.value) || 0;
+  // Materials: read the itemized rows from the DOM (cost basis; billed = +30%).
+  const dEls = [...document.querySelectorAll('[data-scmat-d]')];
+  const cEls = [...document.querySelectorAll('[data-scmat-c]')];
+  let mats;
+  if (dEls.length) {
+    mats = dEls.map((el,i)=>{ const v=parseFloat(cEls[i]?.value); return { d: el.value, c: isFinite(v)?v:null }; });
+  } else {
+    mats = Array.isArray(q.qq?.scMaterials) ? q.qq.scMaterials : [];
+  }
+  const matCost   = Math.round(mats.reduce((sum,m)=>sum+(parseFloat(m.c)||0),0)*100)/100;
+  const matBilled = Math.round(mats.reduce((sum,m)=>sum+_scMatBilled(m.c),0)*100)/100;
+  // Live-refresh the per-row billed labels and the materials subtotal line.
+  cEls.forEach((el,i)=>{ const b=document.querySelector(`[data-scmat-b="${i}"]`); if(b) b.textContent='$'+_scMatBilled(el.value).toLocaleString(); });
+  const totEl = document.getElementById('qq-sc-mats-total');
+  if (totEl) totEl.innerHTML = mats.length
+    ? `Materials cost <strong>$${matCost.toLocaleString('en-US',{maximumFractionDigits:2})}</strong> &rarr; billed with ${SC_MAT_MARKUP_PCT}% markup: <strong>$${matBilled.toLocaleString('en-US',{maximumFractionDigits:2})}</strong>`
+    : '';
+  const notes = document.getElementById('qq-sc-notes')?.value ?? (q.qq?.scNotes || '');
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
   const travelAdder = Math.round(Math.max(0, travelMinutes - 60) / 30) * 80;
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const addlHours = Math.max(0, hours - 1);
   const addlCharge = Math.round(addlHours * r.addl);
-  const lm = r.first + addlCharge + parts + travelAdder;
+  const lm = r.first + addlCharge + matBilled + travelAdder;
   const bd = document.getElementById('qq-sc-breakdown');
   if (bd) bd.innerHTML =
     `Service fee (trip + first hour): <strong>$${r.first}</strong><br>` +
     (addlHours > 0 ? `Additional ${addlHours} hr × $${r.addl}: <strong>$${addlCharge.toLocaleString()}</strong><br>` : '') +
-    (parts > 0 ? `Parts &amp; materials: <strong>$${Math.round(parts).toLocaleString()}</strong><br>` : '') +
+    mats.filter(m=>(m.d&&m.d.trim())||m.c).map(m=>`${escHtml((m.d&&m.d.trim())||'Material')}: <strong>$${_scMatBilled(m.c).toLocaleString()}</strong><br>`).join('') +
     (travelAdder > 0 ? `Travel adder: <strong>$${travelAdder}</strong><br>` : '') +
     `<span style="color:var(--text-primary)">Labor &amp; materials subtotal: <strong>$${Math.round(lm).toLocaleString()}</strong></span>`;
   _finalizeQQTotals(q, lm, {
     scCrew: crew,
     scHours: hours,
-    scParts: parts,
+    scMaterials: mats,
+    scMatCost: matCost,
+    scMatBilled: matBilled,
+    scParts: matBilled,   // legacy field kept in sync for old readers
+    scNotes: notes,
     travelMinutes,
     travelAdder,
     extras: q.qq?.extras || []
@@ -8896,7 +8971,11 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   return `<div class="tot-box">${rows.join('')}${payHtml}</div>`;
 }
 function renderMarginBox(q,totals,isQmerit){
-  const net=(totals.laborAndMaterials||0)-(isQmerit?totals.qmeritFee||0:0);
+  // Service-call materials carry a real cost basis (qq.scMatCost) — deduct it
+  // so Net Margin reflects money kept, not money passed through to the
+  // supply house. Other job types have no scMatCost and are unaffected.
+  const _scMatCost=(q.qq&&typeof q.qq.scMatCost==='number')?q.qq.scMatCost:0;
+  const net=(totals.laborAndMaterials||0)-(isQmerit?totals.qmeritFee||0:0)-_scMatCost;
   const royaltyFlag=q.jobType==='ev-residential';
   const royalty=royaltyFlag?totals.quoteTotal*0.03:0;
   // Gross-margin estimate vs the 15% floor (detailed quotes only — Quick
@@ -8912,6 +8991,7 @@ function renderMarginBox(q,totals,isQmerit){
     <div class="margin-title">🔒 Internal Margin (Admin Only)</div>
     <div class="margin-row"><span>Labor &amp; Materials</span><span class="margin-num">${fmt$(totals.laborAndMaterials)}</span></div>
     ${isQmerit?`<div class="margin-row" style="color:var(--amber)"><span>− Qmerit Admin Fee</span><span class="margin-num">${fmt$(totals.qmeritFee)}</span></div>`:''}
+    ${_scMatCost>0?`<div class="margin-row" style="color:var(--amber)"><span>− Materials cost</span><span class="margin-num">${fmt$(_scMatCost)}</span></div>`:''}
     <div class="margin-row" style="border-top:1px solid rgba(46,204,113,0.3);padding-top:5px;margin-top:3px;font-weight:600;color:var(--text-primary)"><span>Net Margin Est.</span><span class="margin-num">${fmt$(net)}</span></div>
     ${marginRow}
     ${royaltyFlag?`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>⚠ 3% Qmerit Royalty (res. EV)</span><span class="margin-num">~${fmt$(royalty)}</span></div>`:''}
@@ -9846,11 +9926,71 @@ function generateInvoice(qid){
   if(!isDirect){toast('Platform jobs are invoiced through '+q.source,'warning');return;}
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
-  const invNum='INV-'+new Date().getFullYear()+'-'+String(getQuotes().filter(x=>x.invoiceId).length+1).padStart(4,'0');
-  upsertQuote({...q,status:'invoiced',invoiceId:invNum,invoiceDate:new Date().toISOString()});
-  toast('Invoice '+invNum+' created','success');
+  // Reuse the existing invoice number on re-download (2026-07-24) — only mint
+  // a new INV number the first time this quote is invoiced.
+  const invNum=q.invoiceId||('INV-'+new Date().getFullYear()+'-'+String(getQuotes().filter(x=>x.invoiceId).length+1).padStart(4,'0'));
+  if(!q.invoiceId){
+    upsertQuote({...q,status:'invoiced',invoiceId:invNum,invoiceDate:new Date().toISOString()});
+    toast('Invoice '+invNum+' created','success');
+  }
   generateInvoicePDF(getQuote(qid),cust,lead,invNum);
   renderQuoteBuilder(qid);
+}
+
+// ── EMAIL INVOICE (2026-07-24, Jonathan) ──
+// Sends the invoice PDF to the bill-to party (referrer like AF1 when the
+// quote is referrer-billed, otherwise the customer) via Graph, mirroring
+// _sendPaidInvoice's attachment pattern. Work-performed notes ride along in
+// the email body so the recipient sees what was done without opening the PDF.
+async function emailInvoice(qid){
+  const q=getQuote(qid);if(!q)return;
+  if(!q.invoiceId){toast('Generate the invoice first','warning');return;}
+  const lead=getLead(q.leadId);
+  const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
+  const _billTo=(typeof getQuoteBillToCustomer==='function')?getQuoteBillToCustomer(q):null;
+  const _isRef=(typeof isQuoteBilledToReferrer==='function')&&isQuoteBilledToReferrer(q);
+  const to=(_isRef&&_billTo&&_billTo.email)?_billTo.email:((cust&&cust.email)||(lead&&lead.customerEmail)||'');
+  if(!to){toast('No email on file for the bill-to party — add one on the customer record first','error');return;}
+  const res=generateInvoicePDF(q,cust,lead,q.invoiceId,null,true);
+  if(!res||!res.dataUrl){toast('Could not build the invoice PDF','error');return;}
+  const b64=res.dataUrl.split(',')[1];
+  const first=_isRef
+    ? ((_billTo&&(_billTo.salutation||_billTo.firstName))||(_billTo&&_billTo.businessName?_billTo.businessName.replace(/,?\s*(LLC|Inc|Corp|Co)\.?$/i,'').trim()+' team':'there'))
+    : ((cust&&cust.firstName)||(lead&&lead.customerName&&lead.customerName.split(' ')[0])||'there');
+  const totals=calcQuoteTotals(q);
+  const amtStr='$'+Number(totals.quoteTotal||0).toLocaleString('en-US');
+  const addr=(lead&&lead.siteStreet)?`${lead.siteStreet}, ${lead.siteCity||''}`:'';
+  const wnotes=(q.notes||(q.qq&&q.qq.scNotes)||'').trim();
+  const html=`<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
+    <img src="${GK_LOGO_URL}" alt="GreenKey" style="height:48px;margin:0 0 18px;display:block">
+    <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(first)},</p>
+    <p style="font-size:14px;margin:0 0 12px">Thank you for having GreenKey out${addr?` to ${escHtml(addr)}`:''}. Invoice <strong>${escHtml(q.invoiceId)}</strong> for <strong>${amtStr}</strong> is attached — due upon receipt.</p>
+    ${wnotes?`<p style="font-size:12px;margin:0 0 6px;color:#888;font-weight:600;letter-spacing:0.4px">WORK PERFORMED</p>
+    <p style="font-size:13px;margin:0 0 14px;color:#444;border-left:3px solid #7fc242;padding-left:10px;white-space:pre-wrap">${escHtml(wnotes)}</p>`:''}
+    <p style="font-size:14px;margin:0 0 12px">You can pay by check, Zelle, or cash — or reply to this email or call us at (804) 770-2210 to pay by card.</p>
+    <p style="font-size:14px;margin:0 0 18px">Thank you for your business!</p>
+    <p style="font-size:12px;color:#666;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey · Class A Electrical Contractor · (804) 770-2210 · greenkey-usa.com</p>
+  </div>`;
+  try{
+    await _graphFetch('/me/sendMail',{
+      method:'POST',
+      body:JSON.stringify({
+        message:{
+          subject:`Invoice ${q.invoiceId} from GreenKey — ${amtStr}`,
+          body:{contentType:'HTML',content:html},
+          toRecipients:[{emailAddress:{address:to}}],
+          attachments:[{'@odata.type':'#microsoft.graph.fileAttachment',name:res.filename,contentType:'application/pdf',contentBytes:b64}]
+        },
+        saveToSentItems:true
+      })
+    });
+    upsertQuote({...getQuote(qid),invoiceEmailedAt:new Date().toISOString(),invoiceEmailedTo:to});
+    toast('✅ Invoice '+q.invoiceId+' emailed to '+to,'success');
+    renderQuoteBuilder(qid);
+  }catch(e){
+    console.error('emailInvoice failed',e);
+    toast('Invoice email failed: '+((e&&e.message)||e),'error');
+  }
 }
 
 // ── PDF GENERATION ──
@@ -11005,17 +11145,33 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl){
   }
   doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SERVICES PROVIDED',36,y);y+=12;
   const _totalsInv = calcQuoteTotals(q);
-  const _invRows=[{desc:'Labor & Materials',amt:_totalsInv.laborAndMaterials||0}];
+  // Service calls (2026-07-24): itemize labor + each material at its billed
+  // price, so the customer sees what was done instead of one lump line.
+  let _invRows;
+  const _sc = ((q.jobType==='troubleshooting'||q.jobType==='maintenance-visit') && q.qq && (q.qq.scCrew||q.qq.scMaterials)) ? q.qq : null;
+  if (_sc) {
+    const _scr = SERVICE_CALL_RATES[_sc.scCrew] || SERVICE_CALL_RATES.solo;
+    const _ah = Math.max(0, (_sc.scHours||1) - 1);
+    _invRows = [{desc:'Service call — trip + first hour on site', amt:_scr.first}];
+    if (_ah > 0) _invRows.push({desc:`Additional labor — ${_ah} hr × $${_scr.addl}`, amt:Math.round(_ah*_scr.addl)});
+    (Array.isArray(_sc.scMaterials)?_sc.scMaterials:[]).forEach(m=>{
+      if ((m.d&&m.d.trim())||m.c) _invRows.push({desc:(m.d&&m.d.trim())||'Materials', amt:_scMatBilled(m.c)});
+    });
+    if ((_sc.travelAdder||0) > 0) _invRows.push({desc:'Extended travel', amt:_sc.travelAdder});
+  } else {
+    _invRows=[{desc:'Labor & Materials',amt:_totalsInv.laborAndMaterials||0}];
+  }
   if((_totalsInv.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(_totalsInv.veteranDiscount||0)});
   _invRows.push({desc:'Permitting',amt:_totalsInv.permitFee||0});
   if((_totalsInv.paymentProcessingFee||0) > 0){
     _invRows.push({desc:`Payment Processing (${_totalsInv.paymentBuffer}%)`,amt:_totalsInv.paymentProcessingFee});
   }
   y=pdfTable(doc,y,W,_invRows,'TOTAL DUE',_totalsInv.quoteTotal||0);
-  if(q.notes){
-    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('NOTES',36,y);y+=11;
+  const _wnotes = q.notes || q.qq?.scNotes;
+  if(_wnotes){
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('WORK PERFORMED / NOTES',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
-    const nl=doc.splitTextToSize(q.notes,W-72);doc.text(nl,36,y);
+    const nl=doc.splitTextToSize(_wnotes,W-72);doc.text(nl,36,y);
   }
   doc.setDrawColor(...LGRAY);doc.line(36,PH-48,W-36,PH-48);
   doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...GRAY);
