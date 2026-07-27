@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2134,6 +2134,9 @@ function saveLeads(arr) { localStorage.setItem(LK, JSON.stringify(arr)); queueSP
 
 // ── PAYMENTS CENTER stores (2026-07-21) ──
 // Memo code printed on every payment ask so Zelle deposits self-identify.
+// GreenKey's Zelle QR, inlined so the invoice PDF can render it offline.
+// 360x360 PNG, ~1.9 KB. Source: GreenKey_Zelle_QR.png.
+const GK_ZELLE_QR_B64='data:image/png;base64,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';
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
 // Unmatched-payments parking lot — money that arrived with no obvious job.
 // Synced + merged like the other record arrays (added to SYNC_KEYS/MERGE_KEYS).
@@ -9921,7 +9924,7 @@ function approveRevision(qid,approved){
 }
 
 // ── INVOICE ──
-function generateInvoice(qid){
+async function generateInvoice(qid){
   const q=getQuote(qid);if(!q)return;
   const isDirect=!['Qmerit','Electrum','Treehouse'].includes(q.source);
   if(!isDirect){toast('Platform jobs are invoiced through '+q.source,'warning');return;}
@@ -9930,11 +9933,60 @@ function generateInvoice(qid){
   // Reuse the existing invoice number on re-download (2026-07-24) — only mint
   // a new INV number the first time this quote is invoiced.
   const invNum=q.invoiceId||('INV-'+new Date().getFullYear()+'-'+String(getQuotes().filter(x=>x.invoiceId).length+1).padStart(4,'0'));
-  if(!q.invoiceId){
-    upsertQuote({...q,status:'invoiced',invoiceId:invNum,invoiceDate:new Date().toISOString()});
-    toast('Invoice '+invNum+' created','success');
+
+  // Ask ONCE which price this invoice bills at, then remember it on the quote
+  // so re-downloads and the email button stay consistent. Only asked when a
+  // processing fee actually exists (platform + fixed-price quotes have none).
+  const _t = calcQuoteTotals(q);
+  const _fee = _t.paymentProcessingFee || 0;
+  const _net = Math.max(0, (_t.quoteTotal||0) - _fee);
+  let _mode = (typeof q.invoiceNoFee !== 'undefined') ? q.invoiceNoFee : null;
+
+  // Ask once. Default is BOTH — "just send the invoice" is the most common
+  // instruction Jonathan gets, and in that case nobody knows yet how they'll
+  // pay. Showing both ways is never wrong; picking one can be.
+  if(_fee > 0 && _mode === null){
+    const pick = prompt(
+      'How is this customer paying?\n\n' +
+      '1 = Zelle / check / cash    $' + Math.round(_net).toLocaleString('en-US') + '  (no fee)\n' +
+      '2 = Credit card             $' + Math.round(_t.quoteTotal||0).toLocaleString('en-US') + '  (+' + _t.paymentBuffer + '%)\n' +
+      '3 = Not sure — show both, with the Zelle QR and a card link\n\n' +
+      'Enter 1, 2 or 3:', '3');
+    if(pick === null) return;                       // cancelled — no invoice minted
+    _mode = pick.trim() === '1' ? true : pick.trim() === '2' ? false : 'both';
   }
-  generateInvoicePDF(getQuote(qid),cust,lead,invNum);
+  if(_mode === null) _mode = true;                  // no fee on this quote at all
+
+  // 'both' needs a real Stripe link for the card option. Mint it once and keep
+  // it on the quote so re-downloads show the same link.
+  if(_mode === 'both' && !q.invoiceCardUrl){
+    try{
+      toast('Creating the card payment link…','info');
+      const token = await _acquireSMSToken();
+      const r = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/stripe/link', {
+        method:'POST',
+        headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' },
+        body: JSON.stringify({ leadId:(lead&&lead.id)||q.leadId, amount:Math.round(_t.quoteTotal||0),
+                               customerName: custFullName(cust)||'Customer',
+                               description:'GreenKey electrical work' })
+      });
+      const d = await r.json().catch(()=>({}));
+      if(r.ok && d.url) q = {...q, invoiceCardUrl:d.url};
+      else toast('Card link unavailable — the invoice will say to ask for one','warning');
+    }catch(e){
+      console.warn('[GK] invoice card link failed:',e);
+      toast('Card link unavailable — the invoice will say to ask for one','warning');
+    }
+  }
+
+  if(!q.invoiceId){
+    upsertQuote({...q,status:'invoiced',invoiceId:invNum,invoiceDate:new Date().toISOString(),
+                 invoiceNoFee:_mode, invoiceCardUrl:q.invoiceCardUrl||''});
+    toast('Invoice '+invNum+' created'+(_mode==='both'?' — both payment options':_mode?' — no-fee price':' — card price'),'success');
+  } else {
+    upsertQuote({...q,invoiceNoFee:_mode, invoiceCardUrl:q.invoiceCardUrl||''});
+  }
+  generateInvoicePDF(getQuote(qid),cust,lead,invNum,undefined,undefined,_mode);
   renderQuoteBuilder(qid);
 }
 
@@ -11115,7 +11167,16 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
 // invoice — the document customers need for tax credits / rebates (shows the
 // work AND that it was paid). returnDataUrl mirrors generateQuotePDF: return
 // {dataUrl, filename} for emailing instead of downloading.
-function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl){
+// noFee (2026-07-27, Jonathan): the invoice used to ALWAYS print the
+// card-inclusive total — it added a "Payment Processing (3%)" line and totalled
+// with q.quoteTotal. That's wrong for the common case: since the 2026-07-02
+// no-fee-headline decision the price the customer was QUOTED is the fee-free
+// one, and most of them pay by Zelle or check. Jonathan hit this sending a
+// Zelle request and got an invoice 3% too high.
+// Passing noFee (or having chosen it at generate time, stored on the quote)
+// drops the processing row and bills the fee-free total. Paid-by-card invoices
+// still show the fee, because that IS what the customer paid.
+function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
   const jsPDF=getPDFLib();if(!jsPDF)return;
   const doc=new jsPDF({unit:'pt',format:'letter'});
   const W=612,PH=792;let y=0;
@@ -11164,10 +11225,59 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl){
   }
   if((_totalsInv.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(_totalsInv.veteranDiscount||0)});
   _invRows.push({desc:'Permitting',amt:_totalsInv.permitFee||0});
-  if((_totalsInv.paymentProcessingFee||0) > 0){
-    _invRows.push({desc:`Payment Processing (${_totalsInv.paymentBuffer}%)`,amt:_totalsInv.paymentProcessingFee});
+  // Fall back to the choice stored on the quote so a re-download, and the
+  // "email invoice" button, match the PDF that was generated the first time.
+  // Three billing modes (Jonathan 2026-07-27). 'both' is the common one: the
+  // customer just says "send the invoice" and nobody knows yet how they'll pay.
+  //   true  / 'nofee' → Zelle, check, cash. No processing row.
+  //   false / 'card'  → card price, processing row shown.
+  //   'both'          → itemise at the fee-free price, then print BOTH ways to
+  //                     pay underneath, so the customer chooses and the number
+  //                     they owe is unambiguous either way.
+  const _mode = (typeof noFee !== 'undefined' && noFee !== null) ? noFee
+              : (typeof q.invoiceNoFee !== 'undefined' ? q.invoiceNoFee : true);
+  const _both  = (_mode === 'both');
+  const _noFee = _both ? true : !!_mode;
+  const _feeAmt = _totalsInv.paymentProcessingFee || 0;
+  if(_feeAmt > 0 && !_noFee){
+    _invRows.push({desc:`Payment Processing (${_totalsInv.paymentBuffer}%)`,amt:_feeAmt});
   }
-  y=pdfTable(doc,y,W,_invRows,'TOTAL DUE',_totalsInv.quoteTotal||0);
+  const _netTotal  = Math.max(0, (_totalsInv.quoteTotal||0) - _feeAmt);
+  const _cardTotal = (_totalsInv.quoteTotal||0);
+  const _invTotal  = _noFee ? _netTotal : _cardTotal;
+  y=pdfTable(doc,y,W,_invRows,_both ? 'TOTAL DUE (Zelle / check)' : 'TOTAL DUE',_invTotal);
+
+  // ── HOW TO PAY block — only in 'both' mode ──
+  if(_both){
+    y += 14;
+    const _memo = payMemoCode((lead && lead.id) || q.leadId || '');
+    doc.setDrawColor(...LGRAY); doc.setLineWidth(0.8);
+    doc.roundedRect(36, y, W-72, 96, 4, 4);
+    // Zelle side
+    try { doc.addImage(GK_ZELLE_QR_B64,'PNG',W-136,y+12,72,72); } catch(_){}
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(...DARK);
+    doc.text('HOW TO PAY', 48, y+18);
+    doc.setFontSize(9);
+    doc.setTextColor(31,122,70);
+    doc.text('Option 1 — Zelle, check or cash: $'+Math.round(_netTotal).toLocaleString('en-US')+'  (no fee)', 48, y+34);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+    doc.text('Scan the code, or send Zelle to '+GK_ZELLE_EMAIL+'.', 48, y+46);
+    doc.setFont('helvetica','bold'); doc.setTextColor(31,122,70);
+    doc.text('Include this code in the payment note: '+_memo, 48, y+57);
+    // Card side
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...DARK);
+    doc.text('Option 2 — Credit card: $'+Math.round(_cardTotal).toLocaleString('en-US')
+             +'  (includes '+(_totalsInv.paymentBuffer||3)+'% processing)', 48, y+74);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+    const _cardLink = (q && q.invoiceCardUrl) || '';
+    if(_cardLink){
+      doc.setTextColor(31,122,70);
+      doc.textWithLink('Pay by card \u2192', 48, y+86, {url:_cardLink});
+    } else {
+      doc.text('Ask us for a card payment link and we will text or email it.', 48, y+86);
+    }
+    y += 108;
+  }
   const _wnotes = q.notes || q.qq?.scNotes;
   if(_wnotes){
     doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('WORK PERFORMED / NOTES',36,y);y+=11;
@@ -23728,6 +23838,146 @@ async function _leadInboxPollOnce() {
   finally { _leadInboxBusy = false; }
 }
 
+// ── MISSED CALL / VOICEMAIL POLLER ──────────────────────────────────────────
+// The voice worker records every inbound call to D1 (/voice/inbound →
+// /voice/after) and serves the unacked ones at /calls/pending. Same
+// worker-writes-to-D1, CRM-pulls pattern as the website lead inbox and Stripe
+// above — the worker has no SharePoint access and never pushes.
+//
+// Why this exists (Jonathan, 2026-07-27): "I answer all calls and I don't do
+// it well because frequently I'm too busy." A missed call that only produced a
+// text is still a thing to remember. This turns each one into a task that
+// survives being on a ladder.
+//
+// IDEMPOTENCY: the task id is derived from the Twilio CallSid, so upsertTask()
+// is a no-op on a re-import. That matters because the ack can fail after the
+// task is created (bad signal, closed laptop) — without this you'd get a
+// duplicate task every poll until the ack finally lands.
+const CALLS_POLL_MIN_INTERVAL_MS = 30000;
+let _callsLastPoll = 0;
+let _callsBusy = false;
+
+function _callDigits(p) { return String(p || '').replace(/\D/g, '').slice(-10); }
+function _callPretty(p) {
+  const d = _callDigits(p);
+  return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : (p || 'unknown number');
+}
+
+// Resolve a caller to an existing customer and their most recent job, using the
+// same last-10-digits comparison _importWebLead uses so the two agree.
+function _callMatchByPhone(phone) {
+  const digits = _callDigits(phone);
+  if (!digits) return { cust: null, lead: null };
+  const cust = getCustomers().filter(c => !c.mergedInto && !c.deleted)
+                 .find(c => _callDigits(c.phone) === digits) || null;
+  const leads = getLeads().filter(l => !l.deleted);
+  let lead = null;
+  if (cust) {
+    lead = leads.filter(l => l.customerId === cust.id)
+                .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+  }
+  if (!lead) lead = leads.find(l => _callDigits(l.customerPhone) === digits) || null;
+  return { cust, lead };
+}
+
+async function _callsPollOnce() {
+  if (_callsBusy) return;
+  if (Date.now() - _callsLastPoll < CALLS_POLL_MIN_INTERVAL_MS) return;
+  if (typeof _msal === 'undefined' || !_msal) return;
+  if (typeof SMS_WORKER_URL === 'undefined' || !SMS_WORKER_URL) return;
+  _callsBusy = true;
+  _callsLastPoll = Date.now();
+  try {
+    const base  = SMS_WORKER_URL.replace(/\/$/, '');
+    const token = await _acquireSMSToken();
+    const resp  = await fetch(base + '/calls/pending', { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!resp.ok) return;
+    const data = await resp.json().catch(() => ({}));
+    const rows = Array.isArray(data.calls) ? data.calls : [];
+    if (!rows.length) return;
+
+    const acked = [];
+    for (const row of rows) {
+      try {
+        // An answered call with no voicemail needs no follow-up — it already
+        // happened. Log it and move on.
+        if (row.status === 'answered' && !row.recording_url) { acked.push(row.id); continue; }
+
+        const { cust, lead } = _callMatchByPhone(row.from_phone);
+        const who   = row.customer_name || (cust ? custFullName(cust) : '');
+        const label = who ? `${who} — ${_callPretty(row.from_phone)}` : _callPretty(row.from_phone);
+        const when  = row.created_at ? new Date(row.created_at).toLocaleString() : '';
+        const hasVm = !!row.recording_url;
+        const textFailed = row.auto_text_sent === 0;
+
+        const lines = [];
+        lines.push(`Missed call from ${label}${when ? ' at ' + when : ''}.`);
+        if (hasVm) {
+          lines.push(`Voicemail (${row.recording_sec || 0}s): ${base}/voice/rec/${row.recording_token}`);
+        }
+        if (textFailed) {
+          lines.push('WARNING: our automatic text did NOT reach them (often a landline). They were told to expect a text — call them back.');
+        } else {
+          lines.push('An automatic text was sent asking them to reply with what they need.');
+        }
+        if (!cust) lines.push('No matching customer in the CRM — this may be a new lead.');
+
+        upsertTask({
+          id:          'call-' + (row.call_sid || row.id),
+          title:       (hasVm ? 'Voicemail — ' : 'Missed call — ') + label,
+          description: lines.join('\n'),
+          linkedId:    lead ? lead.id : '',
+          linkedLabel: lead ? (who || lead.id) : '',
+          priority:    (hasVm || textFailed) ? 'high' : 'normal',
+          status:      'open',
+          source:      'auto-missed-call',
+          callFrom:      row.from_phone || '',
+          callAt:        row.created_at || '',
+          recordingUrl:  hasVm ? `${base}/voice/rec/${row.recording_token}` : '',
+          recordingSec:  row.recording_sec || 0,
+          createdBy:   S.user?.id || ''
+        });
+
+        // Leave a trace on the job itself so the call shows up in history, not
+        // only in the task list.
+        if (lead) {
+          try {
+            const arr = getLeads(); const i = arr.findIndex(l => l.id === lead.id);
+            if (i >= 0) {
+              const note = (hasVm ? 'Voicemail' : 'Missed call') + ` from ${_callPretty(row.from_phone)}`
+                         + (hasVm ? ` (${row.recording_sec || 0}s)` : '')
+                         + (textFailed ? ' — auto-text did NOT deliver' : '');
+              if (!arr[i].jobNotes) arr[i].jobNotes = [];
+              const dupe = arr[i].jobNotes.some(n => n && n.callSid === (row.call_sid || row.id));
+              if (!dupe) {
+                arr[i].jobNotes.push({ text: note, timestamp: row.created_at || new Date().toISOString(),
+                                       author: 'GreenKey phone', callSid: row.call_sid || row.id });
+                arr[i].updatedAt = new Date().toISOString();
+                saveLeads(arr);
+              }
+            }
+          } catch (e) { console.warn('[GK] call note failed:', e); }
+        }
+        acked.push(row.id);
+      } catch (e) {
+        // No ack — the row stays pending and retries on the next poll.
+        console.warn('[GK] call import failed:', row && row.call_sid, e);
+      }
+    }
+
+    if (acked.length) {
+      await fetch(base + '/calls/ack', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: acked })
+      });
+      try { toast(`${acked.length} call${acked.length > 1 ? 's' : ''} logged from the phone system`, 'info'); } catch (_) {}
+    }
+    if (typeof updateTaskBadge === 'function') updateTaskBadge();
+  } catch (_) { /* silent — polling failures shouldn't toast */ }
+  finally { _callsBusy = false; }
+}
+
 // ── Stripe field card-payment poller ──
 // The worker's /stripe/webhook records paid Payment Links to D1 (it has no
 // SharePoint access, so it can't stamp the lead itself). This poller pulls paid
@@ -24643,6 +24893,7 @@ function _bellStartPolling() {
   _activityPollOnce();
   _leadInboxPollOnce();
   _stripePaymentPollOnce();
+  try { _callsPollOnce(); } catch(_){}
   try { _reconcileFieldPayments(); } catch(_){}
   try { _spFolderRetrySweep(); } catch(_){}
   try { _opsInspectionSweep(); } catch(_){}
@@ -24650,6 +24901,7 @@ function _bellStartPolling() {
     if (document.visibilityState === 'visible') {
       _bellPollOnce(); _activityPollOnce(); _leadInboxPollOnce();
       _stripePaymentPollOnce();
+      try { _callsPollOnce(); } catch(_){}
       try { _reconcileFieldPayments(); } catch(_){}
       try { _spFolderRetrySweep(); } catch(_){}
       try { _opsInspectionSweep(); } catch(_){}
