@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -21068,6 +21068,68 @@ async function _onMSALSuccess(account) {
   await login(user);
 }
 
+// ── TRANSIENT GRAPH ERROR RETRY (added 2026-07-27) ──────────────────────
+// Graph 503 serviceNotAvailable / 429 throttling / 504 are documented by
+// Microsoft as TRANSIENT: "The service is temporarily unavailable for
+// maintenance or is overloaded. You can repeat the request after a delay, the
+// length of which can be specified in a Retry-After header." Before this,
+// _graphFetch retried ONLY 401 (token expiry), so a single service blip fell
+// straight through to `throw` → the red "Push to SharePoint failed" banner
+// with the push left unsynced. Jonathan + Sherri both hit this 2026-07-27.
+//
+// ⚠ THE LIMITS BELOW ARE DELIBERATE. They exist to protect the multi-user and
+// slow-machine work already in this file. Do not loosen them casually:
+//
+//   • GET and PATCH ONLY — never POST/PUT/DELETE. A POST that returns 503 may
+//     ALREADY have been processed by Graph (the response is what got lost).
+//     Retrying the item-create in _syncToSP() would produce TWO list items
+//     with the same Title — and _syncFromSP() keeps whichever paginates last,
+//     so a duplicate could silently resurrect stale DataValue. Same class of
+//     bug double-sends customer mail and calendar events elsewhere.
+//   • 409 is NOT in this set. Conflicts belong to _spPatchWithRetry(), which
+//     re-reads the OTHER user's copy and MERGES before retrying. Retrying a
+//     409 here would blindly re-PATCH our value over theirs and lose their
+//     work — exactly what the 2026-06-11 merge work was built to prevent.
+//   • A SHARED time budget across a rolling window, not just a per-request
+//     cap. _syncToSP() PATCHes 13+ keys in one pass; without a shared budget a
+//     bad Graph day could stretch a single push into minutes while holding
+//     _syncing = true, which blocks the pull side and starves slow machines.
+const _GRAPH_TRANSIENT        = new Set([429, 503, 504]);
+const _GRAPH_RETRY_METHODS    = new Set(['GET', 'PATCH']);
+const _GRAPH_RETRY_ATTEMPTS   = 2;       // retries after the initial try
+const _GRAPH_RETRY_WINDOW_MS  = 60_000;  // rolling budget window
+const _GRAPH_RETRY_BUDGET_MS  = 20_000;  // max total sleep inside that window
+const _GRAPH_RETRY_CAP_MS     = 8_000;   // never honor a Retry-After longer than this
+let _graphRetrySpentMs  = 0;
+let _graphRetryWindowAt = 0;
+
+// Remaining sleep budget, resetting on each new window.
+function _graphRetryBudgetLeft() {
+  const now = Date.now();
+  if (now - _graphRetryWindowAt > _GRAPH_RETRY_WINDOW_MS) {
+    _graphRetryWindowAt = now;
+    _graphRetrySpentMs  = 0;
+  }
+  return Math.max(0, _GRAPH_RETRY_BUDGET_MS - _graphRetrySpentMs);
+}
+
+// Retry-After may be a number of seconds OR an HTTP date. When it's absent,
+// Microsoft's guidance is exponential backoff — with jitter here so two tabs
+// (or Jonathan and Sherri) don't retry in lockstep and re-collide.
+function _graphRetryDelay(resp, attempt) {
+  let ms = 0;
+  try {
+    const ra = resp.headers && resp.headers.get ? resp.headers.get('Retry-After') : null;
+    if (ra) {
+      const secs = Number(ra);
+      if (Number.isFinite(secs) && secs >= 0) ms = secs * 1000;
+      else { const t = Date.parse(ra); if (!Number.isNaN(t)) ms = t - Date.now(); }
+    }
+  } catch (_) {}
+  if (!(ms > 0)) ms = 800 * Math.pow(3, attempt) + Math.floor(Math.random() * 400);
+  return Math.min(Math.max(ms, 250), _GRAPH_RETRY_CAP_MS);
+}
+
 // ── GRAPH API HELPER ──
 async function _graphFetch(path, opts = {}) {
   const url = path.startsWith('https://') ? path : `https://graph.microsoft.com/v1.0${path}`;
@@ -21100,6 +21162,26 @@ async function _graphFetch(path, opts = {}) {
       console.warn('[GK] Silent token refresh failed:', e);
       // Fall through to the normal error path below.
     }
+  }
+  // Transient service errors (503/429/504) — see _GRAPH_TRANSIENT above.
+  // Idempotent verbs only, bounded attempts, bounded shared time budget.
+  // If we run out of either, we fall through and surface the error exactly
+  // as before, so nothing that used to be visible becomes silent.
+  const _method = String(opts.method || 'GET').toUpperCase();
+  if (_GRAPH_RETRY_METHODS.has(_method)) {
+    for (let a = 0; a < _GRAPH_RETRY_ATTEMPTS && _GRAPH_TRANSIENT.has(resp.status); a++) {
+      const left = _graphRetryBudgetLeft();
+      if (left <= 0) {
+        console.warn(`[GK] Graph ${resp.status} — retry budget spent this minute, surfacing error`);
+        break;
+      }
+      const delay = Math.min(_graphRetryDelay(resp, a), left);
+      console.warn(`[GK] Graph ${resp.status} (transient) — retry ${a + 1}/${_GRAPH_RETRY_ATTEMPTS} in ${delay}ms: ${_method} ${String(url).slice(0, 120)}`);
+      await new Promise(r => setTimeout(r, delay));
+      _graphRetrySpentMs += delay;
+      resp = await doFetch();
+    }
+    if (resp.ok && _graphRetrySpentMs > 0) console.log('[GK] Graph request recovered after transient retry');
   }
   if (resp.status === 204 || resp.status === 202) return null;
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Graph ${resp.status}: ${t.slice(0,300)}`); }
