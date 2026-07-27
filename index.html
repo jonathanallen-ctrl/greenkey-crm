@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -21516,6 +21516,26 @@ async function flushSPSync() {
 }
 
 async function _syncToSP() {
+  // ── STALE DEBOUNCE TIMER (fixed 2026-07-27) ──────────────────────────────
+  // Reaching this function means no debounce is pending any more: either the
+  // timer just fired, or the caller (flushSPSync / manualFlushSync) already
+  // cleared it. _syncTmr must be nulled to say so.
+  //
+  // Why this mattered: browsers return a truthy positive integer from
+  // setTimeout, and NOTHING reset _syncTmr — queueSPSync/flushSPSync/
+  // manualFlushSync all call clearTimeout() but leave the dead id assigned.
+  // _trySyncFromSP() guards with `if (_syncTmr) { skip: local push queued }`,
+  // so after the FIRST edit of a session that guard was permanently true and
+  // BOTH the 2-minute auto-poll and the tab-focus pull stopped for good —
+  // you'd stop seeing the other user's changes until a reload. Pushes were
+  // unaffected, which is why it hid for so long.
+  //
+  // Deliberately placed BEFORE the _syncing early-return: if a push is already
+  // in flight, the debounce that brought us here is still spent, and
+  // _trySyncFromSP has its own separate `if (_syncing)` guard covering the
+  // in-flight case. _hasPendingPush (+ its localStorage twin) remains the
+  // durable "there is unpushed work" signal — that is untouched.
+  _syncTmr = null;
   if (_syncing) return;
   if (!_spSite || !_spList) {
     criticalBanner('Push to SharePoint skipped: site or list not initialized. Your edits are saved locally but NOT synced. Reload the page and resolve any errors before editing further.');
