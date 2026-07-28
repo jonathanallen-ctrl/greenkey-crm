@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -13955,6 +13955,57 @@ function renderJobDetail(id) {
     </div>`;
   }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">No notes yet. Add the first one above.</div>`;
 
+  // ── APPOINTMENTS (2026-07-28) ──
+  // Everything that needs a van roll, in one place, independent of the pipeline
+  // stage. "Needs scheduling" adds a dateless request that shows up in the
+  // scheduler WITHOUT moving the job's stage — which is what stops walkdowns
+  // from having to go forward into Scheduling and then back to Estimating.
+  const _appts = getAppts(lead).slice().sort((a,b) => {
+    const ab = _apptIsBooked(a), bb = _apptIsBooked(b);
+    if (ab !== bb) return ab ? 1 : -1;              // unscheduled first — they need action
+    return String(a.date||'').localeCompare(String(b.date||''));
+  });
+  const _apptRows = _appts.length ? _appts.map(a => {
+    const booked = _apptIsBooked(a);
+    const done   = !!a.completedAt;
+    const tech   = a.techId ? (getUsers().find(u => u.id === a.techId) || null) : null;
+    let when = 'Needs scheduling';
+    if (booked) {
+      const _d = new Date(a.date + 'T00:00:00');
+      when = _d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+      if (a.time) {
+        let [h,m] = a.time.split(':'); h = parseInt(h,10);
+        const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+        when += ' · ' + h + ':' + m + ' ' + ap;
+      }
+    }
+    const col = done ? 'var(--text-muted)' : booked ? 'var(--green)' : 'var(--amber,#f59e0b)';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div style="font-size:13px;font-weight:600;color:${done?'var(--text-muted)':'var(--text-primary)'};${done?'text-decoration:line-through':''}">${escHtml(_apptLabel(a.type))}</div>
+        <div style="font-size:11.5px;color:${col};margin-top:1px">${booked?'📅 ':'⏳ '}${escHtml(when)}${tech?' · '+escHtml(tech.name||tech.email||''):''}${done?' · completed':''}</div>
+      </div>
+      <div style="display:flex;gap:5px;flex-shrink:0">
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="scheduleInOutlook('${id}','${a.id}')" title="${booked?'Change the date/time and create a new Outlook event. The old event is not deleted automatically.':'Pick a date and time and create the Outlook event'}">${booked?'Reschedule':'Schedule'}</button>
+        <button class="btn btn-g" style="padding:3px 7px;font-size:11px" onclick="completeAppt('${id}','${a.id}')" title="${done?'Mark as not completed':'Mark this appointment completed so it drops out of the scheduler'}">${done?'↺':'✓'}</button>
+        <button class="btn btn-g" style="padding:3px 7px;font-size:11px;color:var(--red)" onclick="removeAppt('${id}','${a.id}')" title="Remove from the CRM (does NOT delete the Outlook event)">×</button>
+      </div>
+    </div>`;
+  }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No appointments yet. Add one below, or use the <strong>Schedule</strong> button at the top to book one straight away.</div>`;
+
+  const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px">
+    <select id="appt-add-${id}" class="jd-fi" style="flex:1;font-size:12.5px;padding:5px 8px">
+      ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t==='walkdown'?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
+    </select>
+    <button class="btn btn-p" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Adds this to the scheduler's list of work waiting for a date. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
+  </div>
+  <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here that has no date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
+
+  const apptSec = `<div class="jd-sec">
+    <div class="jd-sh"><div class="jd-st">Appointments</div></div>
+    <div class="jd-sb" style="padding:6px 14px 12px">${_apptRows}${_apptAdd}</div>
+  </div>`;
+
   const notesSec = `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Job Notes</div></div>
     <div class="jd-sb">
@@ -14198,7 +14249,7 @@ function renderJobDetail(id) {
       </div>`;
     }
   }
-  msHtml += msRow('installScheduled','Install scheduled',{date:true,time:true});
+  msHtml += msRow('installScheduled','Scheduled',{date:true,time:true});
 
   msHtml += msGrp('Installation');
   msHtml += msRow('techArrived','Tech arrived on site (field app stamps this)',{date:true,time:true});
@@ -14306,7 +14357,7 @@ function renderJobDetail(id) {
   // custActionBanner sits between the header and the two-column wrap so it
   // spans the full content width and is the first thing the user sees.
   dv.innerHTML = hdr + custActionBanner + paymentBanner + `<div class="jd-wrap">
-    <div>${custSec}${smsSec}${statusSec}${notWonSec}${webMsgSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
+    <div>${custSec}${smsSec}${apptSec}${statusSec}${notWonSec}${webMsgSec}${scopeSec}${notesSec}${snapSec}${chargerSec}${utilitySec}${platformSec}${tasksSec}${filesSec}</div>
     <div>${_renderJobRail(lead)}</div>
   </div>`;
 
@@ -19041,6 +19092,74 @@ function renderSchedulerPage() {
         </div>`;
       }).join('');
 
+  // ── REQUESTED APPOINTMENTS (2026-07-28, Option A) ──
+  // Non-install work waiting for a date. These reach the scheduler WITHOUT
+  // being in the Scheduling column, which is the whole point: a walkdown no
+  // longer has to be pushed into Scheduling and then pulled back to Estimating.
+  // Installations are deliberately EXCLUDED here — they come through the pool
+  // above under the existing "must be in the Scheduling column" rule, and
+  // listing them twice would be worse than not listing them at all.
+  //
+  // These do not yet join the auto-routed day plan (the route builder is keyed
+  // one-entry-per-lead, so a job with two open appointments would collide).
+  // They are scheduled from here with the same modal the job's Schedule button
+  // opens — one click, and the result lands on the committed side below.
+  const _reqAppts = (typeof getRequestedAppts === 'function' ? getRequestedAppts() : [])
+    .filter(x => x.appt.type !== 'installation');
+  const _reqApptHtml = _reqAppts.length === 0 ? '' : `
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px">
+      Other Work Waiting (${_reqAppts.length})
+    </div>
+    ${_reqAppts.map(({lead:l, appt:a}) => {
+      const c = custs.find(x => x.id === l.customerId);
+      const nm = c ? custFullName(c) : (l.customerName||'Unknown');
+      const ad = [l.siteStreet, l.siteCity, l.siteState||'VA'].filter(Boolean).join(', ');
+      return `<div class="sched-card" style="border-left:3px solid var(--amber,#f59e0b)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div style="min-width:0;flex:1;cursor:pointer" onclick="openLeadDetail('${l.id}')">
+            <div style="font-weight:500;font-size:13.5px">${escHtml(nm)}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(ad||'No site address')}</div>
+            <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+              <span class="chip" style="font-size:10.5px;background:rgba(245,158,11,.14);color:var(--amber,#f59e0b)">⏳ ${escHtml(_apptLabel(a.type))}</span>
+              ${sourceChip(l.source)}
+              <span class="chip" style="font-size:10.5px" title="Pipeline stage — unchanged by scheduling this">${escHtml((STAGES.find(st=>st.id===l.stage)||{}).label || l.stage || '—')}</span>
+            </div>
+          </div>
+          <button class="btn btn-p" style="padding:4px 11px;font-size:11.5px;flex-shrink:0" onclick="event.stopPropagation();scheduleInOutlook('${l.id}','${a.id}')">Schedule</button>
+        </div>
+      </div>`;
+    }).join('')}`;
+
+  // ── COMMITTED ON THIS DATE (2026-07-28) ──
+  // Everything already booked for the selected date — installs AND the
+  // non-install work that used to be invisible here. Renders whether or not a
+  // plan has been built, because you need to see what the day already contains
+  // BEFORE you build around it. This was the single biggest complaint about the
+  // scheduler: the right side sat empty on days that had six things on them.
+  const _committed = (typeof getApptsOnDate === 'function')
+    ? getApptsOnDate(_sched.date, _sched.techId || '') : [];
+  const _committedHtml = _committed.length === 0 ? '' : `
+    <div style="padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg-elevated)">
+      <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">
+        Already on the calendar (${_committed.length})
+      </div>
+      ${_committed.map(({lead:l, appt:a}) => {
+        const c = custs.find(x => x.id === l.customerId);
+        const nm = c ? custFullName(c) : (l.customerName||'Unknown');
+        let t = '';
+        if (a.time) { let [h,m]=a.time.split(':'); h=parseInt(h,10); const ap=h>=12?'PM':'AM'; h=h%12||12; t=h+':'+m+' '+ap; }
+        const remote = (typeof _schedIsRemote === 'function') && _schedIsRemote(a.type);
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;cursor:pointer" onclick="openLeadDetail('${l.id}')">
+          <span style="font-family:var(--mono);font-size:11.5px;color:var(--text-muted);min-width:64px">${escHtml(t||'—')}</span>
+          <span style="font-weight:600">${escHtml(nm)}</span>
+          <span style="color:var(--text-muted)">·</span>
+          <span style="color:${remote?'var(--blue)':'var(--green)'}">${remote?'☎ ':''}${escHtml(_apptLabel(a.type))}</span>
+          <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">${escHtml(String(a.hours||_apptHours(a.type)))} hr</span>
+        </div>`;
+      }).join('')}
+      <div style="font-size:11px;color:var(--text-muted);margin-top:8px">Build a plan below to add more around these. Remote items (phone / video) don't consume drive time.</div>
+    </div>`;
+
   // Day plan
   let dayHtml = '';
   if (_sched.loading) {
@@ -19267,11 +19386,13 @@ function renderSchedulerPage() {
           Ready to Schedule (${jobs.length})
         </div>
         ${poolHtml}
+        ${_reqApptHtml}
       </div>
       <div class="jd-sec">
         <div class="jd-sh">
           <div class="jd-st">Day Plan — ${formatSchedDate(_sched.date)}</div>
         </div>
+        ${_committedHtml}
         <div class="jd-sb">${dayHtml}</div>
       </div>
     </div>`;
@@ -27194,12 +27315,229 @@ async function hydrateConsentFromServer(customerId) {
 
 const _SCHED_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','AF1'];
 
+// ═══════════════════ APPOINTMENTS (Option A, 2026-07-28) ═══════════════════
+// WHY THIS EXISTS
+// Until today the only record of "when are we going out there" was
+// milestones.installScheduled: ONE date per job, and stamped ONLY for
+// Installation appointments (openSchedInOutlook wrapped the stamp in
+// `if (_isInstall)`). Everything else — walkdowns, service calls, follow-ups —
+// created an Outlook event and left no trace in the CRM. Consequences we
+// actually hit:
+//   • the Schedule chip still read "set date/time" on work that had been done
+//     AND invoiced (Clifford Noe / AF1, 2026-07-28)
+//   • non-install work never appeared in the scheduler, so you couldn't plan
+//     around it
+//   • a walkdown could only reach the scheduler by moving the job into the
+//     Scheduling column — and then it had to be moved BACK for estimating
+//
+// The root cause was that "scheduled" was doing two unrelated jobs: a pipeline
+// STAGE (where the job is in its life) and the GATE for scheduling. That works
+// only while a job has exactly one van roll. A job now holds appointments[],
+// and the stage is left alone.
+//
+// Each appointment is either REQUESTED (no date — "this needs a van roll,
+// somebody book it") or BOOKED (has a date).
+//
+// ⚠⚠ installScheduled IS NOT RETIRED, AND MUST NOT BE.
+// 49 call sites read it: reports, revenue, the dashboard, tech mode, the
+// day-plan builder, the Outlook reschedule sync, the inspection queue. The
+// INSTALLATION appointment is mirrored into it on every write, so all of that
+// keeps working untouched. appointments[] is the source of truth for the
+// scheduler; installScheduled is the compatibility surface. Do NOT "tidy this
+// up" by deleting the mirror until all 49 sites are converted — that is a
+// separate, deliberate job.
+//
+// Migration is lazy and READ-ONLY: getAppts() synthesizes an installation
+// appointment from an existing installScheduled when a job has no
+// appointments[] yet. Nothing is rewritten until something is actually
+// scheduled, so no mass write, no sync storm, and old records stay readable.
+
+const APPT_LABELS = {
+  installation:      'Installation / Job Day',
+  walkdown:          'Walkdown / Site Visit',
+  'phone-call':      'Phone / Video Walkdown',
+  troubleshoot:      'Troubleshooting / Service Call',
+  maintenance:       'Maintenance Visit',
+  inspection:        'Final Inspection',
+  'quote-review':    'Quote Review',
+  'material-pickup': 'Material Pickup',
+  'follow-up':       'Follow-Up Visit',
+  other:             'Other / Custom'
+};
+function _apptLabel(t) { return APPT_LABELS[t] || t || 'Appointment'; }
+function _apptHours(t) { return _SCHED_TYPE_DEFAULT_HOURS[t] || 1; }
+function _apptIsBooked(a) { return !!(a && a.date); }
+// Remote types never consume a van, so they must not affect routing or the
+// day's drive-time budget even though they DO belong on the calendar.
+function _apptIsVanRoll(a) { return !!a && !_schedIsRemote(a.type) && a.type !== 'material-pickup'; }
+function _apptNewId() { return 'appt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7); }
+
+// Read a job's appointments. PURE — never writes. Synthesizes from the legacy
+// installScheduled milestone so every job that was scheduled before today still
+// shows its install here.
+function getAppts(lead) {
+  if (!lead) return [];
+  if (Array.isArray(lead.appointments)) return lead.appointments;
+  const im = lead.milestones && lead.milestones.installScheduled;
+  if (im && im.date) {
+    return [{
+      id: 'appt-legacy-install',
+      type: 'installation',
+      date: im.date || '',
+      time: im.time || '',
+      hours: _apptHours('installation'),
+      techId: im.techId || '',
+      outlookEventId: im.outlookEventId || '',
+      outlookCalId: im.outlookCalId || '',
+      createdAt: lead.updatedAt || '',
+      legacy: true
+    }];
+  }
+  return [];
+}
+function getApptsById(leadId) { return getAppts(getLead(leadId)); }
+
+// Keep milestones.installScheduled pointing at the job's booked INSTALL, so the
+// 49 legacy readers stay correct. Mutates the lead object in place.
+function _apptMirrorInstall(leadObj) {
+  if (!leadObj) return;
+  const list = Array.isArray(leadObj.appointments) ? leadObj.appointments : [];
+  const inst = list.filter(a => a.type === 'installation' && _apptIsBooked(a))
+                   .sort((a,b) => String(b.date).localeCompare(String(a.date)))[0];
+  if (!leadObj.milestones) leadObj.milestones = {};
+  if (inst) {
+    leadObj.milestones.installScheduled = {
+      ...(leadObj.milestones.installScheduled || {}),
+      done: true,
+      date: inst.date,
+      time: inst.time || '',
+      techId: inst.techId || '',
+      outlookEventId: inst.outlookEventId || '',
+      outlookCalId: inst.outlookCalId || ''
+    };
+  } else if (list.length) {
+    // Only clear the mirror once appointments[] has actually been materialized.
+    // Clearing it on a job that has never been touched would wipe a legacy
+    // install date that getAppts() is still synthesizing from.
+    delete leadObj.milestones.installScheduled;
+  }
+}
+
+// Create or update one appointment. Returns the stored appointment, or null.
+function upsertAppt(leadId, appt) {
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return null;
+  // Materialize the lazy migration on first write so the synthesized legacy
+  // install becomes a real row rather than silently disappearing.
+  const list = Array.isArray(arr[i].appointments)
+    ? arr[i].appointments.slice()
+    : getAppts(arr[i]).map(a => ({ ...a, legacy: false }));
+  const id = appt.id || _apptNewId();
+  const at = list.findIndex(a => a.id === id);
+  const merged = {
+    id,
+    type:   appt.type || (at >= 0 ? list[at].type : 'other'),
+    date:   appt.date !== undefined ? appt.date : (at >= 0 ? list[at].date : ''),
+    time:   appt.time !== undefined ? appt.time : (at >= 0 ? list[at].time : ''),
+    hours:  appt.hours || (at >= 0 ? list[at].hours : 0) || _apptHours(appt.type),
+    techId: appt.techId !== undefined ? appt.techId : (at >= 0 ? list[at].techId : ''),
+    outlookEventId: appt.outlookEventId !== undefined ? appt.outlookEventId : (at >= 0 ? list[at].outlookEventId : ''),
+    outlookCalId:   appt.outlookCalId   !== undefined ? appt.outlookCalId   : (at >= 0 ? list[at].outlookCalId   : ''),
+    note:   appt.note !== undefined ? appt.note : (at >= 0 ? list[at].note : ''),
+    createdAt: (at >= 0 && list[at].createdAt) ? list[at].createdAt : new Date().toISOString(),
+    createdBy: (at >= 0 && list[at].createdBy) ? list[at].createdBy : ((S.user && S.user.id) || ''),
+    completedAt: appt.completedAt !== undefined ? appt.completedAt : (at >= 0 ? list[at].completedAt : null)
+  };
+  if (at >= 0) list[at] = merged; else list.push(merged);
+  arr[i].appointments = list;
+  _apptMirrorInstall(arr[i]);
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  return merged;
+}
+
+// Ask for a visit without booking it — this is what puts a job in the
+// scheduler's left panel WITHOUT touching its pipeline stage. The whole point
+// of Option A: a walkdown no longer has to move to Scheduling and back.
+function requestAppt(leadId, type) {
+  if (!type) return null;
+  const existing = getApptsById(leadId)
+    .find(a => a.type === type && !_apptIsBooked(a) && !a.completedAt);
+  if (existing) { toast(_apptLabel(type) + ' is already waiting to be scheduled', 'info'); return existing; }
+  const a = upsertAppt(leadId, { type, date: '', time: '', hours: _apptHours(type) });
+  if (a) toast(_apptLabel(type) + ' added to the scheduler queue', 'success');
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+  return a;
+}
+
+function removeAppt(leadId, apptId) {
+  const cur = getApptsById(leadId).find(a => a.id === apptId);
+  if (cur && _apptIsBooked(cur) && !confirm(
+      `Remove the ${_apptLabel(cur.type).toLowerCase()} on ${cur.date}?\n\n` +
+      `This only removes it from the CRM. The Outlook event is NOT deleted — ` +
+      `delete that yourself if the appointment really is cancelled.`)) return;
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return;
+  const list = Array.isArray(arr[i].appointments)
+    ? arr[i].appointments.slice()
+    : getAppts(arr[i]).map(a => ({ ...a, legacy: false }));
+  arr[i].appointments = list.filter(a => a.id !== apptId);
+  _apptMirrorInstall(arr[i]);
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+  try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch(_){}
+}
+
+function completeAppt(leadId, apptId) {
+  const cur = getApptsById(leadId).find(a => a.id === apptId);
+  if (!cur) return;
+  upsertAppt(leadId, { id: apptId, completedAt: cur.completedAt ? null : new Date().toISOString() });
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+}
+
+// Every appointment still waiting for a date, across all jobs. This is the
+// non-install half of the scheduler's left panel.
+function getRequestedAppts() {
+  const out = [];
+  getLeads().forEach(l => {
+    if (l.stage === 'archived') return;
+    getAppts(l).forEach(a => {
+      if (!_apptIsBooked(a) && !a.completedAt) out.push({ lead: l, appt: a });
+    });
+  });
+  return out;
+}
+
+// Every appointment BOOKED on a given date (optionally for one tech). This is
+// what makes non-install work visible on the scheduler's committed side so you
+// can plan around it — the thing that was completely invisible before.
+function getApptsOnDate(dateStr, techId) {
+  if (!dateStr) return [];
+  const out = [];
+  getLeads().forEach(l => {
+    if (l.stage === 'archived') return;
+    getAppts(l).forEach(a => {
+      if (a.date !== dateStr) return;
+      if (techId && (a.techId || '') !== techId) return;
+      out.push({ lead: l, appt: a });
+    });
+  });
+  return out.sort((x, y) => String(x.appt.time || '').localeCompare(String(y.appt.time || '')));
+}
+
 // Tracks which lead the open schedule modal is for.
 let _schedLeadId = null;
+// Which appointment the open modal is fulfilling (null = create a new one).
+let _schedApptId = null;
 
-function scheduleInOutlook(leadId) {
+function scheduleInOutlook(leadId, apptId) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found', 'error'); return; }
+  // apptId set = we're booking (or rebooking) a specific requested appointment,
+  // so the type comes from IT, not from the stage-based guess below.
+  _schedApptId = apptId || null;
+  const _fulfil = apptId ? getAppts(lead).find(a => a.id === apptId) : null;
   // NOTE: the spec backstop is NOT here. It lives in openSchedInOutlook(), at
   // the moment you press Create — because only then is the APPOINTMENT TYPE
   // known, and that (not the job's stage) is what determines whether the spec
@@ -27207,8 +27545,8 @@ function scheduleInOutlook(leadId) {
   _schedLeadId = leadId;
 
   // Default to installation type unless lead is in a pre-quote stage.
-  const defaultType = ['lead-received','info-gathering','estimating'].includes(lead.stage)
-    ? 'walkdown' : 'installation';
+  const defaultType = _fulfil ? _fulfil.type
+    : (['lead-received','info-gathering','estimating'].includes(lead.stage) ? 'walkdown' : 'installation');
   const sel = document.getElementById('sched-type');
   if (sel) sel.value = defaultType;
 
@@ -27221,10 +27559,15 @@ function scheduleInOutlook(leadId) {
     // Next business day
     const d = new Date(); d.setDate(d.getDate() + 1);
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
-    dateInp.value = d.toISOString().slice(0,10);
-    startInp.value = '08:30';
+    dateInp.value  = (_fulfil && _fulfil.date) ? _fulfil.date : d.toISOString().slice(0,10);
+    startInp.value = (_fulfil && _fulfil.time) ? _fulfil.time : '08:30';
     const dur = _SCHED_TYPE_DEFAULT_HOURS[defaultType] || 1;
-    const endDate = new Date(d); endDate.setHours(8, 30, 0, 0);
+    // End is derived from the ACTUAL start, not a hardcoded 8:30 — otherwise
+    // rebooking an existing 13:00 appointment produced an end time in the
+    // morning, before its own start (2026-07-28).
+    const [_ph,_pm] = String(startInp.value || '08:30').split(':').map(Number);
+    const endDate = new Date(d);
+    endDate.setHours(Number.isFinite(_ph)?_ph:8, Number.isFinite(_pm)?_pm:30, 0, 0);
     endDate.setMinutes(endDate.getMinutes() + Math.round(dur * 60));
     endInp.value = String(endDate.getHours()).padStart(2,'0') + ':' + String(endDate.getMinutes()).padStart(2,'0');
   }
@@ -27689,18 +28032,31 @@ async function openSchedInOutlook(_specOk) {
       `• Cancel — just create the event (no email to the customer).`
     );
   }
-  if (_isInstall) {
-    try {
-      const _arr = getLeads(); const _i = _arr.findIndex(l => l.id === _schedLeadId);
-      if (_i >= 0) {
-        if (!_arr[_i].milestones) _arr[_i].milestones = {};
-        _arr[_i].milestones.installScheduled = { ...(_arr[_i].milestones.installScheduled||{}), done:true, date, time:start, viaOutlook:true };
-        _arr[_i].updatedAt = new Date().toISOString();
-        saveLeads(_arr);
-        try { if (typeof renderJobDetail === 'function') renderJobDetail(_schedLeadId); } catch(_){}
-      }
-    } catch(e){ console.warn('[GK] install-schedule stamp failed:', e); }
-  }
+  // ── Record the appointment (2026-07-28, Option A) ──
+  // This used to be wrapped in `if (_isInstall)`, so scheduling a walkdown or a
+  // service call created the Outlook event and recorded NOTHING in the CRM. Now
+  // EVERY type writes an appointment; upsertAppt() mirrors installs back into
+  // milestones.installScheduled so the 49 legacy readers are unaffected.
+  const _apptType = document.getElementById('sched-type')?.value || (_isInstall ? 'installation' : 'other');
+  let _apptHrs = 0;
+  try {
+    const [_sh,_sm] = String(start||'').split(':').map(Number);
+    const [_eh,_em] = String(document.getElementById('sched-end-input')?.value||'').split(':').map(Number);
+    if ([_sh,_sm,_eh,_em].every(n => Number.isFinite(n))) {
+      _apptHrs = Math.max(0.25, ((_eh*60+_em) - (_sh*60+_sm)) / 60);
+    }
+  } catch(_) {}
+  try {
+    const _saved = upsertAppt(_schedLeadId, {
+      id: _schedApptId || undefined,
+      type: _apptType,
+      date, time: start,
+      hours: _apptHrs || _apptHours(_apptType),
+      techId: (typeof _sched === 'object' && _sched && _sched.techId) || ''
+    });
+    if (_saved) _schedApptId = _saved.id;
+    try { if (typeof renderJobDetail === 'function') renderJobDetail(_schedLeadId); } catch(_){}
+  } catch(e){ console.warn('[GK] appointment stamp failed:', e); }
 
   const bodyHtml = _schedBodyToHtml(bodyPlain);
   // Location must match what the modal previewed. Remote types (phone call /
