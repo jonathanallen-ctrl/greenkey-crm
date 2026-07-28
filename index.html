@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1528,6 +1528,10 @@
       </div>
 
       <!-- TASKS — Module 7 -->
+      <div class="page" id="page-calls">
+        <div id="calls-main"></div>
+      </div>
+
       <div class="page" id="page-tasks">
         <div id="tasks-main"></div>
       </div>
@@ -2486,6 +2490,7 @@ const NAV_DEF = [
     {url:'./proposal.html',label:'Commercial',roles:['admin','sales'],icon:'chart',ext:true},
   ]},
   { sec:'Manage', items:[
+    {page:'calls',label:'Calls',roles:['admin','tech','sales'],icon:'brief',badge:'0'},
     {page:'tasks',label:'Tasks',roles:['admin','tech'],icon:'check',badge:'0'},
     {page:'files',label:'Photos & Files',roles:['admin','tech'],icon:'folder'},
     {page:'permitting',label:'Permitting',roles:['admin','tech'],icon:'permit'},
@@ -2641,7 +2646,7 @@ function navigate(page) {
   if (el) navEl(el); else showPage(page);
 }
 
-const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',payments:'Payments',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
+const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',calls:'Calls',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',payments:'Payments',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
 
 function showPage(page) {
   // Any cross-page navigation should also tear down the SMS poller. If the
@@ -2657,6 +2662,7 @@ function showPage(page) {
   if (lbl) lbl.textContent = page==='customers' ? 'New Customer' : page==='quotes' ? 'New Quote' : page==='tasks' ? 'New Task' : 'New Job';
   // Page-specific renders
   if (page==='dashboard') updateDashboardWidget();
+  else if (page==='calls') renderCallsPage();
   else if (page==='leads') renderLeadsPage();
   else if (page==='jobs') {
     // If the pipeline is ALREADY on screen (sidebar re-click), capture its
@@ -4834,6 +4840,19 @@ function criticalBanner(msg) {
 
 // ── MODULE 4: QUOTES ──
 const QK='gk_quotes', MK='gk_materials';
+// Call log — every inbound call the phone system saw. Written by the calls
+// poller, read by the Calls page. Synced so Sherri sees the same list.
+const CALLK='gk_calls';
+function getCalls() { try { return JSON.parse(localStorage.getItem(CALLK)||'[]'); } catch { return []; } }
+function saveCalls(arr) { localStorage.setItem(CALLK, JSON.stringify(arr)); queueSPSync(); }
+function upsertCall(data) {
+  const arr = getCalls();
+  const i = arr.findIndex(c => c.id === data.id);
+  const now = new Date().toISOString();
+  if (i >= 0) arr[i] = { ...arr[i], ...data, updatedAt: now };
+  else arr.unshift({ ...data, createdAt: now, updatedAt: now });
+  saveCalls(arr);
+}
 
 function getQQPricing(){
   return {
@@ -20983,7 +21002,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK, CALLK];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -21375,7 +21394,10 @@ async function _spEnsureDrive() {
 // can no longer be clobbered by a stale device. Material ids are stable
 // (m-###, m-ce-<CEid>); add/edit/import now stamp updatedAt so price edits win
 // across devices by recency.
-const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments'];
+// gk_calls is a MERGE key: both Jonathan's and Sherri's machines import calls
+// from the worker independently, so a destructive replace would lose whichever
+// side polled second. Rows carry id + updatedAt like every other merged array.
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments', 'gk_calls'];
 function _mergeArrayByIdAndTs(localArr, remoteArr) {
   if (!Array.isArray(localArr)) localArr = [];
   if (!Array.isArray(remoteArr)) remoteArr = [];
@@ -23838,6 +23860,71 @@ async function _leadInboxPollOnce() {
   finally { _leadInboxBusy = false; }
 }
 
+// ── CALLS PAGE ─────────────────────────────────────────────────────────────
+// Deliberately plain. Sherri is still finding her feet in the CRM (Jonathan,
+// 2026-07-27) and a dense new screen is how you lose someone. One row per
+// call, newest first, with the three things you actually want to know: who,
+// when, and what still needs doing.
+function _callAgo(iso) {
+  const t = new Date(iso).getTime(); if (!t) return '';
+  const m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+  const d = Math.floor(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+
+function renderCallsPage() {
+  const el = document.getElementById('calls-main'); if (!el) return;
+  const calls = getCalls().slice().sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 200);
+  const openTasks = getTasks().filter(t => t.status !== 'done' && String(t.id || '').startsWith('call-'));
+  const openIds = new Set(openTasks.map(t => String(t.id).replace(/^call-/, '')));
+
+  if (!calls.length) {
+    el.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:var(--text-muted)">
+      <div style="font-size:15px;margin-bottom:6px">No calls yet</div>
+      <div style="font-size:12.5px">Calls appear here automatically once the phone system sees them.</div></div>`;
+    return;
+  }
+
+  const rows = calls.map(c => {
+    const name  = c.name || '';
+    const phone = _callPretty(c.phone);
+    const when  = c.at ? new Date(c.at).toLocaleString() : '';
+    const needs = openIds.has(String(c.id));
+    // One clear status per call, in plain words rather than jargon.
+    let status, colour;
+    if (c.voicemailUrl)          { status = 'Voicemail'; colour = 'var(--amber,#f59e0b)'; }
+    else if (c.answered)         { status = 'Answered' + (c.durationSec ? ' · ' + Math.max(1, Math.round(c.durationSec/60)) + ' min' : ''); colour = 'var(--green,#22c55e)'; }
+    else if (c.textDelivered === false) { status = 'Missed — our text did NOT reach them'; colour = 'var(--red,#dc2626)'; }
+    else                         { status = 'Missed — texted them'; colour = 'var(--text-muted)'; }
+
+    const detail = c.intakeDone ? '<span style="color:var(--green,#22c55e)">Details received</span>'
+                 : c.intakeSent ? '<span style="color:var(--text-muted)">Details requested</span>' : '';
+
+    return `<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px">${escHtml(name || phone)}${name ? ` <span style="font-weight:400;color:var(--text-muted);font-size:12.5px">${escHtml(phone)}</span>` : ''}</div>
+        <div style="font-size:12px;color:${colour};margin-top:2px">${escHtml(status)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">${escHtml(_callAgo(c.at))}${when ? ' · ' + escHtml(when) : ''}${detail ? ' · ' + detail : ''}</div>
+        ${c.voicemailUrl ? `<audio controls preload="none" src="${escHtml(c.voicemailUrl)}" style="width:100%;max-width:320px;margin-top:8px;height:32px"></audio>` : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0">
+        ${needs ? '<span style="font-size:10.5px;font-weight:600;color:#fff;background:var(--amber,#f59e0b);border-radius:10px;padding:2px 8px">NEEDS FOLLOW-UP</span>' : ''}
+        ${c.leadId ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="openJobDetail('${escHtml(c.leadId)}')">Open job</button>` : ''}
+        <a class="btn btn-g" style="padding:4px 10px;font-size:11.5px;text-decoration:none" href="tel:${escHtml(String(c.phone||'').replace(/[^0-9+]/g,''))}">Call back</a>
+      </div>
+    </div>`;
+  }).join('');
+
+  const openCount = openTasks.length;
+  el.innerHTML = `<div style="margin-bottom:12px;font-size:12.5px;color:var(--text-muted)">
+      ${calls.length} call${calls.length===1?'':'s'}${openCount ? ` · <strong style="color:var(--amber,#f59e0b)">${openCount} needing follow-up</strong>` : ' · nothing outstanding'}
+    </div>${rows}`;
+}
+
 // ── MISSED CALL / VOICEMAIL POLLER ──────────────────────────────────────────
 // The voice worker records every inbound call to D1 (/voice/inbound →
 // /voice/after) and serves the unacked ones at /calls/pending. Same
@@ -23899,44 +23986,130 @@ async function _callsPollOnce() {
     const acked = [];
     for (const row of rows) {
       try {
-        // An answered call with no voicemail needs no follow-up — it already
-        // happened. Log it and move on.
-        if (row.status === 'answered' && !row.recording_url) { acked.push(row.id); continue; }
-
         const { cust, lead } = _callMatchByPhone(row.from_phone);
         const who   = row.customer_name || (cust ? custFullName(cust) : '');
         const label = who ? `${who} — ${_callPretty(row.from_phone)}` : _callPretty(row.from_phone);
         const when  = row.created_at ? new Date(row.created_at).toLocaleString() : '';
         const hasVm = !!row.recording_url;
-        const textFailed = row.auto_text_sent === 0;
+        const answered   = row.status === 'answered';
+        const textFailed = !answered && row.auto_text_sent === 0;
+        const intakeSent = (row.intake_sent || 0) > 0;
+        const intakeDone = (row.intake_done || 0) > 0;
+        const recUrl     = hasVm ? `${base}/voice/rec/${row.recording_token}` : '';
 
+        // ── Always keep the raw call, whatever else we do with it. This is what
+        // the Calls page reads, and it's the only complete record — tasks get
+        // completed and notes get buried.
+        upsertCall({
+          id:        row.call_sid || String(row.id),
+          phone:     row.from_phone || '',
+          name:      who || '',
+          at:        row.created_at || new Date().toISOString(),
+          answered:  answered,
+          durationSec: row.duration_sec || 0,
+          voicemailUrl: recUrl,
+          voicemailSec: row.recording_sec || 0,
+          textDelivered: answered ? null : !textFailed,
+          intakeSent, intakeDone,
+          customerId: cust ? cust.id : '',
+          leadId:     lead ? lead.id : ''
+        });
+
+        // ── Decide what (if anything) a human still owes ────────────────────
+        // Rule: a task ONLY when someone must still act. A call Jonathan took
+        // and handled owes nothing — it needs a record, not a to-do. Auto-made
+        // tasks that nobody can close are exactly why the task list stopped
+        // being trusted (Jonathan, 2026-07-27).
+        let needTask = false, taskTitle = '', taskPri = 'normal';
         const lines = [];
-        lines.push(`Missed call from ${label}${when ? ' at ' + when : ''}.`);
-        if (hasVm) {
-          lines.push(`Voicemail (${row.recording_sec || 0}s): ${base}/voice/rec/${row.recording_token}`);
-        }
-        if (textFailed) {
-          lines.push('WARNING: our automatic text did NOT reach them (often a landline). They were told to expect a text — call them back.');
-        } else {
-          lines.push('An automatic text was sent asking them to reply with what they need.');
-        }
-        if (!cust) lines.push('No matching customer in the CRM — this may be a new lead.');
 
-        upsertTask({
+        if (answered) {
+          lines.push(`Answered call from ${label}${when ? ' at ' + when : ''}` +
+                     (row.duration_sec ? ` (${Math.round(row.duration_sec/60)} min)` : '') + '.');
+          if (!cust) {
+            // Spoke to someone we don't know. If their details never arrive,
+            // this call is otherwise invisible — which is precisely the
+            // "I answered but couldn't write anything down" case.
+            if (intakeDone) {
+              lines.push('They submitted their details — a lead has been created from them.');
+            } else {
+              needTask = true; taskPri = 'high';
+              taskTitle = 'Who was this? — ' + label;
+              lines.push(intakeSent
+                ? 'We texted them a link to send their name, address and email. Nothing back yet.'
+                : 'No details captured. Call them back or send them the details link.');
+            }
+          }
+        } else {
+          lines.push(`Missed call from ${label}${when ? ' at ' + when : ''}.`);
+          if (hasVm) lines.push(`Voicemail (${row.voicemailSec || row.recording_sec || 0}s): ${recUrl}`);
+          if (textFailed) {
+            lines.push('WARNING: our automatic text did NOT reach them (often a landline). They were told to expect a text — call them back.');
+          } else if (intakeSent) {
+            lines.push('We texted them a link to send their name, address and email.');
+          } else {
+            lines.push('An automatic text was sent asking them to reply with what they need.');
+          }
+          if (!cust) lines.push('No matching customer in the CRM — this may be a new lead.');
+          needTask = true;
+          taskTitle = (hasVm ? 'Voicemail — ' : 'Missed call — ') + label;
+          taskPri = (hasVm || textFailed) ? 'high' : 'normal';
+        }
+
+        if (needTask) upsertTask({
           id:          'call-' + (row.call_sid || row.id),
-          title:       (hasVm ? 'Voicemail — ' : 'Missed call — ') + label,
+          title:       taskTitle,
           description: lines.join('\n'),
           linkedId:    lead ? lead.id : '',
           linkedLabel: lead ? (who || lead.id) : '',
-          priority:    (hasVm || textFailed) ? 'high' : 'normal',
+          priority:    taskPri,
           status:      'open',
           source:      'auto-missed-call',
           callFrom:      row.from_phone || '',
           callAt:        row.created_at || '',
-          recordingUrl:  hasVm ? `${base}/voice/rec/${row.recording_token}` : '',
+          recordingUrl:  recUrl,
           recordingSec:  row.recording_sec || 0,
           createdBy:   S.user?.id || ''
         });
+
+        // ── Bell: every call event, always. The bell is what people actually
+        // look at; the task list is where work waits. Both, not either.
+        upsertNotification({
+          id: 'call-' + (row.call_sid || row.id),
+          type: hasVm ? 'voicemail' : (answered ? 'call-answered' : 'call-missed'),
+          title: hasVm ? 'New voicemail' : (answered ? 'Call answered' : 'Missed call'),
+          description: label + (when ? ' · ' + when : ''),
+          jobId: lead ? lead.id : ''
+        });
+
+        // ── A known customer with NO open job is probably calling about
+        // something NEW (Jonathan, 2026-07-27). Burying that on an old closed
+        // job loses it. Create a job, linked to the customer we already have.
+        //
+        // MISSED calls only. Doing this on ANSWERED calls too would mint a job
+        // every time a past customer rings to ask a quick question — the
+        // pipeline is what decisions get made from, and filling it with
+        // conversations is how it stops being trustworthy. If an answered call
+        // turns out to be real work, it's one click to start the job.
+        if (cust && !lead && !answered) {
+          try {
+            const newId = upsertLead({
+              customerId: cust.id,
+              customerName: custFullName(cust),
+              customerPhone: row.from_phone || '',
+              source: 'Phone',
+              jobType: '',
+              stage: 'lead-received',
+              description: lines.join('\n'),
+              siteStreet: cust.address || '', siteCity: cust.city || '',
+              siteState: cust.state || 'VA', siteZip: cust.zip || ''
+            });
+            if (newId) {
+              upsertCall({ id: row.call_sid || String(row.id), leadId: newId });
+              if (needTask) upsertTask({ id: 'call-' + (row.call_sid || row.id), linkedId: newId, linkedLabel: custFullName(cust) });
+            }
+          } catch (e) { console.warn('[GK] new job from call failed:', e); }
+        }
 
         // Leave a trace on the job itself so the call shows up in history, not
         // only in the task list.
@@ -23974,6 +24147,8 @@ async function _callsPollOnce() {
       try { toast(`${acked.length} call${acked.length > 1 ? 's' : ''} logged from the phone system`, 'info'); } catch (_) {}
     }
     if (typeof updateTaskBadge === 'function') updateTaskBadge();
+    if (S.page === 'calls') { try { renderCallsPage(); } catch(_){} }
+    if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
   } catch (_) { /* silent — polling failures shouldn't toast */ }
   finally { _callsBusy = false; }
 }
@@ -24589,13 +24764,16 @@ function _importWebLead(row) {
     webSubmittedAt: row.created_at
   });
 
-  const formLabel = row.source === 'residential' ? 'Residential EV form'
-                  : row.source === 'commercial'  ? 'Commercial form'
+  const formLabel = row.source === 'residential'   ? 'Residential EV form'
+                  : row.source === 'commercial'    ? 'Commercial form'
+                  : row.source === 'phone-intake'  ? 'Phone call — details sent by the customer'
                   : 'Contact form';
   upsertNotification({
     id: 'web-lead-' + row.id,
     type: 'web-lead',
-    title: 'New website lead',
+    // A phone-intake lead is someone Jonathan already SPOKE to — calling that
+    // "New website lead" would badly misrepresent where it came from.
+    title: row.source === 'phone-intake' ? 'Details received after a call' : 'New website lead',
     description: name + ' — ' + formLabel + (phone ? (' · ' + phone) : ''),
     jobId: leadId
   });
