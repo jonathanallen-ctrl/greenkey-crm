@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -25886,19 +25886,30 @@ async function hydrateQuoteStatusFromServer(qid) {
     // into the main upsertQuote above. On send failure we just log; the
     // next poll will see notifiedActionAt is set and skip, which is fine —
     // worst case the team misses one notification. Better than losing data.
-    try {
-      const _isActionStatus = ['approved','contingent-approved','declined'].includes(newStatus);
-      const _isFreshTransition =
-        (_prevStatus === 'delivered' || _prevStatus === 'draft' || _prevStatus === 'invoiced') &&
-        (_prevNotifiedActionAt !== data.actedAt);
-      if (_isActionStatus && _isFreshTransition) {
-        _notifyTeamOfQuoteAction(qid, data).catch(e => {
-          console.warn('[GK] notifyTeamOfQuoteAction failed (will not retry):', e);
-        });
-      }
-    } catch (e) {
-      console.warn('[GK] team notify check failed:', e);
-    }
+    // ── DISABLED 2026-07-28 — three emails per accepted quote ──
+    // This block sent a team email from the BROWSER, as the signed-in user, via
+    // Graph. The dedupe watermark (notifiedActionAt) is per-device and only
+    // converges after a SharePoint sync, so when Jonathan and Sherri each opened
+    // the CRM, each device saw an unstamped quote, believed it was first, and
+    // sent. Combined with the worker's own failsafe email that made THREE
+    // notifications for one acceptance — one from the CRM, one "from Sherri",
+    // one "from Jonathan" — all arriving late, on CRM open, rather than when the
+    // customer actually clicked.
+    //
+    // No amount of watermarking fixes this: two devices polling before they sync
+    // will always both think they are first. The notification belongs in the one
+    // place that sees the click exactly once — the worker, which already sent
+    // that failsafe email and now carries the total and project phrase too
+    // (worker-2026-07-28c). So the client no longer sends at all.
+    //
+    // _notifyTeamOfQuoteAction() is deliberately LEFT IN PLACE but uncalled: it
+    // holds the richest formatting we have (address, phone, deep link to the
+    // lead) and is the obvious starting point if we ever move this back. Do not
+    // re-enable it from the browser without solving the multi-device race first.
+    //
+    // notifiedActionAt is still stamped above, so re-enabling stays safe-ish and
+    // existing quotes keep their history.
+    void _notifyTeamOfQuoteAction;
 
     // When the customer accepts (or contingent-accepts), advance the lead's
     // pipeline stage to "Quote Approved" so the team sees it move forward
