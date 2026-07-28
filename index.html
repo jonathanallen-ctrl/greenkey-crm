@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-27g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -8034,6 +8034,36 @@ function _autoScopePrimary(q){
   if (q.jobType === 'ev-residential' && qq.evInstallType==='existing') {
     return `Install the customer-supplied EV charger at the location of the existing dedicated circuit. Work includes converting the existing outlet or connection to a hardwired junction-box termination (insulated lugs and liquidtight flex), verifying or replacing the branch breaker as required, and mounting, connection, and setup of the charger. All work is performed to NEC and local code. No permit is required for this connection change on an existing circuit.`;
   }
+  // Troubleshooting / Service Call / Maintenance Visit (2026-07-28)
+  // These job types have a full input panel in the quote builder but had NO
+  // branch here, so they fell through to the EV-charger default below and
+  // printed "Furnish and install a dedicated 240-volt, 60-amp branch circuit
+  // ... to the Level 2 EV charger location" on an HVAC troubleshoot (Clifford
+  // Noe / AF1, qt-1784899191485). Diagnostic work can't be described before
+  // it's done, so the scope IS the technician's own work-performed notes.
+  if (q.jobType === 'troubleshooting' || q.jobType === 'maintenance-visit') {
+    const notes = (qq.scNotes || '').trim();
+    const isMaint = q.jobType === 'maintenance-visit';
+    const lead = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
+    const leadScope = ((lead && (lead.scopeOfWork || lead.description)) || '').trim();
+    if (notes) return notes;
+    if (leadScope) return leadScope;
+    return isMaint
+      ? 'Scheduled maintenance visit. Inspect and service the equipment listed below, verify safe operation, and report any deficiencies found. All work is performed to NEC and local code.'
+      : 'Diagnostic service call. Investigate the reported fault, identify the cause, and perform the corrective work itemized below. All work is performed to NEC and local code.';
+  }
+
+  // Fall-through guard (2026-07-28). Anything that reaches this point has no
+  // branch above. Historically it silently returned the EV-charger paragraph,
+  // which is confidently wrong on a non-EV job and reads as correct. Only job
+  // types that ARE EV work get that text now; everything else falls back to
+  // the job's own scope, and failing that to nothing — an empty scope box is
+  // an obvious prompt to write one, a wrong scope is not.
+  if (q.jobType && q.jobType !== 'ev-residential' && q.jobType !== 'ev-charger') {
+    const _l = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
+    return ((_l && (_l.scopeOfWork || _l.description)) || '').trim();
+  }
+
   // Default: EV Charger
   const mount = qq.mountType==='post' ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.' : '';
   const wireOpt = _evnemaWire(qq);
@@ -10001,6 +10031,18 @@ async function generateInvoice(qid){
   if(!q.invoiceId){
     upsertQuote({...q,status:'invoiced',invoiceId:invNum,invoiceDate:new Date().toISOString(),
                  invoiceNoFee:_mode, invoiceCardUrl:q.invoiceCardUrl||''});
+    // Job value was only ever written when a customer ACCEPTED a quote. Service
+    // calls skip acceptance entirely — you do the work, then bill it — so those
+    // jobs reported $0 against real money (Clifford Noe, $814, 2026-07-28).
+    // Invoicing is an even stronger signal of value than acceptance, so stamp it
+    // here too. Never overwrite a value already set by hand or by acceptance.
+    try {
+      const _lv = lead ? getLead(lead.id) : null;
+      const _has = _lv && _lv.jobValue && _lv.jobValue.amount != null;
+      if (_lv && !_has && typeof setJobValue === 'function') {
+        setJobValue(_lv.id, _quoteJobNet(getQuote(qid)), { source:'quote', quoteId:qid });
+      }
+    } catch(e) { console.warn('[GK] job value stamp on invoice failed:', e); }
     toast('Invoice '+invNum+' created'+(_mode==='both'?' — both payment options':_mode?' — no-fee price':' — card price'),'success');
   } else {
     upsertQuote({...q,invoiceNoFee:_mode, invoiceCardUrl:q.invoiceCardUrl||''});
@@ -10132,7 +10174,10 @@ function pdfCustomerBlock(doc,cust,lead,y,q){
       doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_biz,36,y);y+=14;
       if(_person){
         doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
-        doc.text('Attn: '+_person,36,y);y+=12;
+        // custFullName() returns 'Unnamed' for a business record with no person
+        // on it (AF1). Printing "Attn: Unnamed" on a customer-facing PDF is
+        // worse than printing nothing (2026-07-28).
+        if(_person && _person!=='Unnamed' && _person!=='Unknown'){doc.text('Attn: '+_person,36,y);y+=12;}
       }
     } else if(_person){
       doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(...DARK);doc.text(_person,36,y);y+=14;
@@ -12260,6 +12305,10 @@ function _renderJobRail(lead){
   const acceptedId=lead.acceptedQuoteId;
   const qRows = quotes.length ? quotes.map(q=>{
     const isAcc = (acceptedId===q.id) || q.status==='approved' || q.status==='contingent-approved';
+    // An invoiced quote is finished business: it should not still be offering
+    // "Accept" (Clifford Noe looked unfinished for exactly this reason), and it
+    // must not be deletable — deleting it would orphan a real invoice number.
+    const isInv = q.status==='invoiced' || !!q.invoiceId;
     const stColor = (q.status==='approved'||q.status==='contingent-approved')?'var(--green)':(q.status==='invoiced')?'#8e44ad':(q.status==='declined')?'var(--red)':'var(--text-muted)';
     const qDate = q.createdAt ? new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
     const titleTxt = q.external
@@ -12279,9 +12328,13 @@ function _renderJobRail(lead){
         <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${(()=>{const s=q.source||'';if(!s)return '';const plat=['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink'].includes(s);return ` <span style="font-size:10px;font-weight:700;letter-spacing:.3px;padding:1px 7px;border-radius:9px;vertical-align:1px;${plat?'background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)':'background:rgba(46,204,113,.12);color:var(--green);border:1px solid rgba(46,204,113,.3)'}">${escHtml(s)}</span>`;})()}${qLbl?' · '+escHtml(qLbl):''}</div>
         ${(q.source==='Qmerit'&&_quoteJobNet(q)!==_quoteNet(q))?`<div style="font-size:10.5px;color:var(--text-muted)">→ $${_quoteJobNet(q).toLocaleString()} to GreenKey after Qmerit's $${(_quoteNet(q)-_quoteJobNet(q)).toLocaleString()} admin fee</div>`:''}
         <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
+        ${isInv?`<div style="font-size:10.5px;color:#a55ecc;margin-top:2px" title="Invoice generated from this quote. Use the buttons at right to re-download or re-send it.">🧾 <span style="font-family:var(--mono)">${escHtml(q.invoiceId||'')}</span>${q.invoiceDate?' · '+new Date(q.invoiceDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</div>`:''}
       </div>
-      <button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
-      ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}
+      ${isInv
+        ? `<button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#8e44ad;color:#a55ecc" onclick="event.stopPropagation();generateInvoice('${q.id}')" title="Re-download invoice ${escHtml(q.invoiceId||'')} as a PDF (same invoice number — it is not re-minted)">🧾 Invoice</button>
+           <button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#3498db;color:#3498db" onclick="event.stopPropagation();emailInvoice('${q.id}')" title="Email invoice ${escHtml(q.invoiceId||'')} to the bill-to party with the PDF attached">✉ Send</button>`
+        : `<button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
+           ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}`}
     </div>`;
   }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
   const quotesSec = `<div class="jd-sec"><div class="jd-sh" style="display:flex;align-items:center;justify-content:space-between"><div class="jd-st">Active Quotes</div><button class="btn btn-p" style="padding:3px 10px;font-size:11px" onclick="openNewQuote_ForJob('${id}')">+ Quote</button></div><div class="jd-sb" style="padding:6px 14px 12px">${qRows}</div></div>`;
@@ -13532,6 +13585,7 @@ function renderJobDetail(id) {
       </button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
+      ${lead.customerId ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>` : ''}
     </div>
   </div>`;
 
@@ -16307,10 +16361,21 @@ function inPeriod(dateStr, period) {
 // code works unchanged. Dated by the invoiced timestamp.
 function _maybeBackfillJobValues(){
   try {
-    if (localStorage.getItem('gk_jobvalue_backfill_v1')) return;
+    // Key bumped to _v2 on 2026-07-28. v1 already ran on every machine, so any
+    // job invoiced AFTER that run kept jobValue = null and reported $0 against
+    // real money (Clifford Noe, $814). Bumping the key lets it sweep once more
+    // and catch them. backfillJobValues() only ever FILLS a blank value — it
+    // never overwrites one set by hand or by acceptance — so a re-run cannot
+    // change a number anyone has deliberately entered.
+    if (localStorage.getItem('gk_jobvalue_backfill_v2')) return;
     const n = backfillJobValues();
-    localStorage.setItem('gk_jobvalue_backfill_v1','1');
-    if (n) console.log('[GK] Backfilled Job Value on', n, 'jobs');
+    localStorage.setItem('gk_jobvalue_backfill_v2','1');
+    if (n) {
+      console.log('[GK] Backfilled Job Value on', n, 'jobs');
+      // Surfaced, not silent: money quietly changing on a report is exactly the
+      // kind of thing that should announce itself.
+      try { if (typeof toast === 'function') toast('Job Value filled in on ' + n + ' job' + (n===1?'':'s') + ' from their invoiced/accepted quote', 'success'); } catch(_){}
+    }
   } catch(_){}
 }
 function _revenueLines(period){
@@ -27323,7 +27388,7 @@ function _buildSchedContent(lead, cust, quote, type) {
   let subject, sections = [];
   switch (type) {
     case 'walkdown': {
-      subject = `${lastName} - Walkdown (${source})`;
+      subject = `${lastName} Walkdown - ${source}`;
       sections.push('Walkdown / site visit — gather info to draft a quote.');
       if (desc)  sections.push('Customer-described needs:\n' + desc);
       else if (scope) sections.push('Pre-quote notes:\n' + scope);
@@ -27334,7 +27399,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'phone-call': {
-      subject = `${lastName} - Phone / Video Walkdown`;
+      subject = `${lastName} Phone / Video Walkdown - ${source}`;
       sections.push('Phone call / video walkdown — remote, no truck roll. If the customer can hold a camera, do it as video (FaceTime / WhatsApp / Teams link); otherwise talk it through and ask for photos.');
       if (desc)  sections.push('Customer-described needs:\n' + desc);
       else if (scope) sections.push('Notes:\n' + scope);
@@ -27346,7 +27411,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'maintenance': {
-      subject = `${lastName} - Maintenance Visit`;
+      subject = `${lastName} Maintenance Visit - ${source}`;
       sections.push('Scheduled maintenance visit.');
       if (desc) sections.push('Notes:\n' + desc);
       if (recentNote) sections.push(recentNote);
@@ -27355,7 +27420,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'troubleshoot': {
-      subject = `${lastName} - Service Call`;
+      subject = `${lastName} Service Call - ${source}`;
       sections.push('Troubleshooting / diagnostic visit.');
       if (desc) sections.push('Reported issue:\n' + desc);
       if (recentNote) sections.push(recentNote);
@@ -27369,7 +27434,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'inspection': {
-      subject = `${lastName} - Final Inspection`;
+      subject = `${lastName} Final Inspection - ${source}`;
       sections.push('Final inspection visit — be on site to walk the inspector through the work.');
       if (scope) sections.push('Installed scope:\n' + scope);
       if (permitLine) sections.push(permitLine + ' (have permit + diagram on hand for inspector)');
@@ -27378,7 +27443,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'quote-review': {
-      subject = `${lastName} - Quote Review`;
+      subject = `${lastName} Quote Review - ${source}`;
       sections.push('Sit-down with customer to review the quote and answer questions.');
       if (quote) {
         const total = quote.quoteTotal ? '$' + Number(quote.quoteTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '(no total)';
@@ -27392,7 +27457,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'material-pickup': {
-      subject = `Materials for ${lastName} (${source})`;
+      subject = `Materials for ${lastName} - ${source}`;
       sections.push(`Pickup run for upcoming ${lastName} job.`);
       sections.push(`Job: ${lead.id}${fullName ? ' — ' + fullName : ''}`);
       if (scope) sections.push('Scope reference (verify materials list against quote):\n' + scope);
@@ -27400,7 +27465,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'follow-up': {
-      subject = `${lastName} - Follow-Up`;
+      subject = `${lastName} Follow-Up - ${source}`;
       sections.push('Follow-up visit (warranty / punch-list / service after install).');
       if (recentNote) sections.push(recentNote);
       else if (desc)  sections.push('Reason for visit:\n' + desc);
@@ -27412,7 +27477,7 @@ function _buildSchedContent(lead, cust, quote, type) {
       break;
     }
     case 'other': {
-      subject = `${lastName} - `;
+      subject = `${lastName} Visit - ${source}`;
       if (contactLine) sections.push(contactLine);
       sections.push('(Edit subject and body before opening Outlook.)');
       break;
@@ -28191,8 +28256,16 @@ async function renderSMSThread(leadId, quiet) {
 
   try {
     const token = await _acquireSMSToken();
+    // Pass the customer's number so the worker can adopt any texts that arrived
+    // BEFORE this job existed (customer called, then texted their details).
+    // Without it the worker can only find the number once we've texted them
+    // first — backwards, since the unanswered text IS the reason to look.
+    const _tl = (typeof getLead === 'function') ? getLead(leadId) : null;
+    const _tc = (_tl && typeof getCustomer === 'function') ? getCustomer(_tl.customerId) : null;
+    const _tp = (_tc?.phone || _tl?.customerPhone || '').trim();
     const resp = await fetch(
-      SMS_WORKER_URL.replace(/\/$/,'') + '/sms/thread?leadId=' + encodeURIComponent(leadId),
+      SMS_WORKER_URL.replace(/\/$/,'') + '/sms/thread?leadId=' + encodeURIComponent(leadId)
+        + (_tp ? '&phone=' + encodeURIComponent(_tp) : ''),
       { headers: { 'Authorization': 'Bearer ' + token } }
     );
     const data = await resp.json().catch(() => ({}));
