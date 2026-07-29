@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28i</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -13604,10 +13604,12 @@ function renderJobDetail(id) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v8H2z"/><path d="m2 4 6 5 6-5"/></svg>
         Send Email
       </button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f39c12;color:#f39c12" onclick="scheduleInOutlook('${id}')" title="Schedule this job — pick the appointment type, set the date and time, and create the Outlook calendar event (installs also send the customer a confirmation)">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6h12M5 1.5v3M11 1.5v3"/></svg>
-        Schedule
-      </button>
+      <!-- Header Schedule button REMOVED 2026-07-28. Scheduling now has exactly
+           one home: the Appointments section in the job body. The header button
+           could only ever book ONE thing with a date picked on the spot; it could
+           not queue work, list what already exists, reschedule, or complete. Two
+           entry points to the same modal meant two mental models for the same
+           task. "Schedule now" in Appointments is the one-click equivalent. -->
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
       ${lead.customerId ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>` : ''}
@@ -14018,13 +14020,14 @@ function renderJobDetail(id) {
     </div>`;
   }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No appointments yet. Add one below, or use the <strong>Schedule</strong> button at the top to book one straight away.</div>`;
 
-  const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px">
-    <select id="appt-add-${id}" class="jd-fi" style="flex:1;font-size:12.5px;padding:5px 8px">
+  const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap">
+    <select id="appt-add-${id}" class="jd-fi" style="flex:1;min-width:190px;font-size:12.5px;padding:5px 8px">
       ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t==='walkdown'?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
     </select>
-    <button class="btn btn-p" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Adds this to the scheduler's list of work waiting for a date. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
+    <button class="btn btn-p" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="scheduleApptNow('${id}', document.getElementById('appt-add-${id}').value)" title="Pick the date and time now and create the Outlook event — the same thing the old header Schedule button did, in one click.">📅 Schedule now</button>
+    <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Queue it without a date. It appears in the Scheduler as work waiting to be booked. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
   </div>
-  <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here that has no date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
+  <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here without a date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
 
   // ── Crew & hours (2026-07-28) ──
   // Sits with Appointments because it is a SCHEDULING fact, not a pricing one.
@@ -18546,13 +18549,13 @@ function getSchedulableJobs(techId) {
     if (l.stage === 'archived') return false;
     const ms = l.milestones || {};
     if (ms.installScheduled?.done) {
-      // Committed. Show it in the pool ONLY if it belongs to the active (date, tech)
-      // plan — that's the user's "I'm rebuilding this crew's day" view. Anything
-      // committed elsewhere is booked and stays out.
-      if (ms.installScheduled.date !== activeDate) return false;
-      const milestoneTechId = ms.installScheduled.techId || '';
-      if (milestoneTechId !== activeTechId) return false;
-      // Falls through — applies skill filter below, but skips gates.
+      // 2026-07-28: a committed job is now shown in "Already on the calendar" on
+      // the DAY PLAN side, so keeping it in the left pool as well listed the same
+      // job twice on one screen (George Kasper, 7/30). It used to appear here so
+      // the day could be rebuilt by unchecking it — that path has moved to the
+      // job's Appointments row, which removes it explicitly instead of by
+      // omission. Booked is booked: out of the pool.
+      return false;
     } else {
       // Not yet committed — only leads explicitly moved to the Scheduling
       // column in the kanban are eligible. The dispatcher decides when a
@@ -19211,6 +19214,11 @@ function renderSchedulerPage() {
 
   // Init durations for any new jobs
   jobs.forEach(l => {
+    // Everything in "Ready to Schedule" starts SELECTED. It used to default to
+    // deselected, which rendered every card at 45% opacity — the whole pool read
+    // as disabled even though the checkboxes worked (reported 2026-07-28).
+    // "Ready to schedule" should mean ready, and Select none is one click away.
+    if (_sched.included[l.id] === undefined) _sched.included[l.id] = true;
     if (_sched.durations[l.id] === undefined) {
       // getJobHours honours a manual override, then the crew-geometry derivation,
       // and only falls back to the old per-job-type guess when there is no quote
@@ -19594,7 +19602,8 @@ function renderSchedulerPage() {
           ${_sched.range ? 'Single-Day Mode' : 'Multi-Day Mode →'}
         </button>
       </div>
-      <div style="align-self:flex-end;margin-left:auto;font-size:12px;color:var(--text-muted)">
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="syncOutlookAppointments(false)" title="Pull date and time changes made in Outlook back into the CRM. Outlook wins on date and time; every change is written to the job's notes. Runs automatically every few minutes too.">↻ Sync Outlook</button>
+        <div style="align-self:flex-end;margin-left:auto;font-size:12px;color:var(--text-muted)">
         Home base: ${escHtml(getPrefs().homeBase||'Not set — configure in Settings → Scheduling')}
       </div>
     </div>
@@ -20655,18 +20664,16 @@ function markDayScheduled() {
   //     THIS (date, tech) combo but isn't in the current plan anymore. Other
   //     tech's plans for this date are left alone — they belong to a
   //     different crew and shouldn't be touched by this Mark.
+  // ⚠ DISABLED 2026-07-28 — this block used to delete installScheduled for any
+  // job committed to this (date, tech) that was absent from the new plan. That
+  // was safe only while committed jobs still appeared in the pool and could be
+  // deliberately unchecked. They no longer do (see getSchedulableJobs), so
+  // "absent from the plan" now means "was never a candidate" — and rebuilding a
+  // day would have silently unscheduled every job already booked on it.
+  // Removing an appointment is now an explicit act: the × on the job's
+  // Appointments row. Do not re-enable this without putting committed jobs back
+  // in the pool first.
   let removedCount = 0;
-  arr.forEach(l => {
-    const ms = l.milestones || {};
-    if (ms.installScheduled?.done
-        && ms.installScheduled.date === _sched.date
-        && (ms.installScheduled.techId || '') === myTechId
-        && !inPlanIds.has(l.id)) {
-      delete l.milestones.installScheduled;
-      l.updatedAt = new Date().toISOString();
-      removedCount++;
-    }
-  });
   saveLeads(arr);
   _persistSched();
   // Refresh Job Info forms for everything scheduled on this plan.
@@ -25487,6 +25494,9 @@ function _bellStartPolling() {
       try { _reconcileFieldPayments(); } catch(_){}
       try { _spFolderRetrySweep(); } catch(_){}
       try { _opsInspectionSweep(); } catch(_){}
+      // Outlook → CRM reschedule sync. Self-throttles to one Graph call every
+      // few minutes regardless of how often this timer fires (2026-07-28).
+      try { syncOutlookAppointments(true); } catch(_){}
     }
   }, BELL_POLL_INTERVAL_MS);
 }
@@ -27686,6 +27696,165 @@ function requestAppt(leadId, type) {
   if (a) toast(_apptLabel(type) + ' added to the scheduler queue', 'success');
   try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
   return a;
+}
+
+// One-click equivalent of the old header Schedule button: create the appointment
+// and go straight into the date/time modal. Kept separate from requestAppt() so
+// the queue-it-for-later path stays a deliberate, different click.
+function scheduleApptNow(leadId, type) {
+  if (!type) return;
+  const open = getApptsById(leadId).find(a => a.type === type && !_apptIsBooked(a) && !a.completedAt);
+  const a = open || upsertAppt(leadId, { type, date: '', time: '', hours: _apptHours(type) });
+  if (a && typeof scheduleInOutlook === 'function') scheduleInOutlook(leadId, a.id);
+}
+
+// ═══════════ OUTLOOK → CRM RESCHEDULE SYNC (2026-07-28) ═══════════
+// Until now the flow was one-way: the CRM created an Outlook event and then
+// stopped caring. Drag that event to a different day in Outlook — which is what
+// everyone actually does — and the CRM never heard about it, so the scheduler,
+// the reports and the customer's confirmation all still believed the old date.
+//
+// This is possible now only because appointments store `outlookEventId` and
+// `outlookCalId` (added with the appointments model). That is the join key; there
+// was nothing to match on before.
+//
+// DESIGN NOTES
+// • Polling, not webhooks. Graph change notifications need a public endpoint and
+//   a subscription renewed every ~3 days, and the worker has no calendar scope.
+//   The CRM already holds Graph auth and already runs a poll timer.
+// • ONE request covers everything: a calendarView across the window returns every
+//   event in range, and we match locally by id. Not one GET per appointment.
+// • OUTLOOK WINS on date and time. It is where the dragging happens. But every
+//   overwrite is logged to the job's notes — a silent change to a date somebody
+//   promised a customer is worse than a wrong date.
+// • A DELETED event does NOT delete the appointment. It clears the date and puts
+//   the work back in the scheduler queue, because "I deleted the calendar entry"
+//   almost always means "this needs rebooking", not "this job is cancelled".
+// • Only appointments whose date falls INSIDE the queried window are eligible to
+//   be marked missing — otherwise everything outside the window looks deleted.
+
+const _OL_SYNC_BACK_DAYS    = 7;
+const _OL_SYNC_FORWARD_DAYS = 60;
+const _OL_SYNC_MIN_GAP_MS   = 4 * 60 * 1000;   // don't hammer Graph on every tick
+let _olSyncLastRun = 0;
+let _olSyncRunning = false;
+
+function _olLocalIso(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+         'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':00';
+}
+
+// quiet=true is the timer path: no toast unless something actually changed.
+async function syncOutlookAppointments(quiet) {
+  if (_olSyncRunning) return null;
+  if (quiet && Date.now() - _olSyncLastRun < _OL_SYNC_MIN_GAP_MS) return null;
+  if (typeof _graphFetch !== 'function') return null;
+
+  // Collect every booked appointment that carries an Outlook event id.
+  const tracked = [];
+  getLeads().forEach(l => {
+    if (l.stage === 'archived') return;
+    getAppts(l).forEach(a => {
+      if (a.outlookEventId && _apptIsBooked(a) && !a.completedAt) tracked.push({ lead: l, appt: a });
+    });
+  });
+  if (!tracked.length) { _olSyncLastRun = Date.now(); return { checked: 0, moved: 0, missing: 0 }; }
+
+  _olSyncRunning = true;
+  try {
+    const from = new Date(); from.setDate(from.getDate() - _OL_SYNC_BACK_DAYS);   from.setHours(0,0,0,0);
+    const to   = new Date(); to.setDate(to.getDate() + _OL_SYNC_FORWARD_DAYS);    to.setHours(23,59,59,0);
+    const tgt  = (typeof getSchedTargetCalendar === 'function') ? getSchedTargetCalendar() : null;
+    const base = tgt && tgt.id
+      ? `/me/calendars/${encodeURIComponent(tgt.id)}/calendarView`
+      : '/me/calendarView';
+    const path = `${base}?startDateTime=${encodeURIComponent(_olLocalIso(from))}` +
+                 `&endDateTime=${encodeURIComponent(_olLocalIso(to))}` +
+                 `&$select=id,subject,start,end,isCancelled&$top=250`;
+
+    const resp = await _graphFetch(path);
+    if (!resp || !resp.ok) { console.warn('[GK] outlook sync: calendarView failed', resp && resp.status); return null; }
+    const data = await resp.json().catch(() => null);
+    const items = (data && data.value) || [];
+    const byId = new Map();
+    items.forEach(ev => { if (ev && ev.id) byId.set(ev.id, ev); });
+
+    const inWindow = d => {
+      if (!d) return false;
+      const t = new Date(d + 'T12:00:00');
+      return t >= from && t <= to;
+    };
+
+    const arr = getLeads();
+    let moved = 0, missing = 0, dirty = false;
+    const notes = [];
+
+    tracked.forEach(({ lead, appt }) => {
+      const ev = byId.get(appt.outlookEventId);
+      const i  = arr.findIndex(l => l.id === lead.id);
+      if (i < 0) return;
+      const list = Array.isArray(arr[i].appointments)
+        ? arr[i].appointments.slice()
+        : getAppts(arr[i]).map(x => ({ ...x, legacy: false }));
+      const ai = list.findIndex(x => x.id === appt.id);
+      if (ai < 0) return;
+
+      if (!ev || ev.isCancelled) {
+        // Only trust "missing" when we actually looked in the right window.
+        if (!inWindow(appt.date)) return;
+        list[ai] = { ...list[ai], date: '', time: '', outlookEventId: '', outlookCalId: '' };
+        notes.push(`Outlook event for the ${_apptLabel(appt.type).toLowerCase()} on ${appt.date} was ${ev ? 'cancelled' : 'deleted'}. Back in the scheduler queue — rebook it.`);
+        missing++;
+      } else {
+        const startStr = (ev.start && ev.start.dateTime) || '';
+        if (!startStr) return;
+        const newDate = startStr.slice(0, 10);
+        const newTime = startStr.slice(11, 16);
+        if (newDate === appt.date && newTime === (appt.time || '')) return;
+        notes.push(`Rescheduled in Outlook: ${_apptLabel(appt.type)} moved from ${appt.date}${appt.time ? ' ' + appt.time : ''} to ${newDate} ${newTime}. Outlook wins on date and time.`);
+        list[ai] = { ...list[ai], date: newDate, time: newTime };
+        moved++;
+      }
+      arr[i].appointments = list;
+      _apptMirrorInstall(arr[i]);           // keeps the 49 legacy readers correct
+      arr[i].updatedAt = new Date().toISOString();
+      // Leave a trail on the job. A date that changed itself is exactly the kind
+      // of thing someone needs to be able to reconstruct later.
+      if (notes.length) {
+        arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
+          id: 'note-ol-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+          text: notes.pop(),
+          authorName: 'Outlook sync',
+          timestamp: new Date().toISOString()
+        }]);
+      }
+      dirty = true;
+    });
+
+    if (dirty) {
+      saveLeads(arr);
+      try { if (S.page === 'jobs' && S.jobDetailId && typeof renderJobDetail === 'function') renderJobDetail(S.jobDetailId); } catch (_) {}
+      try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch (_) {}
+    }
+    _olSyncLastRun = Date.now();
+
+    const result = { checked: tracked.length, moved, missing };
+    if (moved || missing) {
+      const bits = [];
+      if (moved)   bits.push(`${moved} appointment${moved===1?'':'s'} moved`);
+      if (missing) bits.push(`${missing} back in the queue (event deleted)`);
+      if (typeof toast === 'function') toast('Outlook sync — ' + bits.join(' · '), 'success');
+    } else if (!quiet && typeof toast === 'function') {
+      toast(`Outlook sync — ${tracked.length} appointment${tracked.length===1?'':'s'} checked, all match`, 'info');
+    }
+    return result;
+  } catch (e) {
+    console.warn('[GK] outlook sync failed:', e);
+    return null;
+  } finally {
+    _olSyncRunning = false;
+  }
 }
 
 function removeAppt(leadId, apptId) {
