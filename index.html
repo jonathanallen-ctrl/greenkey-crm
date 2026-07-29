@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14026,9 +14026,44 @@ function renderJobDetail(id) {
   </div>
   <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here that has no date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
 
+  // ── Crew & hours (2026-07-28) ──
+  // Sits with Appointments because it is a SCHEDULING fact, not a pricing one.
+  // Derived from the quote's run geometry; both fields overridable, and the
+  // derivation reason is shown so nobody has to guess where "2" came from.
+  const _cd = deriveJobCrew(lead);
+  const _crewSize = getJobCrewSize(lead);
+  const _crewHrs  = getJobHours(lead);
+  const _crewOv   = (typeof lead.crewSize === 'number' && lead.crewSize > 0);
+  const _hrsOv    = (typeof lead.estHours === 'number' && lead.estHours > 0);
+  const _why = _cd.reasons.length ? _cd.reasons.join(' + ') : 'single area, short run';
+  const _crewSec = `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:8px 0 12px;border-bottom:1px solid var(--border);margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px">Crew</span>
+      <select class="jd-fi" style="width:112px;font-size:12.5px;padding:4px 6px" onchange="setJobCrewField('${id}','crewSize',this.value)"
+        title="How many people the job needs. Derived from the run geometry — ${escHtml(_why)}. Change it to override.">
+        <option value=""${_crewOv?'':' selected'}>Auto — ${_cd.size}</option>
+        <option value="1"${_crewOv&&_crewSize===1?' selected':''}>1 person</option>
+        <option value="2"${_crewOv&&_crewSize===2?' selected':''}>2 people</option>
+        <option value="3"${_crewOv&&_crewSize===3?' selected':''}>3 people</option>
+      </select>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px">Est. hours</span>
+      <input class="jd-fi" type="number" step="0.25" min="0.25" style="width:74px;font-size:12.5px;padding:4px 6px"
+        value="${_crewHrs}" onchange="setJobCrewField('${id}','estHours',this.value)"
+        title="Wall-clock hours. Two-person work defaults to 3.0 (1.0 inside 5 ft); solo is 1.5x that. Overwrite freely.">
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px"
+      title="Ticked means Jonathan is needed on this one — which also means his day is NOT free for walkdowns. It decides WHO the second person is, not how many. Routine two-person work goes to JD. Also adds time: +0.5 hr with two people, +1.0 hr solo. Trenching ticks this by default.">
+      <input type="checkbox" ${isJobDifficult(lead)?'checked':''} onchange="setJobCrewField('${id}','crewDifficult',this.checked)" style="width:15px;height:15px;accent-color:var(--amber,#f59e0b);cursor:pointer">
+      <span>Difficult — needs Jonathan${_cd.trench?' <span style="color:var(--amber,#f59e0b)">· trenching</span>':''}</span>
+    </label>
+    <span style="font-size:11px;color:var(--text-muted)" title="Two people: 1.0 hr out to 10 ft, then +15 min per additional 10 ft. One person: 1.5 hr inside 5 ft, then +30 min per 10 ft. Difficult adds 0.5 hr (two) or 1.0 hr (solo). Trenching is timed separately.">${_crewOv||_hrsOv?'Overridden · ':''}auto: ${_cd.size} ${_cd.size===1?'person':'people'}, ${_cd.hours} hr — ${escHtml(_why)}${_cd.required?'':(_cd.longRun?' (preferred, not required)':'')}${_cd.hoursTrench?` · incl. ${_cd.hoursTrench.toFixed(2)} hr trenching`:''}${_cd.hoursDifficult?` · incl. ${_cd.hoursDifficult} hr difficult`:''}</span>
+  </div>`;
+
   const apptSec = `<div class="jd-sec">
     <div class="jd-sh"><div class="jd-st">Appointments</div></div>
-    <div class="jd-sb" style="padding:6px 14px 12px">${_apptRows}${_apptAdd}</div>
+    <div class="jd-sb" style="padding:6px 14px 12px">${_crewSec}${_apptRows}${_apptAdd}</div>
   </div>`;
 
   const notesSec = `<div class="jd-sec">
@@ -17366,6 +17401,156 @@ function deleteAHJ(id) {
 // ══════════════════════════════════════════════════════
 
 // ── DURATION ESTIMATION ──
+// ═══════════════ CREW SIZE & HOURS (2026-07-28, Jonathan's rules) ═══════════
+// WHY THIS EXISTS
+// The scheduler knew how LONG a job took (estimateJobDuration) but nothing about
+// how many PEOPLE it took. With one crew whose composition changes per job, that
+// is the binding constraint — not calendar space. Jonathan can't be second man on
+// a difficult job and out doing a walkdown the same morning, and before this
+// nothing in the CRM could notice.
+//
+// THE RULE, IN JONATHAN'S WORDS (2026-07-28), and it is about the PULL, not the
+// cable: "If you are pulling wire between the inside of a home and a crawlspace,
+// or between an unfinished basement and adjacent garage, trying to do that with
+// one person is truly painful. That's why it takes two." One person cannot feed
+// and receive at the same time. Cable type is irrelevant — an earlier draft of
+// this keyed on SEU vs MC and was wrong.
+//
+// ⚠ CREW SIZE IS DERIVED. WHO FILLS IT IS NOT.
+// Number of bodies comes from the geometry. WHICH body is a judgement — JD by
+// default, Jonathan when the job is flagged difficult. Area count does NOT imply
+// difficulty; a two-area job can be perfectly routine. The one hard assignment is
+// trenching, which is Jonathan until there is another person to send.
+//
+// ⚠ DO NOT HARDCODE NAMES HERE. Jonathan, 2026-07-28: once they hire, "Chase and
+// his new counterpart will be able to do anything and I can work either solo or
+// with JD" — the crew structure gets SIMPLER, and this is the hardest it will
+// ever be. So this models capability (needsLead) rather than people. Hiring
+// should be marking a user lead-capable in Settings, never a code change.
+
+const _CREW_CROSSING_SEGS = ['crawl', 'attic', 'unfinished'];
+const _CREW_TRENCH_SEGS   = ['hand-trench', 'machine-trench', 'hand-dig'];
+const _CREW_LONG_RUN_FT   = 20;   // conduit over this is "easier with two", not required
+
+function _crewSegFt(seg) {
+  const v = (seg && (seg.ft !== undefined ? seg.ft : seg.distance)) || 0;
+  return parseFloat(v) || 0;
+}
+function _crewSegs(lead) {
+  if (!lead || typeof getQuotes !== 'function') return [];
+  const q = getQuotes().filter(x => x.leadId === lead.id)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
+  return (q && q.qq && Array.isArray(q.qq.runSegs)) ? q.qq.runSegs : [];
+}
+
+// Pure. Returns what the geometry implies, with the reasoning attached so the
+// job screen can show WHY rather than just asserting a number.
+function deriveJobCrew(lead) {
+  const segs = _crewSegs(lead);
+  // The quote's base always includes the first 5 ft of run.
+  const totalFt = 5 + segs.reduce((sum, sg) => sum + _crewSegFt(sg), 0);
+  const trench   = segs.some(sg => _CREW_TRENCH_SEGS.includes(sg.type));
+  const crossing = segs.some(sg => _CREW_CROSSING_SEGS.includes(sg.type));
+  const surfaceFt = segs.filter(sg => !_CREW_TRENCH_SEGS.includes(sg.type) &&
+                                      !_CREW_CROSSING_SEGS.includes(sg.type))
+                        .reduce((sum, sg) => sum + _crewSegFt(sg), 0);
+  const trenchFt  = segs.filter(sg => _CREW_TRENCH_SEGS.includes(sg.type))
+                        .reduce((sum, sg) => sum + _crewSegFt(sg), 0);
+  const longRun = surfaceFt > _CREW_LONG_RUN_FT;
+
+  const reasons = [];
+  if (trench)   reasons.push('trenching');
+  if (crossing) reasons.push('pull crosses between spaces');
+  if (!trench && !crossing && longRun) reasons.push('conduit run over ' + _CREW_LONG_RUN_FT + ' ft');
+
+  const required = trench || crossing;             // longRun is preferred, not required
+  const size     = (required || longRun) ? 2 : 1;
+  // Trenching is difficult by default — it is the one job type Jonathan named as
+  // always needing him. Still overridable; this is a default, not a lock.
+  const difficult = (lead && lead.crewDifficult !== undefined) ? !!lead.crewDifficult : trench;
+
+  // ── HOURS (Jonathan's actual numbers, 2026-07-28) ──
+  // TWO PEOPLE: 1.0 hr flat out to 10 ft — one works the panel, one works the
+  // charger, and the walk between them is noise. Distance only starts costing at
+  // 20 ft, then +15 min per additional 10 ft.
+  // ONE PERSON: 1.5 hr inside 5 ft, because he is doing both ends himself. Then
+  // +30 min per 10 ft — twice the two-person rate, which is the whole point.
+  // An earlier version applied a flat 1.5x multiplier to a 3-hour baseline and
+  // produced 4.5 hours for a 15 ft garage run. That was wrong: the multiplier
+  // describes the SHORT job, and distance scales differently for one vs two.
+  const runFt = totalFt - trenchFt;   // trenching is timed separately below
+  // Hours must follow the EFFECTIVE crew size, not the derived one. Overriding a
+  // job to two people has to shorten it — otherwise the override changes who goes
+  // but not how long the day is, which is the whole reason for overriding.
+  const effSize = (lead && typeof lead.crewSize === 'number' && lead.crewSize > 0)
+    ? lead.crewSize : size;
+  const hoursBase = effSize >= 2
+    ? 1.0 + Math.max(0, Math.ceil((runFt - 10) / 10)) * 0.25
+    : 1.5 + Math.max(0, Math.ceil((runFt -  5) / 10)) * 0.50;
+  // Difficult runs — extra bends, awkward obstacles — cost roughly the same
+  // ratio as distance does: half an hour with two people, a full hour solo.
+  const hoursDifficult = difficult ? (effSize >= 2 ? 0.5 : 1.0) : 0;
+  // Trenching sits outside the install formula entirely; hand-digging in
+  // particular is nothing like pulling wire. Rates carried over from the
+  // original estimateJobDuration, which was tuned against real jobs.
+  let hoursTrench = 0;
+  segs.forEach(sg => {
+    const ft = _crewSegFt(sg);
+    if (sg.type === 'hand-trench' || sg.type === 'hand-dig') hoursTrench += (ft / 10) * 0.75;
+    else if (sg.type === 'machine-trench') hoursTrench += 1.5 + (ft / 10) * 0.4;
+  });
+  const hours = Math.round((hoursBase + hoursDifficult + hoursTrench) * 4) / 4;
+
+  return {
+    size, effSize, required, hours, totalFt, runFt, trench, crossing, longRun, difficult,
+    hoursBase, hoursDifficult, hoursTrench,
+    reasons
+  };
+}
+
+// Effective values — a manual override always wins over the derivation.
+function getJobCrewSize(lead) {
+  if (lead && typeof lead.crewSize === 'number' && lead.crewSize > 0) return lead.crewSize;
+  return deriveJobCrew(lead).size;
+}
+// Difficult = "Jonathan has to be on this one". Explicit setting wins; otherwise
+// trenching defaults it true.
+//
+// ⚠ REMOVED 2026-07-28: there used to be a separate jobNeedsLead() / "lead hand
+// required" chip. It was deleted the same day it shipped. GreenKey never works
+// without a lead on site, so the flag was true for EVERY job — a constant, not a
+// constraint, and constants are noise in a scheduler. The question scheduling
+// actually needs answered is narrower: can this run WITHOUT Jonathan, so his day
+// is free for walkdowns? That is exactly what `difficult` already answers.
+// Do not reintroduce a licensing or supervision field here — the CRM should not
+// become a record of who supervised what. That is a different document with a
+// different audience.
+function isJobDifficult(lead) {
+  if (lead && lead.crewDifficult !== undefined) return !!lead.crewDifficult;
+  return deriveJobCrew(lead).trench;
+}
+function getJobHours(lead) {
+  if (lead && typeof lead.estHours === 'number' && lead.estHours > 0) return lead.estHours;
+  const d = deriveJobCrew(lead);
+  // Fall back to the old per-job-type estimate when there is no quote geometry to
+  // read — a service upgrade with no run segments should still say 5 hours.
+  if (!_crewSegs(lead).length && typeof estimateJobDuration === 'function') {
+    try { return estimateJobDuration(lead); } catch (_) {}
+  }
+  return d.hours;
+}
+function setJobCrewField(leadId, field, value) {
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return;
+  if (value === '' || value === null || value === undefined) delete arr[i][field];
+  else if (field === 'crewDifficult') arr[i][field] = !!value;
+  else arr[i][field] = parseFloat(value) || undefined;
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch (_) {}
+  try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch (_) {}
+}
+
 function estimateJobDuration(lead) {
   const jobType = lead.jobType || '';
   if (jobType === 'service-upgrade') return 5.0;
@@ -19027,7 +19212,10 @@ function renderSchedulerPage() {
   // Init durations for any new jobs
   jobs.forEach(l => {
     if (_sched.durations[l.id] === undefined) {
-      _sched.durations[l.id] = estimateJobDuration(l);
+      // getJobHours honours a manual override, then the crew-geometry derivation,
+      // and only falls back to the old per-job-type guess when there is no quote
+      // run data to read (2026-07-28).
+      _sched.durations[l.id] = (typeof getJobHours === 'function') ? getJobHours(l) : estimateJobDuration(l);
     }
   });
 
@@ -19089,6 +19277,11 @@ function renderSchedulerPage() {
           else if (_tw.latestStart)   _twLabel = `🕘 ≤ ${_tw.latestStart}`;
         }
         const _twChip = `<span class="chip${_twHas?' chip-info':''}" style="font-size:10.5px;cursor:pointer;${_twHas?'background:rgba(52,152,219,0.12);color:#3498db':''}" onclick="event.stopPropagation();editJobTimeWindow('${l.id}')" title="${_twHas ? 'Edit the customer time window. Click to change.' : 'Customer time window not set. Click to add an earliest or latest arrival constraint.'}">${_twLabel}</span>`;
+        // Crew chip — the binding constraint on this business is people, not
+        // calendar space, so it belongs on the card next to the duration.
+        const _cSize = (typeof getJobCrewSize==='function') ? getJobCrewSize(l) : 1;
+        const _cDiff = (typeof isJobDifficult==='function') && isJobDifficult(l);
+        const crewChip = `<span class="chip" style="font-size:10.5px;${_cSize>1?'background:rgba(52,152,219,.12);color:#3498db':''}" title="${_cSize} ${_cSize===1?'person':'people'}${_cDiff?' · difficult, needs Jonathan on site (his day is not free)':''}">👥 ${_cSize}${_cDiff?' ⚑':''}</span>`;
         return `<div class="sched-card${isScheduled?' sched-card-done':''}" id="spool-${l.id}" style="${isExcluded?'opacity:0.45;background:var(--bg-elevated)':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
             <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
@@ -19099,7 +19292,7 @@ function renderSchedulerPage() {
               <div style="flex:1">
                 <div style="font-weight:500;font-size:13.5px">${escHtml(name)}</div>
                 <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(addr)}</div>
-                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${prereqChips}${overrideChip}${inTodayChip}${_twChip}</div>
+                <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${typeChip(l.jobType)}${sourceChip(l.source)}${crewChip}${prereqChips}${overrideChip}${inTodayChip}${_twChip}</div>
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
