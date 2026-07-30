@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -15740,7 +15740,38 @@ function createFieldRevisionRequest(jobId, description, quoteId) {
 }
 
 // ── BADGE UPDATERS ──
+// The Calls badge was declared as a literal '0' in the NAV table and nothing
+// ever wrote to it — so it read zero while twelve calls sat waiting (2026-07-30).
+// Counts the same thing the Calls page header does: calls still carrying an open
+// follow-up task. Amber, not red: a call needing a callback is work to do, not an
+// alarm. Rolled into updateTaskBadge() on purpose — both read the task list, so
+// they can never disagree about what "outstanding" means.
+function updateCallsBadge() {
+  try {
+    const openIds = new Set(getTasks()
+      .filter(t => t.status !== 'done' && String(t.id || '').startsWith('call-'))
+      .map(t => String(t.id).replace(/^call-/, '')));
+    if (!openIds.size) {
+      document.querySelectorAll('[data-page="calls"] .nbadge').forEach(b => {
+        b.textContent = '0';
+        b.style.background = 'var(--border)';
+        b.style.color = 'var(--text-muted)';
+      });
+      return;
+    }
+    // Count against the stored call records, so the badge matches the list the
+    // user actually sees rather than counting orphaned tasks too.
+    const n = getCalls().filter(c => openIds.has(String(c.id))).length;
+    document.querySelectorAll('[data-page="calls"] .nbadge').forEach(b => {
+      b.textContent = String(n);
+      b.style.background = n ? 'var(--amber)' : 'var(--border)';
+      b.style.color = n ? '#0f1117' : 'var(--text-muted)';
+    });
+  } catch (e) { console.warn('[GK] calls badge failed:', e); }
+}
+
 function updateTaskBadge() {
+  try { updateCallsBadge(); } catch (_) {}
   const tasks = getTasks();
   const today = new Date().toISOString().slice(0,10);
   const open = tasks.filter(t=>t.status!=='done').length;
@@ -24490,6 +24521,7 @@ function renderCallsPage() {
   // saying what.
   const openCount   = calls.filter(c => openIds.has(String(c.id))).length;
   const orphanCount = Math.max(0, openTasks.length - openCount);
+  try { updateCallsBadge(); } catch (_) {}
   el.innerHTML = `<div style="margin-bottom:12px;font-size:12.5px;color:var(--text-muted);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <label style="display:flex;align-items:center;gap:5px;cursor:pointer" title="Hide calls that have already been handled. They stay in the log either way — this is a filter, not a delete.">
         <input type="checkbox" ${_callsOnlyOpen?'checked':''} onchange="_callsOnlyOpen=this.checked;renderCallsPage()" style="accent-color:var(--green);cursor:pointer">
