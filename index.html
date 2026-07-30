@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1976,6 +1976,9 @@ const CONSENT_STATUSES = {
   WEB_FORM: 'web_form',               // greenkey-usa.com form with checkbox
   VERBAL_PHONE: 'verbal_phone',       // live phone call using verbal script below
   EMAIL_REPLY: 'email_reply',         // customer replied "yes" to an opt-in email
+  // Customer texted US — either replying to our missed-call auto-text or writing
+  // in cold. Transactional consent only; NOT written consent for marketing.
+  SMS_REPLY: 'sms_reply',
   OPTED_OUT: 'opted_out'              // STOP/UNSUBSCRIBE received
 };
 
@@ -1986,6 +1989,7 @@ const CONSENT_LABELS = {
   web_form:        'Website form',
   verbal_phone:    'Verbal (phone call)',
   email_reply:     'Email reply',
+  sms_reply:       'Texted us (transactional only)',
   opted_out:       'OPTED OUT — do not contact'
 };
 
@@ -4869,6 +4873,34 @@ function getQQPricing(){
     // Panel Replacement — base labor + per-breaker re-termination + always-included surge protector
     // 2026-05-02: settled at $1800 — typical 200A swap with 12 breakers + surge + permit lands ~$3023, on target.
     panelReplaceBase:1800, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    // ⚠ REPLACEMENT BREAKERS (added 2026-07-30). panelReplacePerBreaker is
+    // LABOUR — re-terminating a conductor. It does not buy the breaker, and
+    // panelHardware200A is $310, which is the load centre alone (HOM4080M200PC
+    // is $309.71 in the Capital Electric catalogue). So a panel swap quoted
+    // NOTHING for its breakers, and on a brand change — Bryant to Homeline,
+    // which is most of them — every single one is new. Found on a 30-circuit
+    // relocation where ~$347 of breakers had silently vanished from the price.
+    //
+    // Blended cost per device: singles $7.61, tandems $17.57, 2-poles $18.04,
+    // plus fillers. A typical residential mix lands near $12; a 2-pole-heavy
+    // panel runs higher and a lighting panel lower. Deliberately a blend — this
+    // is the QUICK quote, and asking for a breaker-by-breaker breakdown here
+    // would defeat the point. Use the Detailed quote when the mix is unusual.
+    //
+    // GFCI/AFCI breakers are NOT double-counted: the AFCI/GFCI field charges
+    // $100 each ON TOP of this, which is the right shape — $12 buys a breaker,
+    // the extra $100 is the upgrade to a $75 dual-function device plus its
+    // handling.
+    panelBreakerEach:12,
+    // ── Junction box + Polaris (insulated multi-tap) lugs (2026-07-30) ──
+    // Jonathan had been hand-entering this as a $50-75 "difficulty fee". His
+    // actual COST is $15 the box and $15 a lug, so a routine two-lug splice is
+    // $45 of material — and he had been charging $50 for it, i.e. working for
+    // $5. Priced as cost + the standard 30% used everywhere else in this table,
+    // so it can never drift from the rest of the pricing again.
+    //   2 lugs → (15 + 30) × 1.30 = $58.50    3 lugs → (15 + 45) × 1.30 = $78.00
+    // Lug count scales because a 2-wire splice needs 2 and a 3-wire needs 3.
+    jbBoxCost:15, jbLugCost:15,
     panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
     // AFCI/GFCI dual-function breaker upgrade — optional add-on for panel swaps.
     // $100 per upgraded circuit. The math (Capital Electric pricing data):
@@ -6280,6 +6312,26 @@ function renderQuickQuoteForm(q){
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Junction box + Polaris lugs</div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
+          <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Custom add-on</div>
+          <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp" type="text" id="qq-custom-label" value="${escHtml(qq.customLabel||'')}" placeholder="e.g. Paint pedestal post" oninput="onQQChange('${q.id}')" style="width:190px">
+          <input class="li-inp num" type="number" id="qq-custom-amt" value="${qq.customAmount||0}" min="0" step="25" oninput="onQQChange('${q.id}')" style="width:90px">
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Round-trip drive time (min)</div>
           <div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
@@ -6447,6 +6499,26 @@ function _renderQQ_HVAC(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Junction box + Polaris lugs</div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
+          <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Custom add-on</div>
+          <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp" type="text" id="qq-custom-label" value="${escHtml(qq.customLabel||'')}" placeholder="e.g. Paint pedestal post" oninput="onQQChange('${q.id}')" style="width:190px">
+          <input class="li-inp num" type="number" id="qq-custom-amt" value="${qq.customAmount||0}" min="0" step="25" oninput="onQQChange('${q.id}')" style="width:90px">
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Round-trip drive time (min)</div>
           <div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div>
         </div>
@@ -6560,6 +6632,26 @@ function _renderQQ_CircuitReplacement(q) {
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
       </div>
       <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Junction box + Polaris lugs</div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
+          <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Custom add-on</div>
+          <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp" type="text" id="qq-custom-label" value="${escHtml(qq.customLabel||'')}" placeholder="e.g. Paint pedestal post" oninput="onQQChange('${q.id}')" style="width:190px">
+          <input class="li-inp num" type="number" id="qq-custom-amt" value="${qq.customAmount||0}" min="0" step="25" oninput="onQQChange('${q.id}')" style="width:90px">
+        </div>
+      </div>
+      <div class="qq-row">
         <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
         <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="qq-travel-auto" onclick="autoCalcTravel('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="qq-travel-min" value="${qq.travelMinutes||0}" min="0" step="15" oninput="onQQChange('${q.id}')" style="width:90px"></div>
       </div>
@@ -6662,8 +6754,9 @@ function _renderQQ_PanelReplacement(q) {
       <div class="qq-title">Pricing Breakdown</div>
       <div style="font-size:11.5px;color:var(--text-muted);line-height:1.55">
         Base panel-swap labor: <strong>$${getQQPricing().panelReplaceBase.toLocaleString()}</strong> (covers typical access surprises, full-day work).<br>
-        Per-breaker re-termination: <strong>$${getQQPricing().panelReplacePerBreaker}</strong> × ${breakerCount} = $${(getQQPricing().panelReplacePerBreaker * breakerCount).toLocaleString()}.<br>
-        Hardware (panel itself + main breaker + ground bar kit) added as materials with markup.<br>
+        Per-breaker re-termination <em>(labour only — does not buy the breaker)</em>: <strong>$${getQQPricing().panelReplacePerBreaker}</strong> × ${breakerCount} = $${(getQQPricing().panelReplacePerBreaker * breakerCount).toLocaleString()}.<br>
+        Replacement breakers: <strong>$${getQQPricing().panelBreakerEach}</strong> each × ${breakerCount} + 30% = $${Math.round(breakerCount * getQQPricing().panelBreakerEach * 1.3).toLocaleString()} <em>(blended: singles, tandems and 2-poles)</em>.<br>
+        Hardware (panel + main breaker + ground bar kit) added as materials with markup.<br>
         Whole-home surge protector: <strong>$${getQQPricing().panelSurgeProtector}</strong> (default-included; uncheck below to remove).
       </div>
     </div>
@@ -6700,6 +6793,26 @@ function _renderQQ_PanelReplacement(q) {
       <div class="qq-row">
         <div><div class="qq-lbl">Difficulty Fee</div><div class="qq-sub">Stucco / brick exterior, attic feeders, AFCI/GFCI breaker upgrades, etc.</div></div>
         <input class="li-inp num" type="number" id="qq-difficulty" value="${qq.difficultyFee||0}" min="0" step="50" oninput="onQQChange('${q.id}')" style="width:90px">
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Junction box + Polaris lugs</div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
+          <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Custom add-on</div>
+          <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp" type="text" id="qq-custom-label" value="${escHtml(qq.customLabel||'')}" placeholder="e.g. Paint pedestal post" oninput="onQQChange('${q.id}')" style="width:190px">
+          <input class="li-inp num" type="number" id="qq-custom-amt" value="${qq.customAmount||0}" min="0" step="25" oninput="onQQChange('${q.id}')" style="width:90px">
+        </div>
       </div>
       <div class="qq-row">
         <div><div class="qq-lbl">Round-trip drive time (min)</div><div class="qq-sub">60 min round trip free · +$80 per 30 min, rounded to nearest · Calculated: <span id="qq-travel-calc" style="color:var(--green);font-weight:600">$${Math.round(Math.max(0,(qq.travelMinutes||0)-60)/30)*80}</span></div></div>
@@ -7157,16 +7270,30 @@ function _additionalTaskLabel(t) {
 // tasks — so the lines always reconcile to the L&M total shown/printed.
 function _scopeBreakdownRows(q, combinedLM) {
   const tasks = (q && q.type !== 'detailed' && Array.isArray(q.additionalTasks)) ? q.additionalTasks : [];
-  if (!tasks.length) return null;
+  // Bail only when there is nothing extra to itemise AT ALL. This used to return
+  // null on !tasks.length, which would have hidden a custom add-on on every
+  // quote that had no additional scopes — i.e. most of them.
+  const _hasCustom = !!((q?.qq?.customLabel || '').trim()) && (parseFloat(q?.qq?.customAmount) || 0) > 0;
+  if (!tasks.length && !_hasCustom) return null;
   const taskRows = tasks.map((t, i) => ({
     desc: `Scope ${i + 2} — ${_additionalTaskLabel(t)}`,
     amt: Math.ceil(_calcAdditionalTaskLM(t))
   }));
   const tasksSum = taskRows.reduce((s, r) => s + r.amt, 0);
   const jt = (typeof getJobType === 'function') ? getJobType(q.jobType) : null;
+  // A custom add-on is something the customer is BUYING — painting a post, a
+  // finish they asked for — so it prints under its own name at its own price.
+  // That is the whole difference between it and the difficulty fee, which is us
+  // pricing awkwardness and belongs inside the total unnamed. An itemised extra
+  // someone requested is easier to say yes to than a total that quietly grew.
+  const _cAmt = Math.ceil(parseFloat(q?.qq?.customAmount) || 0);
+  const _cLbl = (q?.qq?.customLabel || '').trim();
+  const customRow = (_cLbl && _cAmt > 0) ? [{ desc: _cLbl, amt: _cAmt }] : [];
+  const customSum = customRow.reduce((s, r) => s + r.amt, 0);
   return [
-    { desc: `Scope 1 — ${jt ? jt.label : 'Primary installation'}`, amt: Math.ceil(combinedLM) - tasksSum },
-    ...taskRows
+    { desc: `Scope 1 — ${jt ? jt.label : 'Primary installation'}`, amt: Math.ceil(combinedLM) - tasksSum - customSum },
+    ...taskRows,
+    ...customRow
   ];
 }
 
@@ -7501,6 +7628,24 @@ function resetExclusionsToAuto(qid) {
 
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
+  // ── Shared add-ons (2026-07-30) ──
+  // Read here rather than in each of the four job-type change handlers. Those
+  // handlers already drifted from one another once, and every one of them ends
+  // up in this function anyway — so this is the one place both new add-ons can
+  // never be forgotten for a job type.
+  const _jbLugs = Math.max(0, parseInt(document.getElementById('qq-jb-lugs')?.value) || 0);
+  const _jbFee  = _jbLugs > 0
+    ? Math.round(((p.jbBoxCost || 0) + (p.jbLugCost || 0) * _jbLugs) * 1.30 * 100) / 100
+    : 0;
+  const _cLabel = (document.getElementById('qq-custom-label')?.value || '').trim().slice(0, 80);
+  const _cAmt   = Math.max(0, parseFloat(document.getElementById('qq-custom-amt')?.value) || 0);
+  // A custom add-on only counts when it has BOTH a name and a number. An amount
+  // with no label would print as an unexplained charge on the customer's quote,
+  // which is the one thing this feature exists to avoid.
+  const _cFee = (_cLabel && _cAmt > 0) ? _cAmt : 0;
+  lm = lm + _jbFee + _cFee;
+  qqPatch = { ...(qqPatch || {}), jbLugs: _jbLugs, jbFee: _jbFee,
+              customLabel: _cLabel, customAmount: _cAmt };
   // Roll any additional tasks (HVAC circuit add-ons, etc.) into the L&M.
   // Pricing for each sub-task is computed via _calcAdditionalTaskLM and
   // already excludes base install / permit since those are covered here.
@@ -7712,6 +7857,10 @@ function _onQQChange_PanelReplacement(qid) {
   // Panel hardware — use 200A by default, 100A for smaller services
   const hardwareCost = serviceAmps >= 200 ? p.panelHardware200A : p.panelHardware100A;
   lm += Math.round(hardwareCost * 1.30 * 100) / 100; // 30% markup on hardware
+  // Replacement breakers (2026-07-30) — see panelBreakerEach. Scales with the
+  // breaker count because that is what actually drives the cost.
+  const breakerHardware = Math.round(breakerCount * (p.panelBreakerEach || 0) * 1.30 * 100) / 100;
+  lm += breakerHardware;
   // Whole-home surge protector (default-included)
   if (includeSurge) lm += p.panelSurgeProtector;
   // AFCI / GFCI dual-function breaker upgrade (opt-in)
@@ -8109,6 +8258,15 @@ function autoInclusions(q){
       taskLines.forEach(l => lines.push(l));
     });
   }
+    // Both new add-ons are things the customer is PAYING for, so they belong in
+  // Inclusions. An earlier pass of this change put them in autoExclusions by
+  // mistake — which would have charged for a junction box and simultaneously
+  // told the customer it wasn't included (2026-07-30).
+  if ((q.qq?.jbLugs || 0) > 0) {
+    lines.push('• Junction box and insulated multi-tap connectors for splicing into the existing conductors');
+  }
+  const _ciLbl = (q.qq?.customLabel || '').trim();
+  if (_ciLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) lines.push('• ' + _ciLbl);
   return lines.join('\n');
 }
 
@@ -8230,10 +8388,10 @@ function _detailedLineRowsHTML(q){
       if(hi>=0) sum+=calcLine(ln);
       html+=`<tr>
         <td><input class="li-inp mat-ac-input" data-qid="${q.id}" data-idx="${i}" value="${(ln.desc||'').replace(/"/g,'&quot;')}" placeholder="Type to search materials..." style="min-width:140px" autocomplete="off" oninput="matAcOpen(this)" onfocus="matAcOpen(this)" onkeydown="matAcKey(event,this)" onblur="setTimeout(matAcClose,180)" onchange="updateLine('${q.id}',${i},'desc',this.value)"></td>
-        <td><input class="li-inp num" type="number" value="${ln.qty||1}" min="0" step="0.5" oninput="updateLine('${q.id}',${i},'qty',this.value)"></td>
+        <td><input class="li-inp num" type="number" value="${Number.isFinite(parseFloat(ln.qty))?parseFloat(ln.qty):1}" min="0" step="0.5" oninput="updateLine('${q.id}',${i},'qty',this.value)"></td>
         <td><select class="li-inp" style="width:82px" onchange="updateLine('${q.id}',${i},'unit',this.value)">${['each','per foot','per box','per job'].map(u=>`<option${u===ln.unit?' selected':''}>${u}</option>`).join('')}</select></td>
         <td><input class="li-inp num" type="number" value="${ln.unitCost||0}" min="0" step="0.01" oninput="updateLine('${q.id}',${i},'unitCost',this.value)"></td>
-        <td><input class="li-inp num" type="number" value="${ln.markup||30}" min="0" max="200" step="5" oninput="updateLine('${q.id}',${i},'markup',this.value)"></td>
+        <td><input class="li-inp num" type="number" value="${Number.isFinite(parseFloat(ln.markup))?parseFloat(ln.markup):30}" min="0" max="200" step="5" oninput="updateLine('${q.id}',${i},'markup',this.value)" title="Set 0 when the unit cost you entered ALREADY includes markup"></td>
         <td style="font-family:var(--mono);text-align:right;font-size:12px;color:var(--green)" id="li-ext-${i}">${fmt$(calcLine(ln))}</td>
         <td><button class="li-del" onclick="removeLine('${q.id}',${i})">×</button></td>
       </tr>`;
@@ -27622,8 +27780,18 @@ async function hydrateConsentFromServer(customerId) {
   if (!_smsConfigured()) return;
   try {
     const bearer = await _acquireSMSToken();
+    // Send the PHONE as well as the customer id (2026-07-30). Consent captured
+    // before a job existed — the missed-call auto-reply, or a reply to it — is
+    // filed under customer_id 'unknown' with only the phone to identify it. The
+    // worker has always supported a phone fallback; the CRM never used it, so
+    // that consent was invisible and a customer we had been texting for two days
+    // still showed "No SMS consent on file" the moment their job was created.
+    const _c = getCustomer(customerId);
+    const _p = (_c && _c.phone) ? String(_c.phone).replace(/\D/g, '').slice(-10) : '';
+    const _e164 = _p.length === 10 ? '+1' + _p : '';
     const resp = await fetch(
-      SMS_WORKER_URL.replace(/\/$/,'') + '/consent/status?customerId=' + encodeURIComponent(customerId),
+      SMS_WORKER_URL.replace(/\/$/,'') + '/consent/status?customerId=' + encodeURIComponent(customerId) +
+      (_e164 ? '&phone=' + encodeURIComponent(_e164) : ''),
       { headers: { 'Authorization': 'Bearer ' + bearer } }
     );
     if (!resp.ok) return;
@@ -27655,6 +27823,8 @@ async function hydrateConsentFromServer(customerId) {
           const src = data.sms.source || '';
           if (src === 'email_button_accept')      localStatus = CONSENT_STATUSES.EMAIL_REPLY;
           else if (src === 'sms_start')            localStatus = CONSENT_STATUSES.EMAIL_REPLY;
+          else if (src === 'sms_reply')            localStatus = CONSENT_STATUSES.SMS_REPLY;
+          else if (src === 'missed_call_autoreply')localStatus = CONSENT_STATUSES.SMS_REPLY;
           else if (src.startsWith('crm_manual_')) {
             if (src === 'crm_manual_verbal')       localStatus = CONSENT_STATUSES.VERBAL_PHONE;
             else if (src === 'crm_manual_partner') localStatus = CONSENT_STATUSES.PARTNER_INTAKE;
