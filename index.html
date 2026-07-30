@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4917,6 +4917,13 @@ function getQQPricing(){
     panelAFCIUpgradePerBreaker:100,
     // Existing add-ons
     tandemBreaker:40, post:150,
+    // Pedestal set on a concrete pad (2026-07-30). ⚠ PLACEHOLDER — Jonathan has
+    // not given a number yet; 250 is a guess sitting above the $150 post because
+    // a pedestal is more hardware and more setting time. CONFIRM BEFORE USE.
+    // A 'custom' mount (light pole, bracket, etc.) is deliberately $0 — it is
+    // described in the scope and priced with the Custom add-on or Difficulty fee,
+    // because there is no sensible standard price for "something different".
+    pedestalPad:250,
     // Eaton BR panel + EV load ⇒ BRH260 required (BR260s have the potential to
     // fail under continuous EV loads). Our hard cost delta is ~$67 (BRH ~$87 vs
     // BR ~$20), but this is deliberately priced at $50, NOT cost-plus: a simple
@@ -6293,15 +6300,13 @@ function renderQuickQuoteForm(q){
           : `<div class="fg"><div class="fl">Charger Mount</div>
               <select class="fsel" id="qq-mount" onchange="onQQChange('${q.id}')">
                 <option value="wall"${qq.mountType==='wall'?' selected':''}>Wall mount (included)</option>
-                <option value="post"${qq.mountType==='post'?' selected':''}>Post — 4×4 treated w/ sonotube (+$150)</option>
+                <option value="post"${qq.mountType==='post'?' selected':''}>Post — 4×4 treated w/ sonotube (+$${getQQPricing().post})</option>
+                <option value="pedestal-pad"${qq.mountType==='pedestal-pad'?' selected':''}>Pedestal on a concrete pad (+$${getQQPricing().pedestalPad})</option>
+                <option value="custom"${qq.mountType==='custom'?' selected':''}>Custom — describe below</option>
               </select>
+              ${qq.mountType==='custom'?`<input class="li-inp" type="text" id="qq-mount-custom" value="${escHtml(qq.mountCustom||'')}" placeholder="e.g. bracket-mounted to existing light pole" oninput="onQQChange('${q.id}')" style="width:100%;margin-top:6px" title="Goes into the scope of work. Price it with the Custom add-on or Difficulty fee below — this field adds no cost on its own.">` : ''}
             </div>`
         }
-        <div class="fg"><div class="fl">Tandem Breakers</div>
-          <select class="fsel" id="qq-tandem" onchange="onQQChange('${q.id}')">
-            ${[0,1,2,3].map(v=>`<option value="${v}"${qq.tandemBreakers===v?' selected':''}>${v===0?'None':v+' breaker'+(v>1?'s':'')+' (+$'+(v*40)+')'}</option>`).join('')}
-          </select>
-        </div>
       </div>
     </div>
     <div class="qq-section">
@@ -6312,8 +6317,17 @@ function renderQuickQuoteForm(q){
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Tandem Breakers</div>
+          <div class="qq-sub">Frees panel space for the new circuit · $${getQQPricing().tandemBreaker} each</div>
+        </div>
+        <select class="fsel" id="qq-tandem" onchange="onQQChange('${q.id}')" style="width:150px">
+          ${[0,1,2,3].map(v=>`<option value="${v}"${(qq.tandemBreakers||0)===v?' selected':''}>${v===0?'None':v+' breaker'+(v>1?'s':'')+' (+$'+(v*getQQPricing().tandemBreaker)+')'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Junction box + Polaris lugs</div>
-          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span id="qq-jb-calc" style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
@@ -6499,8 +6513,17 @@ function _renderQQ_HVAC(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Tandem Breakers</div>
+          <div class="qq-sub">Frees panel space for the new circuit · $${getQQPricing().tandemBreaker} each</div>
+        </div>
+        <select class="fsel" id="qq-tandem" onchange="onQQChange('${q.id}')" style="width:150px">
+          ${[0,1,2,3].map(v=>`<option value="${v}"${(qq.tandemBreakers||0)===v?' selected':''}>${v===0?'None':v+' breaker'+(v>1?'s':'')+' (+$'+(v*getQQPricing().tandemBreaker)+')'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Junction box + Polaris lugs</div>
-          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span id="qq-jb-calc" style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
@@ -6633,8 +6656,17 @@ function _renderQQ_CircuitReplacement(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Tandem Breakers</div>
+          <div class="qq-sub">Frees panel space for the new circuit · $${getQQPricing().tandemBreaker} each</div>
+        </div>
+        <select class="fsel" id="qq-tandem" onchange="onQQChange('${q.id}')" style="width:150px">
+          ${[0,1,2,3].map(v=>`<option value="${v}"${(qq.tandemBreakers||0)===v?' selected':''}>${v===0?'None':v+' breaker'+(v>1?'s':'')+' (+$'+(v*getQQPricing().tandemBreaker)+')'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Junction box + Polaris lugs</div>
-          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span id="qq-jb-calc" style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
@@ -6796,8 +6828,17 @@ function _renderQQ_PanelReplacement(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Tandem Breakers</div>
+          <div class="qq-sub">Frees panel space for the new circuit · $${getQQPricing().tandemBreaker} each</div>
+        </div>
+        <select class="fsel" id="qq-tandem" onchange="onQQChange('${q.id}')" style="width:150px">
+          ${[0,1,2,3].map(v=>`<option value="${v}"${(qq.tandemBreakers||0)===v?' selected':''}>${v===0?'None':v+' breaker'+(v>1?'s':'')+' (+$'+(v*getQQPricing().tandemBreaker)+')'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Junction box + Polaris lugs</div>
-          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
+          <div class="qq-sub">Splicing into existing conductors · box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost}/lug, +30% · <span id="qq-jb-calc" style="color:var(--green);font-weight:600">$${(qq.jbLugs>0)?(((getQQPricing().jbBoxCost)+(getQQPricing().jbLugCost)*(qq.jbLugs||0))*1.3).toFixed(2):'0.00'}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
@@ -7109,6 +7150,9 @@ function onQQChange(qid){
   });
   if(isNema) lm+=(nemaLocation==='outside'?p.nema1450Outside:p.nema1450Inside);
   if(!isNema&&mountType==='post') lm+=p.post;
+  if(!isNema&&mountType==='pedestal-pad') lm+=p.pedestalPad;
+  // 'custom' adds nothing here on purpose — see pedestalPad comment.
+  const mountCustom = (document.getElementById('qq-mount-custom')?.value || '').trim().slice(0,120);
   if(tandemBreakers>0) lm+=tandemBreakers*p.tandemBreaker;
   // BRH260 auto-adder — an Eaton BR panel on an EV load always gets a BRH
   // breaker. Applied automatically so it no longer depends on someone
@@ -7122,6 +7166,10 @@ function onQQChange(qid){
   if(_qqBRH) lm += p.brhBreaker;
   lm+=difficultyFee;
   lm+=travelAdder;
+  // Junction box + Polaris lugs, and any custom add-on. Added BEFORE the manual
+  // L&M override below, so an override still replaces everything as intended.
+  const _evAddOns = _qqReadAddOns();
+  lm += _evAddOns.total;
   (q.qq?.extras||[]).forEach(ex=>{lm+=parseFloat(ex.price)||0;});
   if(travelFeeType==='baked'&&travelFee>0) lm+=travelFee;
   // If a manual L&M total override is present, it replaces the computed lm.
@@ -7138,7 +7186,7 @@ function onQQChange(qid){
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
-    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran},
+    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran,mountCustom,..._evAddOns.patch},
     permitFee,
     baseInstall,
     laborAndMaterials:lm,
@@ -7626,6 +7674,35 @@ function resetExclusionsToAuto(qid) {
   toast('Exclusions regenerated', 'success');
 }
 
+// ── SHARED QUICK-QUOTE ADD-ONS (2026-07-30) ──
+// ⚠ MUST be called from EVERY job-type change handler, not just the ones that
+// route through _finalizeQQTotals. onQQChange() — the EV/NEMA handler, and the
+// busiest one — computes its own totals and writes its own qq object; it never
+// calls _finalizeQQTotals. So a first pass that hooked only into that function
+// looked completely dead on EV quotes: the fee never reached the total AND the
+// fields blanked on refresh, because the values were never persisted either.
+// Both symptoms, one cause. If a new job type is ever added, call this.
+function _qqReadAddOns() {
+  const p = getQQPricing();
+  const lugs = Math.max(0, parseInt(document.getElementById('qq-jb-lugs')?.value) || 0);
+  const jbFee = lugs > 0
+    ? Math.round(((p.jbBoxCost || 0) + (p.jbLugCost || 0) * lugs) * 1.30 * 100) / 100
+    : 0;
+  const cLabel = (document.getElementById('qq-custom-label')?.value || '').trim().slice(0, 80);
+  const cAmt   = Math.max(0, parseFloat(document.getElementById('qq-custom-amt')?.value) || 0);
+  // Counts only with BOTH a name and a number — an unexplained charge on a
+  // customer's quote is the thing this feature exists to prevent.
+  const cFee = (cLabel && cAmt > 0) ? cAmt : 0;
+  // Repaint the figure the way the travel line does; computing it only at
+  // render time left it reading $0.00 while you typed.
+  const el = document.getElementById('qq-jb-calc');
+  if (el) el.textContent = '$' + jbFee.toFixed(2);
+  return {
+    total: jbFee + cFee,
+    patch: { jbLugs: lugs, jbFee, customLabel: cLabel, customAmount: cAmt }
+  };
+}
+
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
   // ── Shared add-ons (2026-07-30) ──
@@ -7633,19 +7710,9 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   // handlers already drifted from one another once, and every one of them ends
   // up in this function anyway — so this is the one place both new add-ons can
   // never be forgotten for a job type.
-  const _jbLugs = Math.max(0, parseInt(document.getElementById('qq-jb-lugs')?.value) || 0);
-  const _jbFee  = _jbLugs > 0
-    ? Math.round(((p.jbBoxCost || 0) + (p.jbLugCost || 0) * _jbLugs) * 1.30 * 100) / 100
-    : 0;
-  const _cLabel = (document.getElementById('qq-custom-label')?.value || '').trim().slice(0, 80);
-  const _cAmt   = Math.max(0, parseFloat(document.getElementById('qq-custom-amt')?.value) || 0);
-  // A custom add-on only counts when it has BOTH a name and a number. An amount
-  // with no label would print as an unexplained charge on the customer's quote,
-  // which is the one thing this feature exists to avoid.
-  const _cFee = (_cLabel && _cAmt > 0) ? _cAmt : 0;
-  lm = lm + _jbFee + _cFee;
-  qqPatch = { ...(qqPatch || {}), jbLugs: _jbLugs, jbFee: _jbFee,
-              customLabel: _cLabel, customAmount: _cAmt };
+  const _ao = _qqReadAddOns();
+  lm = lm + _ao.total;
+  qqPatch = { ...(qqPatch || {}), ...(_ao.patch) };
   // Roll any additional tasks (HVAC circuit add-ons, etc.) into the L&M.
   // Pricing for each sub-task is computed via _calcAdditionalTaskLM and
   // already excludes base install / permit since those are covered here.
@@ -8214,7 +8281,13 @@ function _autoScopePrimary(q){
   }
 
   // Default: EV Charger
-  const mount = qq.mountType==='post' ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.' : '';
+  const mount = qq.mountType==='post'
+      ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.'
+    : qq.mountType==='pedestal-pad'
+      ? ' The charger is mounted on a pedestal set on a concrete pad.'
+    : (qq.mountType==='custom' && (qq.mountCustom||'').trim())
+      ? ' The charger is mounted as follows: ' + (qq.mountCustom||'').trim().replace(/\.*$/, '') + '.'
+    : '';
   const wireOpt = _evnemaWire(qq);
   const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5);
   return `Furnish and install a dedicated 240-volt, 60-amp branch circuit from the main electrical panel in the ${loc} to the Level 2 EV charger location, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} Work includes mounting, connection, and setup of the charger.${mount} All work is performed to NEC and local code.`;
@@ -8290,6 +8363,16 @@ function autoExclusions(q){
   } else if (q.jobType === 'energy-management') {
     lines.push('• Energy management hardware (customer or program-supplied unless line-itemed below)');
     lines.push('• Any work outside the device install (panel changes, new circuits, etc.) — separate scope');
+  }
+  // Jonathan, 2026-07-30: "Painting a post cannot be warrantied work." Right —
+  // the two-year craftsmanship warranty covers workmanship on the electrical
+  // installation, and paint fails for reasons that have nothing to do with how
+  // well it was applied: sun, weather, the customer leaning a ladder on it. The
+  // add-on is still SOLD and still listed under Inclusions; this carves it out
+  // of the warranty specifically, rather than pretending it wasn't purchased.
+  const _cxLbl = (q.qq?.customLabel || '').trim();
+  if (_cxLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) {
+    lines.push('• Warranty coverage on "' + _cxLbl + '" — cosmetic and finish work is provided as-is and is not covered by the GreenKey craftsmanship warranty');
   }
   lines.push('• Drywall or wall repair','• Any electrical work not described above');
   if ((q.qq?.runSegs||[]).some(s => s.type && s.type.includes('trench'))) {
@@ -17768,6 +17851,8 @@ function estimateJobDuration(lead) {
     });
     // Mount type
     if (qq.mountType === 'post') hrs += 0.75;
+    else if (qq.mountType === 'pedestal-pad') hrs += 1.0;
+    else if (qq.mountType === 'custom') hrs += 1.0;
     // Tandem breakers
     if ((qq.tandemBreakers||0) > 0) hrs += 0.25;
     // Difficulty fee implies harder job
