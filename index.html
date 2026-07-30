@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-28i</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -24287,13 +24287,133 @@ function _callAgo(iso) {
   return d + (d === 1 ? ' day ago' : ' days ago');
 }
 
+// ═══════ CALLS PAGE: converse with people who have no job yet (2026-07-30) ═══════
+// Someone calls, misses, gets the auto text-back, and replies. Before this their
+// reply existed in three disconnected places: a row on this page, a thread with
+// no job to open, and Jonathan's personal message list via the owner relay.
+// Sherri could see none of it, and clicking the bell notice just closed with
+// "No matching job found" — technically honest, operationally a dead end.
+//
+// These conversations live under lead_id='unrouted' in the worker, so the thread
+// is fetched BY PHONE (worker-2026-07-30a added the phone filter — without it
+// one open thread would return every stranger's messages at once).
+//
+// Sending uses leadId:'unrouted' deliberately. The worker's send path upserts
+// phone_lead_map, and writing 'unrouted' there is harmless: it is what an
+// unknown number maps to anyway, and the moment a real job texts this number the
+// map is overwritten with the real id.
+let _callsOpenThread = null;
+let _callsOnlyOpen  = false;
+
+function toggleCallThread(key) {
+  _callsOpenThread = (_callsOpenThread === key) ? null : key;
+  renderCallsPage();
+  if (_callsOpenThread) loadCallThread(_callsOpenThread);
+}
+
+async function loadCallThread(key) {
+  const el = document.getElementById('callthread-' + key);
+  if (!el) return;
+  try {
+    const token = await _acquireSMSToken();
+    const e164  = key.length === 10 ? '+1' + key : key;
+    const url   = SMS_WORKER_URL.replace(/\/$/, '') +
+                  '/sms/thread?leadId=unrouted&phone=' + encodeURIComponent(e164);
+    const resp  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    const data  = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data?.error || 'Could not load the conversation');
+    const msgs = data.messages || [];
+    if (!msgs.length) {
+      el.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">No messages with this number yet. The first one you send starts the thread.</div>`;
+      return;
+    }
+    el.innerHTML = msgs.map(m => {
+      const out = m.direction === 'out';
+      const t   = m.created_at ? new Date(m.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+      return `<div style="display:flex;justify-content:${out?'flex-end':'flex-start'};margin:5px 0">
+        <div style="max-width:80%;padding:7px 10px;border-radius:10px;font-size:12.5px;line-height:1.45;
+             background:${out?'rgba(46,204,113,.12)':'var(--bg-elevated)'};border:1px solid ${out?'rgba(46,204,113,.3)':'var(--border)'}">
+          <div style="white-space:pre-wrap">${escHtml(m.body||'')}</div>
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">${escHtml(t)}${out&&m.status?' · '+escHtml(m.status):''}</div>
+        </div></div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.innerHTML = `<div style="font-size:12.5px;color:var(--red,#dc2626);padding:4px 0">${escHtml(e.message||'Could not load the conversation')}</div>`;
+  }
+}
+
+async function sendCallReply(key, digits) {
+  const inp = document.getElementById('callreply-' + key);
+  const msg = (inp?.value || '').trim();
+  if (!msg) return;
+  inp.disabled = true;
+  try {
+    const token = await _acquireSMSToken();
+    const e164  = digits.startsWith('+') ? digits : ('+1' + String(digits).replace(/\D/g,'').slice(-10));
+    const resp  = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ leadId: 'unrouted', to: e164, message: msg })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data?.error || 'Send failed');
+    inp.value = '';
+    toast('Sent', 'success');
+    loadCallThread(key);
+  } catch (e) {
+    toast(e.message || 'Send failed', 'error');
+  } finally {
+    if (inp) { inp.disabled = false; inp.focus(); }
+  }
+}
+
+// "Done" resolves the CRM-side follow-up TASK, not the worker's acked flag —
+// the poller already sets acked=1 the moment a call is imported, so that column
+// means "the CRM has seen this", never "a human dealt with it".
+function markCallHandled(callId) {
+  try {
+    if (typeof completeTask === 'function') completeTask('call-' + callId, 'Closed from the Calls page');
+    toast('Marked handled', 'success');
+  } catch (e) { console.warn('[GK] mark call handled failed:', e); }
+  renderCallsPage();
+  try { if (typeof _bellRefresh === 'function') _bellRefresh(); } catch (_) {}
+}
+
+// Promote a caller into a real job. Any texts already exchanged with this number
+// are pulled onto the new job's thread by the worker's adoption sweep as soon as
+// the job's thread is opened — nothing has to be copied by hand.
+function createJobFromCall(digits, name, callId) {
+  // Creating a job IS dealing with the call, so it clears the follow-up. This is
+  // a deliberate click, not an inference — which is the line Jonathan drew when
+  // he pushed back on auto-resolving tasks from bell acknowledgements.
+  if (callId) { try { if (typeof completeTask === 'function') completeTask('call-' + callId, 'Job created from the Calls page'); } catch (_) {} }
+  const parts = String(name || '').trim().split(/\s+/);
+  const pretty = (typeof _callPretty === 'function') ? _callPretty(digits) : digits;
+  navigate('jobs');
+  setTimeout(() => {
+    try {
+      S.drawerMode = 'new-lead';
+      showLeadForm({
+        customerPhone: pretty,
+        customerFirstName: parts[0] || '',
+        customerLastName:  parts.slice(1).join(' ') || '',
+        customerName: name || '',
+        source: 'Phone'
+      });
+    } catch (e) { console.warn('[GK] createJobFromCall failed:', e); }
+  }, 60);
+}
+
 function renderCallsPage() {
   const el = document.getElementById('calls-main'); if (!el) return;
-  const calls = getCalls().slice().sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 200);
+  const allCalls = getCalls().slice().sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 200);
   const openTasks = getTasks().filter(t => t.status !== 'done' && String(t.id || '').startsWith('call-'));
   const openIds = new Set(openTasks.map(t => String(t.id).replace(/^call-/, '')));
+  // The log only grows, so give it a way to show just what still needs doing.
+  const calls = _callsOnlyOpen ? allCalls.filter(c => openIds.has(String(c.id))) : allCalls;
 
-  if (!calls.length) {
+  if (!allCalls.length) {
     el.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:var(--text-muted)">
       <div style="font-size:15px;margin-bottom:6px">No calls yet</div>
       <div style="font-size:12.5px">Calls appear here automatically once the phone system sees them.</div></div>`;
@@ -24315,7 +24435,20 @@ function renderCallsPage() {
     const detail = c.intakeDone ? '<span style="color:var(--green,#22c55e)">Details received</span>'
                  : c.intakeSent ? '<span style="color:var(--text-muted)">Details requested</span>' : '';
 
-    return `<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+    const digits  = String(c.phone||'').replace(/[^0-9+]/g,'');
+    const openKey = _callDigits(c.phone);
+    const isOpen  = _callsOpenThread === openKey;
+    // c.leadId is whatever matched when the call was IMPORTED. A caller who had
+    // no job then still has none stored now, even if you created one two minutes
+    // later — so the row went on offering "+ Create job" and would cheerfully
+    // make a second one. Re-resolve by phone at render (2026-07-30).
+    let linkedLead = c.leadId || '';
+    if (!linkedLead) {
+      try { const m = _callMatchByPhone(c.phone); if (m && m.lead) linkedLead = m.lead.id; } catch (_) {}
+    }
+
+    return `<div class="card" style="padding:12px 14px;margin-bottom:8px">
+     <div style="display:flex;gap:12px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:14px">${escHtml(name || phone)}${name ? ` <span style="font-weight:400;color:var(--text-muted);font-size:12.5px">${escHtml(phone)}</span>` : ''}</div>
         <div style="font-size:12px;color:${colour};margin-top:2px">${escHtml(status)}</div>
@@ -24324,16 +24457,47 @@ function renderCallsPage() {
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0">
         ${needs ? '<span style="font-size:10.5px;font-weight:600;color:#fff;background:var(--amber,#f59e0b);border-radius:10px;padding:2px 8px">NEEDS FOLLOW-UP</span>' : ''}
-        ${c.leadId ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="openJobDetail('${escHtml(c.leadId)}')">Open job</button>` : ''}
-        <a class="btn btn-g" style="padding:4px 10px;font-size:11.5px;text-decoration:none" href="tel:${escHtml(String(c.phone||'').replace(/[^0-9+]/g,''))}">Call back</a>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;${isOpen?'border-color:#3498db;color:#3498db':''}" onclick="toggleCallThread('${escHtml(openKey)}')" title="Read and answer the text conversation with this number, without needing a job for them">💬 ${isOpen?'Hide':'Text'}</button>
+          <a class="btn btn-g" style="padding:4px 10px;font-size:11.5px;text-decoration:none" href="tel:${escHtml(digits)}">Call back</a>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          ${linkedLead
+            ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="openLeadDetail('${escHtml(linkedLead)}')">Open job</button>`
+            : `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;border-color:#9b59b6;color:#9b59b6" onclick="createJobFromCall('${escHtml(digits)}','${escHtml((name||'').replace(/'/g,"\\'"))}','${escHtml(String(c.id))}')" title="Start a job for this caller. Any texts already exchanged with this number get pulled into the job's thread automatically.">+ Create job</button>`}
+          ${needs ? `<button class="btn btn-p" style="padding:4px 10px;font-size:11.5px" onclick="markCallHandled('${escHtml(String(c.id))}')" title="Nothing more to do with this one — clears it from the follow-up list. The call stays in the history.">✓ Done</button>` : ''}
+        </div>
       </div>
+     </div>
+     ${isOpen ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div id="callthread-${escHtml(openKey)}" style="max-height:260px;overflow-y:auto;padding:2px">
+          <div style="font-size:12.5px;color:var(--text-muted);padding:4px 0">Loading conversation…</div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="callreply-${escHtml(openKey)}" class="jd-fi" style="flex:1;font-size:12.5px;padding:6px 9px" placeholder="Reply as GreenKey…" onkeydown="if(event.key==='Enter'){event.preventDefault();sendCallReply('${escHtml(openKey)}','${escHtml(digits)}');}">
+          <button class="btn btn-p" style="padding:6px 14px;font-size:12px;white-space:nowrap" onclick="sendCallReply('${escHtml(openKey)}','${escHtml(digits)}')">Send</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Goes out from the GreenKey number. Once you create a job for them, this whole conversation moves onto it.</div>
+      </div>` : ''}
     </div>`;
   }).join('');
 
-  const openCount = openTasks.length;
-  el.innerHTML = `<div style="margin-bottom:12px;font-size:12.5px;color:var(--text-muted)">
-      ${calls.length} call${calls.length===1?'':'s'}${openCount ? ` · <strong style="color:var(--amber,#f59e0b)">${openCount} needing follow-up</strong>` : ' · nothing outstanding'}
-    </div>${rows}`;
+  // Count follow-ups among the calls ACTUALLY SHOWN. This used to report
+  // openTasks.length — every open call- task ever created — which is a different
+  // population from the call records on screen, so the header read "16 calls ·
+  // 34 needing follow-up" (2026-07-30). A follow-up count larger than the list
+  // it sits above is worse than no count: it says something is missing without
+  // saying what.
+  const openCount   = calls.filter(c => openIds.has(String(c.id))).length;
+  const orphanCount = Math.max(0, openTasks.length - openCount);
+  el.innerHTML = `<div style="margin-bottom:12px;font-size:12.5px;color:var(--text-muted);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:5px;cursor:pointer" title="Hide calls that have already been handled. They stay in the log either way — this is a filter, not a delete.">
+        <input type="checkbox" ${_callsOnlyOpen?'checked':''} onchange="_callsOnlyOpen=this.checked;renderCallsPage()" style="accent-color:var(--green);cursor:pointer">
+        <span>Needs follow-up only</span>
+      </label>
+      <span>${allCalls.length} call${allCalls.length===1?'':'s'}${openCount ? ` · <strong style="color:var(--amber,#f59e0b)">${openCount} needing follow-up</strong>` : ' · nothing outstanding'}
+      ${orphanCount ? ` · <span title="Open call tasks whose call record isn't in this list — older than the 200 shown, or imported before call history was stored locally. Clear them on the Tasks page.">${orphanCount} older follow-up task${orphanCount===1?'':'s'} on the Tasks page</span>` : ''}</span>
+    </div>${rows || '<div class="card" style="padding:22px;text-align:center;color:var(--text-muted);font-size:13px">Nothing needs follow-up. Untick the box above to see the full call log.</div>'}`;
 }
 
 // ── MISSED CALL / VOICEMAIL POLLER ──────────────────────────────────────────
@@ -25443,8 +25607,16 @@ function _bellOpenLead(leadId) {
   // Guard: an unresolvable id (e.g. 'unrouted' texts) must not open a blank
   // detail page — acknowledge-only with an honest toast instead.
   if (typeof getLead === 'function' && !getLead(leadId)) {
+    // 2026-07-30: this used to stop here with a toast. An 'unrouted' notice is a
+    // text from someone with no job yet — which is exactly the thing you want to
+    // read and answer, so send it to the Calls page instead of nowhere.
     toggleSmsBell();
-    if (typeof toast === 'function') toast('No matching job found for this notice', 'warning');
+    if (typeof navigate === 'function') {
+      navigate('calls');
+      toast('No job for this number yet — opening it on the Calls page', 'info');
+    } else if (typeof toast === 'function') {
+      toast('No matching job found for this notice', 'warning');
+    }
     return;
   }
   // Close the dropdown and navigate to the lead's detail page so the user
