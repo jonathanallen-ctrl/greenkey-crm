@@ -63,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-22 field-10';
+const BUILD = '2026-07-22 field-11';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -103,6 +103,46 @@ function leadAddr(l){ return [l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZi
 function leadPhone(l){ const c=l.customerId?getCustomer(l.customerId):null; return (c&&c.phone)||l.customerPhone||''; }
 function prettyType(t){ if(!t) return ''; return String(t).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase()); }
 function schedDate(l){ return (l.milestones&&l.milestones.installScheduled&&l.milestones.installScheduled.date)||l.scheduleAt||''; }
+// ── APPOINTMENTS (2026-07-31) ──
+// The CRM moved to lead.appointments[] so a job can hold more than one visit.
+// Only INSTALLATION appointments mirror back into milestones.installScheduled,
+// which is what schedDate() reads — so a scheduled WALKDOWN had no date the
+// field app could see, and only surfaced if the job happened to be sitting in
+// the 'info-gathering' stage. Scheduling a walkdown deliberately does NOT move
+// the stage any more, so in practice they never appeared at all: Chase did two
+// on 2026-07-30 and had to photograph and text everything by hand.
+// Mirrors getAppts() in index.html — keep the two in step.
+var WALKDOWN_TYPES = ['walkdown','phone-call'];
+function apptsOf(l){
+  if(!l) return [];
+  if(Array.isArray(l.appointments)) return l.appointments;
+  var im = l.milestones && l.milestones.installScheduled;
+  if(im && im.date) return [{id:'appt-legacy-install',type:'installation',date:im.date,time:im.time||''}];
+  return [];
+}
+function apptLabel(t){
+  var M={installation:'Installation',walkdown:'Walkdown','phone-call':'Phone / Video',troubleshoot:'Service Call',maintenance:'Maintenance',inspection:'Final Inspection','quote-review':'Quote Review','material-pickup':'Material Pickup','follow-up':'Follow-Up',other:'Visit'};
+  return M[t]||'Visit';
+}
+function isWalkdownAppt(a){ return !!a && WALKDOWN_TYPES.indexOf(a.type)>=0; }
+function prettyTime(t){
+  if(!t) return '';
+  var p=String(t).split(':'), h=parseInt(p[0],10); if(isNaN(h)) return '';
+  var ap=h>=12?'PM':'AM'; h=h%12||12; return h+':'+(p[1]||'00')+' '+ap;
+}
+// Every booked, not-yet-completed appointment across the active jobs, as
+// {lead, appt} pairs — the field app's real unit of work is a VISIT, not a job.
+function apptEntries(leads){
+  var out=[];
+  leads.forEach(function(l){
+    apptsOf(l).forEach(function(a){
+      if(a && a.date && !a.completedAt) out.push({l:l,a:a});
+    });
+  });
+  return out.sort(function(x,y){
+    return (x.a.date+(x.a.time||'')).localeCompare(y.a.date+(y.a.time||''));
+  });
+}
 function isDirect(l){ return !PLATFORMS.includes(l.source); }
 function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-won','closed-lost','not-won'].includes(l.stage) && !(l.lostInfo&&l.lostInfo.isLost)); }
 function getQuotes(){ try{return JSON.parse(localStorage.getItem('gk_quotes')||'[]')}catch(e){return[]} }
@@ -260,15 +300,20 @@ function renderJobs(){
     const hits=leads.filter(l=>{ const hay=(custName(l)+' '+leadAddr(l)+' '+l.id).toLowerCase(); const ph=leadPhone(l).replace(/\D/g,''); return hay.includes(q) || (dig.length>=3 && ph.includes(dig)); });
     body = '<div class="sec">Search results ('+hits.length+')</div>' + (hits.length?hits.map(jobCard).join(''):'<div class="empty">No matches.</div>');
   } else {
-    const todayJobs=leads.filter(l=>schedDate(l).slice(0,10)===todayStr);
-    const upcoming=leads.filter(l=>{ const d=schedDate(l).slice(0,10); if(!d||d===todayStr) return false; const dt=new Date(d); if(isNaN(dt))return false; const days=Math.round((dt-today)/86400000); return days>0&&days<=7; });
-    const other=leads.filter(l=>l.stage==='installation' && !todayJobs.includes(l) && !upcoming.includes(l));
-    // Walkdowns = jobs sitting in the pre-quote "Walkdown" stage (id still
-    // 'info-gathering' in the CRM; relabeled to Walkdown).
-    const walkdowns=leads.filter(l=>l.stage==='info-gathering');
+    // Built from APPOINTMENTS, not from the install milestone — a walkdown is a
+    // visit like any other and belongs on today's list (2026-07-31).
+    const entries=apptEntries(leads);
+    const todayEntries=entries.filter(e=>e.a.date.slice(0,10)===todayStr);
+    const upEntries=entries.filter(e=>{ const d=e.a.date.slice(0,10); if(!d||d===todayStr) return false; const dt=new Date(d+'T12:00:00'); if(isNaN(dt))return false; const days=Math.round((dt-today)/86400000); return days>0&&days<=7; });
+    const shown={}; entries.forEach(e=>{ const d=e.a.date.slice(0,10); if(d===todayStr||(new Date(d+'T12:00:00')>=today)) shown[e.l.id]=1; });
+    const other=leads.filter(l=>l.stage==='installation' && !shown[l.id]);
+    // Unscheduled walkdowns still list separately — a job in the Walkdown stage
+    // that nobody has booked yet is exactly the thing you want visible.
+    const walkdowns=leads.filter(l=>l.stage==='info-gathering' && !shown[l.id]);
+    const esec=(t,arr)=> arr.length? '<div class="sec">'+t+' ('+arr.length+')</div>'+arr.map(entryCard).join('') : '';
     const sec=(t,arr)=> arr.length? '<div class="sec">'+t+' ('+arr.length+')</div>'+arr.map(jobCard).join('') : '';
-    const wsec=walkdowns.length? '<div class="sec">Walkdowns ('+walkdowns.length+')</div>'+walkdowns.map(walkdownCard).join('') : '';
-    body = sec('Today',todayJobs)+sec('Next 7 days',upcoming)+sec('In progress',other)+wsec;
+    const wsec=walkdowns.length? '<div class="sec">Walkdowns — not scheduled ('+walkdowns.length+')</div>'+walkdowns.map(walkdownCard).join('') : '';
+    body = esec('Today',todayEntries)+esec('Next 7 days',upEntries)+sec('In progress',other)+wsec;
     if(!body) body='<div class="empty">No scheduled or in-progress jobs.<br>Use search to find any job.</div>';
   }
   $app().innerHTML = header('My Jobs')
@@ -289,6 +334,22 @@ function jobCard(l){
     + '</div><div class="chev">›</div></div></a>';
 }
 function openJob(id){ location.hash='#job='+encodeURIComponent(id); renderDetail(id); }
+// One card per booked visit. A walkdown or phone/video appointment opens the
+// walkdown capture screen; everything else opens the job.
+function entryCard(e){
+  var l=e.l, a=e.a, wd=isWalkdownAppt(a);
+  var t=prettyType(l.jobType), when=prettyTime(a.time);
+  return '<a class="card" onclick="'+(wd?'openWalkdown':'openJob')+'(\''+esc(l.id)+'\')">'
+    + '<div class="jrow"><div style="flex:1;min-width:0">'
+    + '<div class="jname">'+esc(custName(l))+'</div>'
+    + (leadAddr(l)?'<div class="jaddr">'+esc(leadAddr(l))+'</div>':'')
+    + '<div class="chips">'
+    + '<span class="chip '+(wd?'amber':'blue')+'">'+(wd?'🔍 ':'')+esc(apptLabel(a.type))+'</span>'
+    + (t?'<span class="chip">'+esc(t)+'</span>':'')
+    + (l.source?'<span class="chip">'+esc(l.source)+'</span>':'')
+    + '<span class="chip amber">📅 '+esc(a.date.slice(0,10))+(when?' '+esc(when):'')+'</span>'
+    + '</div></div><div class="chev">›</div></div></a>';
+}
 function walkdownCard(l){
   return '<a class="card" onclick="openWalkdown(\''+esc(l.id)+'\')">'
     + '<div class="jrow"><div style="flex:1;min-width:0">'
