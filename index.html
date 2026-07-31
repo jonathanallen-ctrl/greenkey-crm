@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30k</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4917,13 +4917,23 @@ function getQQPricing(){
     panelAFCIUpgradePerBreaker:100,
     // Existing add-ons
     tandemBreaker:40, post:150,
-    // Pedestal set on a concrete pad (2026-07-30). ⚠ PLACEHOLDER — Jonathan has
-    // not given a number yet; 250 is a guess sitting above the $150 post because
-    // a pedestal is more hardware and more setting time. CONFIRM BEFORE USE.
-    // A 'custom' mount (light pole, bracket, etc.) is deliberately $0 — it is
-    // described in the scope and priced with the Custom add-on or Difficulty fee,
-    // because there is no sensible standard price for "something different".
-    pedestalPad:250,
+    // ── Pedestal mounts (2026-07-30, confirmed by Jonathan) ──
+    // LABOUR ONLY. The pedestal itself is NOT in these numbers and must never be
+    // — a Tesla pedestal is $450, a generic one is something else entirely, and
+    // plenty are customer-supplied. Enter it per job under Additional Equipment.
+    // Jonathan: "there is so much disparity in pedestal costs".
+    //
+    // pedestalExistingPad — anchors, set, mount, terminate. His half day.
+    // pedestalNewPad      — the above PLUS forming and pouring a pad with the
+    //   conduit set in it, cure time, and a SECOND VISIT. This is a second
+    //   mobilisation, not an adder, which is why it is nearly the cost of the
+    //   job itself. Includes the pad materials. Jonathan: "that means a second
+    //   day... which is why I try to avoid it with residential work."
+    //
+    // With a $450 Tesla pedestal the customer sees ~$1,100 / ~$1,850. Showing
+    // that next to a $150 treated post is the point — it is what makes the case
+    // for the post without anyone having to argue it.
+    pedestalExistingPad:650, pedestalNewPad:1400,
     // Eaton BR panel + EV load ⇒ BRH260 required (BR260s have the potential to
     // fail under continuous EV loads). Our hard cost delta is ~$67 (BRH ~$87 vs
     // BR ~$20), but this is deliberately priced at $50, NOT cost-plus: a simple
@@ -6301,7 +6311,8 @@ function renderQuickQuoteForm(q){
               <select class="fsel" id="qq-mount" onchange="onQQChange('${q.id}')">
                 <option value="wall"${qq.mountType==='wall'?' selected':''}>Wall mount (included)</option>
                 <option value="post"${qq.mountType==='post'?' selected':''}>Post — 4×4 treated w/ sonotube (+$${getQQPricing().post})</option>
-                <option value="pedestal-pad"${qq.mountType==='pedestal-pad'?' selected':''}>Pedestal on a concrete pad (+$${getQQPricing().pedestalPad})</option>
+                <option value="pedestal-existing"${(qq.mountType==='pedestal-existing'||qq.mountType==='pedestal-pad')?' selected':''}>Pedestal on an EXISTING pad (+$${getQQPricing().pedestalExistingPad}) — pedestal priced separately</option>
+                <option value="pedestal-newpad"${qq.mountType==='pedestal-newpad'?' selected':''}>Pedestal + NEW concrete pad, two visits (+$${getQQPricing().pedestalNewPad}) — pedestal priced separately</option>
                 <option value="custom"${qq.mountType==='custom'?' selected':''}>Custom — describe below</option>
               </select>
               ${qq.mountType==='custom'?`<input class="li-inp" type="text" id="qq-mount-custom" value="${escHtml(qq.mountCustom||'')}" placeholder="e.g. bracket-mounted to existing light pole" oninput="onQQChange('${q.id}')" style="width:100%;margin-top:6px" title="Goes into the scope of work. Price it with the Custom add-on or Difficulty fee below — this field adds no cost on its own.">` : ''}
@@ -7150,7 +7161,10 @@ function onQQChange(qid){
   });
   if(isNema) lm+=(nemaLocation==='outside'?p.nema1450Outside:p.nema1450Inside);
   if(!isNema&&mountType==='post') lm+=p.post;
-  if(!isNema&&mountType==='pedestal-pad') lm+=p.pedestalPad;
+  // 'pedestal-pad' is the retired placeholder value — treat it as existing-pad
+  // so any quote saved during that brief window still prices.
+  if(!isNema&&(mountType==='pedestal-existing'||mountType==='pedestal-pad')) lm+=p.pedestalExistingPad;
+  if(!isNema&&mountType==='pedestal-newpad') lm+=p.pedestalNewPad;
   // 'custom' adds nothing here on purpose — see pedestalPad comment.
   const mountCustom = (document.getElementById('qq-mount-custom')?.value || '').trim().slice(0,120);
   if(tandemBreakers>0) lm+=tandemBreakers*p.tandemBreaker;
@@ -8283,8 +8297,10 @@ function _autoScopePrimary(q){
   // Default: EV Charger
   const mount = qq.mountType==='post'
       ? ' The charger is mounted on a 4×4 treated post set in a concrete footing.'
-    : qq.mountType==='pedestal-pad'
-      ? ' The charger is mounted on a pedestal set on a concrete pad.'
+    : (qq.mountType==='pedestal-existing' || qq.mountType==='pedestal-pad')
+      ? ' The charger is mounted on a pedestal anchored to the existing concrete pad. The pedestal itself is quoted separately.'
+    : qq.mountType==='pedestal-newpad'
+      ? ' The charger is mounted on a pedestal set on a new concrete pad. The pad is formed and poured with the conduit set into it, and must cure before the charger can be installed — so this work takes TWO visits, on separate days. The pedestal itself is quoted separately.'
     : (qq.mountType==='custom' && (qq.mountCustom||'').trim())
       ? ' The charger is mounted as follows: ' + (qq.mountCustom||'').trim().replace(/\.*$/, '') + '.'
     : '';
@@ -8335,6 +8351,10 @@ function autoInclusions(q){
   // Inclusions. An earlier pass of this change put them in autoExclusions by
   // mistake — which would have charged for a junction box and simultaneously
   // told the customer it wasn't included (2026-07-30).
+  if (q.qq?.mountType === 'pedestal-newpad') {
+    lines.push('• Forming and pouring a new concrete pad with the conduit set into it (first visit)');
+    lines.push('• Return visit after cure to set the pedestal and install the charger');
+  }
   if ((q.qq?.jbLugs || 0) > 0) {
     lines.push('• Junction box and insulated multi-tap connectors for splicing into the existing conductors');
   }
@@ -8373,6 +8393,9 @@ function autoExclusions(q){
   const _cxLbl = (q.qq?.customLabel || '').trim();
   if (_cxLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) {
     lines.push('• Warranty coverage on "' + _cxLbl + '" — cosmetic and finish work is provided as-is and is not covered by the GreenKey craftsmanship warranty');
+  }
+  if (['pedestal-existing','pedestal-newpad','pedestal-pad'].includes(q.qq?.mountType)) {
+    lines.push('• The pedestal itself — quoted separately, as pricing varies by make and some are customer-supplied');
   }
   lines.push('• Drywall or wall repair','• Any electrical work not described above');
   if ((q.qq?.runSegs||[]).some(s => s.type && s.type.includes('trench'))) {
@@ -17851,7 +17874,9 @@ function estimateJobDuration(lead) {
     });
     // Mount type
     if (qq.mountType === 'post') hrs += 0.75;
-    else if (qq.mountType === 'pedestal-pad') hrs += 1.0;
+    else if (qq.mountType === 'pedestal-existing' || qq.mountType === 'pedestal-pad') hrs += 4.0;
+    // First visit only. The pour is its own appointment — schedule it as one.
+    else if (qq.mountType === 'pedestal-newpad') hrs += 4.0;
     else if (qq.mountType === 'custom') hrs += 1.0;
     // Tandem breakers
     if ((qq.tandemBreakers||0) > 0) hrs += 0.25;
