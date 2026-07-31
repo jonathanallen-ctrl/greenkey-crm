@@ -63,7 +63,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-22 field-11';
+const BUILD = '2026-07-22 field-12';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -371,6 +371,35 @@ function renderWalkdown(id){
   const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
   const w=l.walkdown||{}, s=l.electricalSnapshot||{};
   const fld=(fid,lab,val,ph)=>'<div style="margin-bottom:10px"><div class="lab">'+esc(lab)+'</div><input id="'+fid+'" class="srch" style="margin-top:0" value="'+esc(val||'')+'" placeholder="'+esc(ph||'')+'"></div>';
+  // ── Pick-lists that MATCH THE CRM (2026-07-31) ──
+  // These were free text. Whatever got typed was preserved and shown to the
+  // office, so nothing was ever lost — but it had to be re-keyed into the
+  // structured Electrical Snapshot before it could do any work, and anything
+  // that didn't match a dropdown value silently did nothing. The BRH260
+  // auto-adder is the sharp example: it only fires when panelBrand starts with
+  // "Eaton BR", so "Square D Homline" typed with a missing 'e' costs $50 quietly.
+  // Same options as SNAP_PANEL_BRAND_OPTIONS / SNAP_BREAKER_SIZE_OPTIONS in
+  // index.html — ⚠ keep these three lists in step with that file.
+  // "Other" keeps the free-text escape: a crawlspace is no place to be blocked
+  // by a dropdown that doesn't have your panel on it.
+  const WD_SERVICE = ['400A','300A','200A','150A','100A','Other'];
+  const WD_PANEL   = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+  const WD_BREAKER = ['200-amp','150-amp','125-amp','100-amp','60-amp','Other'];
+  const pick=(fid,lab,val,opts,ph)=>{
+    var cur=(val||'').trim();
+    var known=opts.indexOf(cur)>=0 && cur!=='Other';
+    var isOther=!!cur && !known;
+    return '<div style="margin-bottom:10px"><div class="lab">'+esc(lab)+'</div>'
+      + '<select id="'+fid+'" class="srch" style="margin-top:0" onchange="wdOther(\''+fid+'\')">'
+      +   '<option value=""'+(cur?'':' selected')+'>— select —</option>'
+      +   opts.map(function(o){
+            var sel=(o==='Other'? isOther : o===cur);
+            return '<option value="'+esc(o)+'"'+(sel?' selected':'')+'>'+esc(o)+'</option>';
+          }).join('')
+      + '</select>'
+      + '<input id="'+fid+'-other" class="srch" style="margin-top:6px;display:'+(isOther?'block':'none')+'" value="'+esc(isOther?cur:'')+'" placeholder="'+esc(ph||'Type it exactly as it reads on the label')+'">'
+      + '</div>';
+  };
   $app().innerHTML = header('Walkdown')
     + '<div class="wrap">'
     + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
@@ -381,9 +410,9 @@ function renderWalkdown(id){
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
     + '</div>'
     + '<div class="card"><div class="lab" style="margin-bottom:8px">Site electrical — for the estimate</div>'
-    +   fld('wd-service','Service size', w.serviceSize||s.serviceSize, 'e.g. 200A')
-    +   fld('wd-panel','Panel make / model', w.panelMake||s.panelBrand, 'e.g. Square D Homeline')
-    +   fld('wd-breaker','Main breaker', w.mainBreaker||s.breakerSize, 'e.g. 200A')
+    +   pick('wd-service','Service size', w.serviceSize||s.serviceSize, WD_SERVICE, 'e.g. 320A meter-main')
+    +   pick('wd-panel','Panel make / model', w.panelMake||s.panelBrand, WD_PANEL, 'e.g. Bryant BR — read it off the label')
+    +   pick('wd-breaker','Main breaker', w.mainBreaker||s.breakerSize, WD_BREAKER, 'e.g. 175-amp')
     +   fld('wd-spaces','Open breaker spaces', w.openSpaces, 'e.g. 4 (2 tandem)')
     +   '<div class="lab">Notes for the estimator</div>'
     +   '<textarea id="wd-notes" class="srch" style="margin-top:0;min-height:90px;resize:vertical">'+esc(l.walkdownNotes||'')+'</textarea>'
@@ -401,8 +430,23 @@ function renderWalkdown(id){
   }).catch(()=>{});
   window.scrollTo(0,0);
 }
+// Show the free-text box only when "Other" is chosen.
+function wdOther(fid){
+  var sel=document.getElementById(fid), box=document.getElementById(fid+'-other');
+  if(!sel||!box) return;
+  var other = sel.value==='Other';
+  box.style.display = other ? 'block' : 'none';
+  if(other) box.focus();
+}
 async function saveWalkdown(jobId){
-  const g=fid=>{ const e=document.getElementById(fid); return e?e.value.trim():''; };
+  // A pick-list value wins; "Other" hands back whatever was typed. Reads the
+  // plain input too, so this still works if a field is ever reverted to text.
+  const g=fid=>{
+    const sel=document.getElementById(fid); if(!sel) return '';
+    const v=(sel.value||'').trim();
+    if(v==='Other'){ const o=document.getElementById(fid+'-other'); return o?(o.value||'').trim():''; }
+    return v;
+  };
   const service=g('wd-service'), panel=g('wd-panel'), breaker=g('wd-breaker'), spaces=g('wd-spaces'), notes=g('wd-notes');
   loading('Saving walkdown…');
   try{

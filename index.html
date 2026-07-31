@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30k</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30l</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -17734,10 +17734,38 @@ function _crewSegFt(seg) {
   const v = (seg && (seg.ft !== undefined ? seg.ft : seg.distance)) || 0;
   return parseFloat(v) || 0;
 }
+// ═══════ WHICH QUOTE SPEAKS FOR THIS JOB (2026-07-30) ═══════
+// Several places needed "the quote for this job" and each independently took the
+// most recently CREATED one. That is right on a single-quote job and wrong on
+// every multi-option job — which is most of the big ones now that A/B/C quoting
+// is normal, because the extra options are usually written AFTER the one the
+// customer says yes to.
+//
+// Brett Robertson, 2026-07-30: accepted Option B at $3,130, but Option C ($200,
+// still a draft) was created later, so the scheduling text told him he owed
+// $200 on completion. The crew/hours derivation had the same fault and was
+// reading Option C's run segments.
+//
+// Order: the explicitly accepted quote → anything marked approved → newest.
+// Falling back to newest only when NOTHING has been accepted keeps the old
+// behaviour for jobs still being quoted.
+function _leadPrimaryQuote(lead) {
+  if (!lead || typeof getQuotes !== 'function') return null;
+  const qs = getQuotes().filter(q => q.leadId === lead.id);
+  if (!qs.length) return null;
+  const byDate = a => [...a].sort((x, y) => new Date(y.createdAt || 0) - new Date(x.createdAt || 0));
+  if (lead.acceptedQuoteId) {
+    const hit = qs.find(q => q.id === lead.acceptedQuoteId);
+    if (hit) return hit;
+  }
+  const approved = qs.filter(q => q.status === 'approved' || q.status === 'contingent-approved');
+  if (approved.length) return byDate(approved)[0];
+  return byDate(qs)[0];
+}
+
 function _crewSegs(lead) {
   if (!lead || typeof getQuotes !== 'function') return [];
-  const q = getQuotes().filter(x => x.leadId === lead.id)
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
+  const q = _leadPrimaryQuote(lead);
   return (q && q.qq && Array.isArray(q.qq.runSegs)) ? q.qq.runSegs : [];
 }
 
@@ -17856,8 +17884,7 @@ function estimateJobDuration(lead) {
   if (jobType !== 'ev-residential')  return 3.0;
 
   // EV residential — estimate from quote if available
-  const quotes = getQuotes().filter(q => q.leadId === lead.id);
-  const q = quotes.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt))[0];
+  const q = _leadPrimaryQuote(lead);
   let hrs = 2.0; // base
 
   if (q) {
@@ -28528,9 +28555,9 @@ function _populateSchedFields(type) {
   const lead = _schedLeadId ? getLead(_schedLeadId) : null;
   if (!lead) return;
   const cust = lead.customerId ? getCustomer(lead.customerId) : null;
-  const quote = getQuotes()
-    .filter(q => q.leadId === lead.id)
-    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  // The ACCEPTED quote, not the newest — this line is what tells the customer
+  // what they owe on completion (see _leadPrimaryQuote).
+  const quote = _leadPrimaryQuote(lead);
 
   const built = _buildSchedContent(lead, cust, quote, type);
 
