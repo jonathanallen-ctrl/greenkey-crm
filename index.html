@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-07-30l</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-03a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14277,7 +14277,7 @@ function renderJobDetail(id) {
         <div style="font-size:11.5px;color:${col};margin-top:1px">${booked?'📅 ':'⏳ '}${escHtml(when)}${tech?' · '+escHtml(tech.name||tech.email||''):''}${done?' · completed':''}</div>
       </div>
       <div style="display:flex;gap:5px;flex-shrink:0">
-        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="scheduleInOutlook('${id}','${a.id}')" title="${booked?'Change the date/time and create a new Outlook event. The old event is not deleted automatically.':'Pick a date and time and create the Outlook event'}">${booked?'Reschedule':'Schedule'}</button>
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="scheduleInOutlook('${id}','${a.id}')" title="${booked?'Move this appointment: pick the new date/time — the old Outlook event is replaced automatically.':'Pick a date and time and create the Outlook event'}">${booked?'Reschedule':'Schedule'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px" onclick="completeAppt('${id}','${a.id}')" title="${done?'Mark as not completed':'Mark this appointment completed so it drops out of the scheduler'}">${done?'↺':'✓'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px;color:var(--red)" onclick="removeAppt('${id}','${a.id}')" title="Remove from the CRM (does NOT delete the Outlook event)">×</button>
       </div>
@@ -28263,11 +28263,20 @@ async function syncOutlookAppointments(quiet) {
   if (typeof _graphFetch !== 'function') return null;
 
   // Collect every booked appointment that carries an Outlook event id.
+  // BACKFILL (2026-08-03): rows written before today never got the id — it
+  // lived only on the install mirror. Adopt the mirror's id when the dates
+  // agree, and persist it onto the row below so the adoption happens once.
   const tracked = [];
   getLeads().forEach(l => {
     if (l.stage === 'archived') return;
     getAppts(l).forEach(a => {
-      if (a.outlookEventId && _apptIsBooked(a) && !a.completedAt) tracked.push({ lead: l, appt: a });
+      if (!_apptIsBooked(a) || a.completedAt) return;
+      let evId = a.outlookEventId || '', adopted = false;
+      if (!evId && a.type === 'installation') {
+        const m = l.milestones && l.milestones.installScheduled;
+        if (m && m.outlookEventId && m.date === a.date) { evId = m.outlookEventId; adopted = true; }
+      }
+      if (evId) tracked.push({ lead: l, appt: a, evId, adopted, calId: (adopted ? ((l.milestones.installScheduled.outlookCalId) || '') : (a.outlookCalId || '')) });
     });
   });
   if (!tracked.length) { _olSyncLastRun = Date.now(); return { checked: 0, moved: 0, missing: 0 }; }
@@ -28284,9 +28293,13 @@ async function syncOutlookAppointments(quiet) {
                  `&endDateTime=${encodeURIComponent(_olLocalIso(to))}` +
                  `&$select=id,subject,start,end,isCancelled&$top=250`;
 
-    const resp = await _graphFetch(path);
-    if (!resp || !resp.ok) { console.warn('[GK] outlook sync: calendarView failed', resp && resp.status); return null; }
-    const data = await resp.json().catch(() => null);
+    // _graphFetch returns PARSED JSON (or throws on !ok) — it is not a fetch
+    // Response. The old `resp.ok` check here was always false on the parsed
+    // object, so this function returned early on every call and the sync never
+    // ran at all. Root-caused 2026-08-03 (Sherri's drag in Outlook didn't land).
+    let data = null;
+    try { data = await _graphFetch(path); }
+    catch (e) { console.warn('[GK] outlook sync: calendarView failed', e); return null; }
     const items = (data && data.value) || [];
     const byId = new Map();
     items.forEach(ev => { if (ev && ev.id) byId.set(ev.id, ev); });
@@ -28301,8 +28314,8 @@ async function syncOutlookAppointments(quiet) {
     let moved = 0, missing = 0, dirty = false;
     const notes = [];
 
-    tracked.forEach(({ lead, appt }) => {
-      const ev = byId.get(appt.outlookEventId);
+    tracked.forEach(({ lead, appt, evId, adopted, calId }) => {
+      const ev = byId.get(evId);
       const i  = arr.findIndex(l => l.id === lead.id);
       if (i < 0) return;
       const list = Array.isArray(arr[i].appointments)
@@ -28322,10 +28335,15 @@ async function syncOutlookAppointments(quiet) {
         if (!startStr) return;
         const newDate = startStr.slice(0, 10);
         const newTime = startStr.slice(11, 16);
-        if (newDate === appt.date && newTime === (appt.time || '')) return;
-        notes.push(`Rescheduled in Outlook: ${_apptLabel(appt.type)} moved from ${appt.date}${appt.time ? ' ' + appt.time : ''} to ${newDate} ${newTime}. Outlook wins on date and time.`);
-        list[ai] = { ...list[ai], date: newDate, time: newTime };
-        moved++;
+        const same = newDate === appt.date && newTime === (appt.time || '');
+        // `adopted` = the id came from the install mirror, not the row. Persist
+        // it onto the row even when nothing moved, so next sync reads it directly.
+        if (same && !adopted) return;
+        if (!same) {
+          notes.push(`Rescheduled in Outlook: ${_apptLabel(appt.type)} moved from ${appt.date}${appt.time ? ' ' + appt.time : ''} to ${newDate} ${newTime}. Outlook wins on date and time.`);
+          moved++;
+        }
+        list[ai] = { ...list[ai], date: newDate, time: newTime, outlookEventId: evId, outlookCalId: list[ai].outlookCalId || calId || '' };
       }
       arr[i].appointments = list;
       _apptMirrorInstall(arr[i]);           // keeps the 49 legacy readers correct
@@ -28944,6 +28962,19 @@ async function openSchedInOutlook(_specOk) {
       _apptHrs = Math.max(0.25, ((_eh*60+_em) - (_sh*60+_sm)) / 60);
     }
   } catch(_) {}
+  // ── Reschedule = MOVE, not duplicate (2026-08-03, Sherri) ──
+  // Capture the appointment's existing Outlook event id BEFORE the new date is
+  // stamped, so the old event can be deleted once the new one exists. Falls
+  // back to the install mirror for rows that predate ids on appointments[].
+  let _prevEventId = '';
+  try {
+    const _prev = _schedApptId ? getAppts(lead).find(a => a.id === _schedApptId) : null;
+    _prevEventId = (_prev && _prev.outlookEventId) || '';
+    if (!_prevEventId && _prev && _prev.type === 'installation') {
+      const _m = lead.milestones && lead.milestones.installScheduled;
+      if (_m && _m.outlookEventId && _m.date === _prev.date) _prevEventId = _m.outlookEventId;
+    }
+  } catch(_){}
   try {
     const _saved = upsertAppt(_schedLeadId, {
       id: _schedApptId || undefined,
@@ -29026,17 +29057,27 @@ async function openSchedInOutlook(_specOk) {
     // resp is the created event; it has webLink we can open for review.
     const webLink = resp?.webLink;
     const eventId = resp?.id || '';
-    // Store the event id on the install milestone so a later customer
-    // confirmation can flip the event tentative → busy.
-    if (_isInstall && eventId) {
+    // Store the event id ON THE APPOINTMENT ROW (2026-08-03). It used to be
+    // written only to milestones.installScheduled — but _apptMirrorInstall
+    // rebuilds the mirror FROM the appointment on every later write, so the id
+    // was silently wiped and the Outlook→CRM sync had nothing to track. Writing
+    // it through upsertAppt puts it on the row AND mirrors it for installs, so
+    // the tentative→busy confirmation flip still finds it where it always was.
+    if (eventId && _schedApptId) {
       try {
-        const _a = getLeads(); const _j = _a.findIndex(l => l.id === _schedLeadId);
-        if (_j >= 0 && _a[_j].milestones?.installScheduled) {
-          _a[_j].milestones.installScheduled.outlookEventId = eventId;
-          _a[_j].milestones.installScheduled.outlookCalId = (tgt && tgt.id) || '';
-          saveLeads(_a);
-        }
+        upsertAppt(lead.id, { id: _schedApptId, outlookEventId: eventId, outlookCalId: (tgt && tgt.id) || '' });
       } catch(_){}
+    }
+    // Reschedule = MOVE: the new event exists, so remove the one it replaces.
+    // Failure here is non-fatal — worst case is the old duplicate Sherri
+    // reported, and the console says why.
+    if (eventId && _prevEventId && _prevEventId !== eventId) {
+      try {
+        await _graphFetch(`/me/events/${encodeURIComponent(_prevEventId)}`, { method: 'DELETE' });
+      } catch(e) {
+        console.warn('[GK] Could not delete the old Outlook event (leaving it on the calendar):', e);
+        toast('New event created, but the OLD Outlook event could not be removed — delete it from the calendar by hand.', 'warning');
+      }
     }
     toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''} — it will sync to your Outlook app.`, 'success');
     closeSchedModal();
