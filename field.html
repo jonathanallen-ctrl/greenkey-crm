@@ -28,6 +28,14 @@
   .build{font-size:10px;color:#5d6675}
   h1{font-size:22px;font-weight:700;margin:8px 0 2px}
   .srch{width:100%;margin-top:10px;padding:11px 12px;border:1px solid #262b36;border-radius:10px;background:#171a21;color:#e8eaed;font-size:15px;outline:none}
+  /* SMS composer (field-13). Phone-style multi-line box: THREE lines visible at
+     rest so a whole text can be read back and reworded before sending, growing
+     to ~8 lines and then scrolling. Heights are in em so they track the font
+     size; box-sizing is border-box globally, hence the +20px for padding+border.
+     resize:none because the drag handle fights the pan-scroll gesture on iOS. */
+  .smsbox{flex:1;min-width:0;background:#0d1117;border:1px solid #2a3140;border-radius:10px;color:#e8eaed;font-family:inherit;font-size:15px;line-height:1.35;padding:9px 12px;outline:none;resize:none;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:calc(4.05em + 20px);max-height:calc(10.8em + 20px)}
+  /* Compact square button for the "from Photos" pickers next to a camera button. */
+  .ibtn{background:#171a21;color:#e8eaed;border:1px solid #2a313d;border-radius:10px;padding:8px 11px;font-size:15px;flex:0 0 auto;cursor:pointer;line-height:1}
   .sec{margin:18px 0 6px;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#8b93a1}
   .card{display:block;background:#171a21;border:1px solid #262b36;border-radius:12px;padding:14px;margin-bottom:10px;content-visibility:auto;contain-intrinsic-size:0 92px}
   .card:active{background:#1c2027}
@@ -43,7 +51,7 @@
   .btn.green{background:#36c777;color:#08130c}
   .btn.ghost{background:#171a21;color:#e8eaed;border:1px solid #2a313d}
   .row2{display:flex;gap:10px;margin:12px 0}
-  .row2 a{flex:1}
+  .row2 a,.row2 .btn{flex:1}   /* .btn is width:100% — flex-basis 0 makes them share the row */
   .back{display:inline-flex;align-items:center;gap:6px;font-size:15px;color:#aeb4bf;padding:6px 0;margin-bottom:4px}
   .lab{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#8b93a1;margin-bottom:6px}
   .scope{font-size:15px;line-height:1.55;white-space:pre-wrap;color:#dfe3e9}
@@ -56,6 +64,13 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .err{color:#ff8a8a;font-size:14px}
   .empty{color:#8b93a1;text-align:center;padding:40px 12px;font-size:14px}
+  /* Update bar (field-13) — see checkForUpdate(). Fixed above the home indicator
+     so it never reflows the page out from under someone mid-job. */
+  .updbar{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;gap:10px;padding:12px 14px calc(env(safe-area-inset-bottom) + 12px);background:#12351f;border-top:1px solid #2b6a41;box-shadow:0 -6px 18px rgba(0,0,0,.35)}
+  .updbar .t{flex:1;min-width:0;font-size:14px;line-height:1.3;color:#d9f2e2}
+  .updbar button{flex:0 0 auto;border:none;border-radius:10px;font-size:15px;font-weight:600;padding:10px 14px;cursor:pointer;font-family:inherit}
+  .updbar .go{background:#36c777;color:#08130c}
+  .updbar .x{background:transparent;color:#8fb9a2;padding:10px 6px;font-size:16px}
 </style>
 </head>
 <body>
@@ -63,7 +78,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-07-22 field-12';
+const BUILD = '2026-08-01 field-13';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -418,9 +433,13 @@ function renderWalkdown(id){
     +   '<textarea id="wd-notes" class="srch" style="margin-top:0;min-height:90px;resize:vertical">'+esc(l.walkdownNotes||'')+'</textarea>'
     +   '<button class="btn green" style="margin-top:12px" onclick="saveWalkdown(\''+esc(l.id)+'\')">Save walkdown info</button>'
     + '</div>'
-    + '<div class="card"><div class="lab" style="display:flex;align-items:center;justify-content:space-between">Photos'
-    +   '<button class="chip" onclick="shotPick(\''+esc(l.id)+'\',\'walkdown\')">📸 Add photo</button></div>'
+    + '<div class="card"><div class="lab" style="display:flex;align-items:center;justify-content:space-between;gap:6px">Photos'
+    +   '<span style="display:flex;gap:6px;flex:0 0 auto">'
+    +     '<button class="chip" onclick="shotPick(\''+esc(l.id)+'\',\'walkdown\')">📸 Take photo</button>'
+    +     '<button class="chip" onclick="shotPick(\''+esc(l.id)+'\',\'walkdown\',1)">🖼️ From Photos</button>'
+    +   '</span></div>'
     +   '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
+    +   '<input type="file" id="ph-input-lib" accept="image/*" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
     +   '<div id="ph-status" class="muted" style="font-size:12.5px;margin:6px 0 2px"></div>'
     +   '<div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
     + '</div>'
@@ -551,8 +570,8 @@ function renderDetail(id){
     + '<button class="btn ghost" id="fld-sms-toggle" onclick="toggleFldThread(\''+esc(l.id)+'\')">💬 Open conversation</button>'
     + '<div id="fld-sms-box" style="display:none">'
     +   '<div id="fld-sms-thread" style="max-height:320px;overflow-y:auto;background:#0d1117;border:1px solid #1d222c;border-radius:10px;padding:8px;margin-top:10px;-webkit-overflow-scrolling:touch"></div>'
-    +   '<div style="display:flex;gap:8px;margin-top:8px">'
-    +     '<input id="fld-sms-reply" type="text" placeholder="Text the customer…" autocomplete="off" style="flex:1;min-width:0;background:#0d1117;border:1px solid #2a3140;border-radius:10px;color:#e8eaed;font-size:15px;padding:11px 12px">'
+    +   '<div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">'
+    +     '<textarea id="fld-sms-reply" class="smsbox" rows="3" placeholder="Text the customer…" autocomplete="off" autocapitalize="sentences" oninput="_smsGrow()"></textarea>'
     +     '<button class="btn green" style="width:auto;flex:0 0 auto;padding:11px 16px" onclick="sendFldReply(\''+esc(l.id)+'\')">Send</button>'
     +   '</div>'
     +   '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.45">Sends from the GreenKey business number. The office sees this conversation in the CRM too.</div>'
@@ -575,14 +594,19 @@ function renderDetail(id){
     + (l.scopeOfWork?'<div class="card"><div class="lab">Scope of Work</div><div class="scope">'+esc(l.scopeOfWork)+'</div></div>':'')
     + '<div class="card">'
       + '<div class="lab" style="display:flex;align-items:center;justify-content:space-between">Required photos<span id="shot-count" class="muted" style="font-size:12px;font-weight:600">0 of '+INSTALL_SHOTS.length+'</span></div>'
-      + INSTALL_SHOTS.map(s=>'<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid #1d222c">'
-          + '<button class="btn ghost" style="width:auto;padding:8px 13px;font-size:15px;flex:0 0 auto" onclick="shotPick(\''+esc(l.id)+'\',\''+s.key+'\')">📸</button>'
+      + INSTALL_SHOTS.map(s=>'<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #1d222c">'
+          + '<button class="ibtn" onclick="shotPick(\''+esc(l.id)+'\',\''+s.key+'\')" aria-label="Take photo">📸</button>'
+          + '<button class="ibtn" onclick="shotPick(\''+esc(l.id)+'\',\''+s.key+'\',1)" aria-label="Choose from Photos">🖼️</button>'
           + '<div style="flex:1;font-size:14px;line-height:1.3">'+esc(s.label)+'</div>'
           + '<span id="shot-'+s.key+'" style="font-size:17px;width:20px;text-align:center;color:#5d6675">○</span>'
         + '</div>').join('')
       + '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
+      + '<input type="file" id="ph-input-lib" accept="image/*" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
       + '<div id="ph-status" class="muted" style="font-size:12.5px;margin:8px 0 2px"></div>'
-      + '<button class="btn ghost" style="margin-top:6px" onclick="shotPick(\''+esc(l.id)+'\',\'other\')">📸 Add other photos</button>'
+      + '<div class="row2" style="margin:6px 0 0">'
+        + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\')">📸 Take other photos</button>'
+        + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\',1)">🖼️ From Photos</button>'
+      + '</div>'
       + '<div id="photos" style="margin-top:10px"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
     + '</div>'
     + '</div>';
@@ -633,7 +657,18 @@ async function uploadPhoto(jobId, file, catKey){
   return true;
 }
 let _photoCat='other';
-function shotPick(jobId, catKey){ _photoCat=catKey||'other'; const inp=document.getElementById('ph-input'); if(inp) inp.click(); }
+// Two hidden file inputs per screen, and the ONLY difference is the `capture`
+// attribute: with it, iOS opens the camera straight away (what the tech wants
+// standing at the panel); without it, iOS opens the photo picker, which is how
+// a picture the customer TEXTED him — or anything already in his camera roll —
+// gets onto the job (field-13, Jonathan 2026-08-01). Everything downstream is
+// identical: same resize, same install/ folder, same "<key>__" shot prefix, so
+// a photo chosen from the library ticks a required shot exactly like a fresh one.
+function shotPick(jobId, catKey, fromLibrary){
+  _photoCat=catKey||'other';
+  const inp=document.getElementById(fromLibrary?'ph-input-lib':'ph-input');
+  if(inp) inp.click();
+}
 async function onPhotoPick(input, jobId){
   const files=[...(input.files||[])]; input.value=''; const cat=_photoCat; _photoCat='other'; if(!files.length) return;
   const st=document.getElementById('ph-status');
@@ -828,11 +863,28 @@ async function _sendFldSMS(jobId, message, templateKey){
   const d=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(d.error||'Send failed');
 }
+// Phone-style auto-grow for the composer (field-13). The box shows three lines
+// at rest (CSS min-height) and grows with the message up to the CSS max-height,
+// after which it scrolls — so the tech can always read back and reword what he
+// typed instead of watching one line slide past.
+// PERFORMANCE: measuring scrollHeight forces a reflow, so this never runs once
+// per keystroke — calls are coalesced into a single measure+write per animation
+// frame. Fast typing or a paste costs one reflow, not one per character.
+let _smsGrowRAF=null;
+function _smsGrow(){
+  if(_smsGrowRAF) return;
+  _smsGrowRAF=requestAnimationFrame(function(){
+    _smsGrowRAF=null;
+    const t=document.getElementById('fld-sms-reply'); if(!t) return;   // screen changed
+    t.style.height='auto';                                             // allow shrink
+    t.style.height=t.scrollHeight+'px';                                // max-height clamps
+  });
+}
 async function sendFldReply(jobId){
   const inp=document.getElementById('fld-sms-reply'); if(!inp) return;
   const msg=(inp.value||'').trim(); if(!msg) return;
   inp.disabled=true;
-  try{ await _sendFldSMS(jobId,msg,'field_thread'); inp.value=''; await _fetchFldThread(jobId,true); }
+  try{ await _sendFldSMS(jobId,msg,'field_thread'); inp.value=''; inp.style.height=''; await _fetchFldThread(jobId,true); }
   catch(e){ alert('Could not send: '+(e.message||e)); }
   inp.disabled=false; inp.focus();
 }
@@ -1010,6 +1062,97 @@ async function doClearPayment(jobId){
   try{ await clearPayment(jobId); }catch(e){ alert(e.message||e); }
   renderDetail(jobId);
 }
+
+// ---------- self-update check (field-13) ----------
+// WHY THIS EXISTS. The app is one HTML file on GitHub Pages, added to the iOS
+// home screen. A home-screen web app gets its own cache with no address bar, no
+// reload button, and no gesture that bypasses it — so a pushed change could sit
+// unseen for as long as that cache held it, and the only reliable cure was
+// deleting the icon and re-adding it from a pasted URL. Jonathan, 2026-08-01:
+// "having to delete the app and reload it via pasting an address … is a problem."
+//
+// So the app watches its own build stamp. The check is a conditional request:
+// `cache:'no-cache'` means the browser always asks the server, sending the ETag —
+// unchanged is a ~300-byte 304, changed is a full 200 that ALSO writes the new
+// copy into the browser cache. That last part is the whole trick: it is what
+// makes the plain location.reload() below actually serve new code.
+//
+// ⚠ It NEVER reloads on its own. A tech halfway through a text or a photo upload
+// decides when. The bar is the only thing that appears by itself.
+const UPD_CHECK_MS = 15*60*1000;          // foreground re-check interval
+let _updLast = 0, _updOffered = '';
+function _updBuildFrom(txt){
+  // Built via RegExp() rather than a literal so this line can never match itself.
+  const m = new RegExp("const BUILD\\s*=\\s*'([^']+)'").exec(txt);
+  return m ? m[1] : '';
+}
+// True when we escalated to a ?v= URL and STILL came up on the old build —
+// i.e. the cache beat us and there is nothing more the page can do by itself.
+function _updStuck(){
+  const m = /[?&]v=([^&]+)/.exec(location.search||'');
+  try{ return !!(m && decodeURIComponent(m[1]) !== BUILD); }catch(e){ return false; }
+}
+async function checkForUpdate(force){
+  const now = Date.now();
+  if(!force && now - _updLast < UPD_CHECK_MS) return;
+  _updLast = now;
+  try{
+    const r = await fetch(location.pathname, {cache:'no-cache'});
+    if(!r.ok) return;
+    const live = _updBuildFrom(await r.text());
+    if(!live) return;                               // not our file (404 page?)
+    if(live === BUILD){ _updClearBar(); return; }   // already current
+    if(live === _updOffered) return;                // bar is already up for this one
+    let dismissed=''; try{ dismissed = localStorage.getItem('gk_upd_dismissed')||''; }catch(e){}
+    if(dismissed === live) return;                  // he said not now
+    _updOffered = live;
+    _updShowBar(live);
+  }catch(e){ /* no signal / blocked — silent, we try again next foreground */ }
+}
+function _updClearBar(){ const b=document.getElementById('updbar'); if(b) b.remove(); }
+function _updShowBar(live){
+  _updClearBar();
+  const stuck = _updStuck();
+  const d = document.createElement('div');
+  d.id='updbar'; d.className='updbar';
+  d.innerHTML = '<div class="t">'
+      + (stuck ? 'Update didn’t take — force-quit the app and reopen it.'
+               : 'Update ready — ' + esc(live))
+      + '</div>'
+    + (stuck ? '' : '<button class="go" id="updgo">Update</button>')
+    + '<button class="x" id="updx" aria-label="Not now">✕</button>';
+  document.body.appendChild(d);
+  const go = document.getElementById('updgo');
+  if(go) go.onclick = function(){ applyUpdate(live); };
+  document.getElementById('updx').onclick = function(){
+    try{ localStorage.setItem('gk_upd_dismissed', live); }catch(e){}
+    _updClearBar();
+  };
+}
+// Stage 1: a plain reload. The check above already refreshed the cached copy, so
+// this is normally all it takes.
+function applyUpdate(live){
+  try{ localStorage.removeItem('gk_upd_dismissed'); }catch(e){}
+  try{ sessionStorage.setItem('gk_upd_want', live); }catch(e){}
+  location.reload();
+}
+// Stage 2, run on the way back up: if the reload handed us the OLD build anyway,
+// go to the same file under a ?v= query — a cache key iOS has never seen and
+// therefore cannot answer from cache. Runs before boot so nothing else loads
+// first. Terminates by design: the marker is consumed here, so the worst case is
+// one escalation per tap, and _updStuck() then tells the truth instead of looping.
+function _updAfterReload(){
+  let want=''; try{ want = sessionStorage.getItem('gk_upd_want')||''; }catch(e){}
+  if(!want) return;
+  try{ sessionStorage.removeItem('gk_upd_want'); }catch(e){}
+  if(want === BUILD) return;                        // stage 1 did it
+  location.replace(location.pathname + '?v=' + encodeURIComponent(want));
+}
+_updAfterReload();
+// Runs whether or not anyone is signed in — a stale copy is stale on the login
+// screen too, and Chase should get the bar before he has to think about it.
+checkForUpdate(true);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) checkForUpdate(false); });
 
 // ---------- boot ----------
 (async function boot(){
