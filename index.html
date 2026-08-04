@@ -852,6 +852,7 @@
 
     <!-- Tabs -->
     <div style="display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <button type="button" class="consent-tab" data-tab="inbound_inquiry" onclick="switchConsentTab('inbound_inquiry')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Requested quote</button>
       <button type="button" class="consent-tab" data-tab="partner_intake" onclick="switchConsentTab('partner_intake')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Partner intake</button>
       <button type="button" class="consent-tab" data-tab="web_form" onclick="switchConsentTab('web_form')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Web form</button>
       <button type="button" class="consent-tab" data-tab="verbal_phone" onclick="switchConsentTab('verbal_phone')" style="padding:8px 12px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12.5px;cursor:pointer">Verbal (phone)</button>
@@ -859,6 +860,29 @@
     </div>
 
     <div style="overflow-y:auto;flex:1;padding-right:4px">
+      <!-- Requested quote / inbound inquiry pane (2026-08-04) -->
+      <div class="consent-pane" id="consent-pane-inbound_inquiry" style="display:none">
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">
+          The customer <strong>reached out to us</strong> asking for a quote or service and gave us their number as part of that. That's the basis for job-related texting (quotes, scheduling, on-my-way) — no script needed. This is <em>not</em> a marketing opt-in; GreenKey doesn't market by text.
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">How they reached out</div>
+          <select id="consent-inquiry-via" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+            <option value="Phone call">Phone call</option>
+            <option value="Voicemail">Voicemail</option>
+            <option value="Text message">Text message</option>
+            <option value="Email">Email</option>
+            <option value="In person">In person</option>
+            <option value="Referral">Referral / word of mouth</option>
+            <option value="Other">Other (describe in notes)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">What they asked for (optional, good evidence)</div>
+          <input id="consent-inquiry-detail" type="text" placeholder="e.g. Called 8/4 asking for a panel replacement quote" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        </div>
+      </div>
+
       <!-- Partner intake pane -->
       <div class="consent-pane" id="consent-pane-partner_intake" style="display:none">
         <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px">
@@ -1260,7 +1284,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1976,6 +2000,11 @@ const CONSENT_STATUSES = {
   WEB_FORM: 'web_form',               // greenkey-usa.com form with checkbox
   VERBAL_PHONE: 'verbal_phone',       // live phone call using verbal script below
   EMAIL_REPLY: 'email_reply',         // customer replied "yes" to an opt-in email
+  // Customer REACHED OUT TO US asking for a quote / service (call, text, email,
+  // in person). They initiated the relationship and gave us their number for
+  // the job — transactional/conversational texting basis, no script ceremony
+  // (2026-08-04, Jonathan; policy in memory: GreenKey does no SMS marketing).
+  INBOUND_INQUIRY: 'inbound_inquiry',
   // Customer texted US — either replying to our missed-call auto-text or writing
   // in cold. Transactional consent only; NOT written consent for marketing.
   SMS_REPLY: 'sms_reply',
@@ -1985,6 +2014,7 @@ const CONSENT_STATUSES = {
 // Display labels shown in the UI (matches CONSENT_STATUSES keys)
 const CONSENT_LABELS = {
   none:            'No consent on file',
+  inbound_inquiry: 'Requested quote — contacted us',
   partner_intake:  'Partner intake form',
   web_form:        'Website form',
   verbal_phone:    'Verbal (phone call)',
@@ -14287,7 +14317,7 @@ function renderJobDetail(id) {
 
   const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap">
     <select id="appt-add-${id}" class="jd-fi" style="flex:1;min-width:190px;font-size:12.5px;padding:5px 8px">
-      ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t==='walkdown'?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
+      ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t==='installation'?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
     </select>
     <button class="btn btn-p" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="scheduleApptNow('${id}', document.getElementById('appt-add-${id}').value)" title="Pick the date and time now and create the Outlook event — the same thing the old header Schedule button did, in one click.">📅 Schedule now</button>
     <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Queue it without a date. It appears in the Scheduler as work waiting to be booked. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
@@ -18476,9 +18506,13 @@ function _changeSchedTech(newTechId) {
 // Pool selection helpers. _sched.included is the source of truth — keyed by
 // leadId, value true means "include in the next build." Default empty
 // object means nothing is selected; user explicitly checks what to schedule.
+// ⚠ Deselection must be stored as an EXPLICIT false, never by deleting the key
+// (2026-08-04, Jonathan + Sherri live). The pool render defaults undefined →
+// selected (the 7/28 "start selected" change), so a deleted key was instantly
+// re-checked on the re-render the toggle itself triggers: unchecking bounced
+// back, Select none appeared dead, and Build swept the ENTIRE pool onto the day.
 function toggleSchedJobInclusion(leadId) {
-  if (_sched.included[leadId]) delete _sched.included[leadId];
-  else _sched.included[leadId] = true;
+  _sched.included[leadId] = !_sched.included[leadId];
   _sched.built = false;
   renderSchedulerPage();
 }
@@ -18489,16 +18523,14 @@ function selectAllSchedJobs() {
   renderSchedulerPage();
 }
 function selectNoSchedJobs() {
-  _sched.included = {};
+  const jobs = getSchedulableJobs(_sched.techId || null);
+  jobs.forEach(l => { _sched.included[l.id] = false; });
   _sched.built = false;
   renderSchedulerPage();
 }
 function invertSchedSelection() {
   const jobs = getSchedulableJobs(_sched.techId || null);
-  jobs.forEach(l => {
-    if (_sched.included[l.id]) delete _sched.included[l.id];
-    else _sched.included[l.id] = true;
-  });
+  jobs.forEach(l => { _sched.included[l.id] = !_sched.included[l.id]; });
   _sched.built = false;
   renderSchedulerPage();
 }
@@ -20879,6 +20911,7 @@ function _buildSchedConfirmEmailHtml({ firstName, dateLabel, timeLabel, techName
     ? `<div style="background:#f9f9f9;padding:14px 16px;border-radius:6px;margin:0 0 18px"><div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Scope of Work</div><div style="font-size:14px;color:#333;line-height:1.55">${escHtml(scope).replace(/\n/g,'<br>')}</div></div>`
     : '';
   return `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55">
+    <div style="height:5px;background:#8CC63F;border-radius:3px;margin:0 0 18px"></div>
     <img src="${GK_LOGO_URL}" alt="GreenKey" style="height:48px;margin:0 0 18px;display:block">
     <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(firstName)},</p>
     <p style="font-size:14px;margin:0 0 16px">We'd like to schedule your GreenKey electrical service. Please <strong>confirm</strong> this time or <strong>request a different day</strong> using the buttons below.</p>
@@ -20895,7 +20928,7 @@ function _buildSchedConfirmEmailHtml({ firstName, dateLabel, timeLabel, techName
     </div>
     <p style="font-size:13px;color:#666;margin:18px 0 6px">If neither button works, paste this link: <span style="word-break:break-all">${escHtml(confirmUrl)}</span></p>
     <p style="font-size:13px;color:#666;margin:0 0 8px">Questions? Reply to this email or call us.</p>
-    <p style="font-size:11px;color:#888;margin:24px 0 0;border-top:1px solid #eee;padding-top:12px">GreenKey Electric · automated scheduling notification · this confirmation link is unique to you</p>
+    <p style="font-size:11px;color:#888;margin:24px 0 0;border-top:1px solid #eee;padding-top:12px">GreenKey · greenkey-usa.com · this confirmation link is unique to you</p>
   </div>`;
 }
 
@@ -23501,6 +23534,154 @@ async function _opsInspectionSweep() {
   finally { _opsSweepBusy = false; }
 }
 
+// ── OPERATIONS PHOTO MIRROR (2026-08-04, Jonathan; design + folder recon in
+// project memory `greenkey-ops-photo-mirror`) ──
+// One-way: field-app photos (GreenKeyCRM_Photos/<jobId>/**, ALL categories) are
+// server-side COPIED into the job's Operations folder → "Completion pics".
+// Folder resolution: the week folder for the job's scheduled Monday first
+// (weekly folders are named e.g. 8-3-2026, NOT zero-padded), then the other
+// week folders, then NEEDS INSPECTION COMPLETED — tolerating Sherri's renames
+// ("-SCHEDULED 6.26.26", "-FAILED (…)") and missing source prefixes ("Allen
+// Project"), and skipping her Archive folder.
+// HARD RULES: never create or rename a JOB folder (only the "Completion pics"
+// subfolder inside an existing one); never delete anything; if no folder is
+// matched, do nothing — the photos wait until Sherri creates it. Her manual
+// workflow is unchanged by design (the "do NOT change it" note above stands).
+// A per-job ledger in localStorage records what's been copied, so the async
+// Graph copy (202, completes later) is never fired twice for the same file.
+const OPS_MIRROR_MIN_INTERVAL_MS = 10 * 60 * 1000;
+const OPS_MIRROR_JOBS_PER_SWEEP  = 4;      // Graph-call budget per sweep
+let _opsMirrorLastAt = 0;
+let _opsMirrorBusy   = false;
+let _opsMirrorCursor = 0;                  // round-robin over candidates
+function _opsMirrorLedger() {
+  try { return JSON.parse(localStorage.getItem('gk_ops_photo_mirrored') || '{}'); } catch(_) { return {}; }
+}
+function _opsMirrorLedgerSave(v) { try { localStorage.setItem('gk_ops_photo_mirrored', JSON.stringify(v)); } catch(_){} }
+function _opsMondayName(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00'); if (isNaN(d)) return null;
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return (d.getMonth() + 1) + '-' + d.getDate() + '-' + d.getFullYear();
+}
+function _opsNameMatch(folderName, baseName, tailName) {
+  return folderName === baseName || folderName.startsWith(baseName)
+      || folderName === tailName || folderName.startsWith(tailName);
+}
+async function _opsPhotoMirrorSweep() {
+  if (_opsMirrorBusy) return;
+  if (Date.now() - _opsMirrorLastAt < OPS_MIRROR_MIN_INTERVAL_MS) return;
+  if (typeof _gToken === 'undefined' || !_gToken || !_spDrive) return;
+  _opsMirrorBusy = true; _opsMirrorLastAt = Date.now();
+  try {
+    const schedIdx = STAGES.findIndex(s => s.id === 'scheduled');
+    const invIdx   = STAGES.findIndex(s => s.id === 'invoiced');
+    const cands = getLeads().filter(l => {
+      if (l.deleted || l.stage === 'archived') return false;
+      const li = STAGES.findIndex(s => s.id === l.stage);
+      return li >= schedIdx && (invIdx < 0 || li <= invIdx);
+    });
+    if (!cands.length) return;
+    // Index the Active Projects buckets once per sweep.
+    let weekFolders = [], niFolder = null;
+    const ap = await _graphFetch('/drives/' + _spDrive + '/root:/' + encodeURI('Operations/Active Projects') + ':/children?$top=200&$select=name,id,folder');
+    for (const it of (ap.value || [])) {
+      if (!it.folder || !it.name) continue;
+      if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(it.name)) weekFolders.push(it);
+      else if (/NEEDS INSPECTION/i.test(it.name)) niFolder = it;
+    }
+    const ledger = _opsMirrorLedger();
+    let copiedTotal = 0, filedTo = [], processed = 0, examined = 0;
+    for (let k = 0; k < cands.length && processed < OPS_MIRROR_JOBS_PER_SWEEP; k++) {
+      examined = k + 1;
+      const lead = cands[(_opsMirrorCursor + k) % cands.length];
+      const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+      const baseName = _buildSPLeadFolderName(lead, cust);
+      if (!baseName) continue;
+      const tailName = baseName.replace(/^.*? - /, '');       // "Kelly Project"
+      // 1. This job's CRM photos, all categories.
+      let photos = [];
+      try {
+        const cats = await _graphFetch('/drives/' + _spDrive + '/root:/' + encodeURI(SP_PHOTO_LIB_NAME + '/' + lead.id) + ':/children?$select=name,id,folder');
+        for (const cat of (cats.value || [])) {
+          if (!cat.folder) continue;
+          const f = await _graphFetch('/drives/' + _spDrive + '/items/' + cat.id + '/children?$select=name,id,file');
+          for (const it of (f.value || [])) if (it.file) photos.push(it);
+        }
+      } catch (_) { continue; }             // no photo folder yet → next job
+      processed++;
+      const done = ledger[lead.id] || {};
+      const todo = photos.filter(p => p.name && !done[p.name]);
+      if (!todo.length) continue;
+      // 2. Resolve the job's Operations folder — scheduled week first.
+      let jobFolder = null;
+      const schedDateStr = (lead.milestones && lead.milestones.installScheduled && lead.milestones.installScheduled.date) || '';
+      const weekName = schedDateStr ? _opsMondayName(schedDateStr) : null;
+      const ordered = weekFolders.slice().sort((a, b) => (a.name === weekName ? -1 : 0) - (b.name === weekName ? -1 : 0));
+      for (const wf of ordered) {
+        try {
+          const ch = await _graphFetch('/drives/' + _spDrive + '/items/' + wf.id + '/children?$top=200&$select=name,id,folder');
+          jobFolder = (ch.value || []).find(it => it.folder && _opsNameMatch(it.name || '', baseName, tailName)) || null;
+        } catch(_){}
+        if (jobFolder) break;
+      }
+      if (!jobFolder && niFolder) {
+        try {
+          const ch = await _graphFetch('/drives/' + _spDrive + '/items/' + niFolder.id + '/children?$top=200&$select=name,id,folder');
+          jobFolder = (ch.value || []).find(it => it.folder && it.name !== 'Archive' && _opsNameMatch(it.name || '', baseName, tailName)) || null;
+        } catch(_){}
+      }
+      if (!jobFolder) continue;             // Sherri hasn't made it yet — photos wait
+      // 3. Find (or create ONLY) the "Completion pics" subfolder.
+      let cp = null;
+      try {
+        const ch = await _graphFetch('/drives/' + _spDrive + '/items/' + jobFolder.id + '/children?$top=200&$select=name,id,folder');
+        cp = (ch.value || []).find(it => it.folder && /^completion\s*pics$/i.test(it.name || '')) || null;
+      } catch(_) { continue; }
+      if (!cp) {
+        try {
+          cp = await _graphFetch('/drives/' + _spDrive + '/items/' + jobFolder.id + '/children', {
+            method: 'POST',
+            body: JSON.stringify({ name: 'Completion pics', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' })
+          });
+        } catch(e) {
+          // Race: someone created it between the list and the POST — re-list.
+          try {
+            const ch3 = await _graphFetch('/drives/' + _spDrive + '/items/' + jobFolder.id + '/children?$select=name,id,folder');
+            cp = (ch3.value || []).find(it => it.folder && /^completion\s*pics$/i.test(it.name || '')) || null;
+          } catch(_){}
+        }
+      }
+      if (!cp || !cp.id) continue;
+      // 4. Dedupe against what's already in Completion pics, then copy.
+      const present = new Set();
+      try {
+        const ch2 = await _graphFetch('/drives/' + _spDrive + '/items/' + cp.id + '/children?$top=200&$select=name,file');
+        (ch2.value || []).forEach(it => { if (it.file && it.name) present.add(it.name); });
+      } catch(_){}
+      let copied = 0;
+      for (const p of todo) {
+        if (present.has(p.name)) { done[p.name] = 1; continue; }
+        try {
+          await _graphFetch('/drives/' + _spDrive + '/items/' + p.id + '/copy', {
+            method: 'POST',
+            body: JSON.stringify({ parentReference: { driveId: _spDrive, id: cp.id }, name: p.name })
+          });
+          done[p.name] = 1; copied++;
+        } catch(e) { console.warn('[GK] photo mirror copy failed:', p.name, e); }
+      }
+      ledger[lead.id] = done;
+      if (copied) { copiedTotal += copied; filedTo.push((lead.customerName || tailName) + ' ×' + copied); }
+    }
+    _opsMirrorCursor = (_opsMirrorCursor + examined) % Math.max(1, cands.length);
+    _opsMirrorLedgerSave(ledger);
+    if (copiedTotal) {
+      console.log('[GK] Ops photo mirror: filed', copiedTotal, 'photo(s) —', filedTo.join(', '));
+      try { toast('📁 Filed ' + copiedTotal + ' field photo' + (copiedTotal === 1 ? '' : 's') + ' to Operations — ' + filedTo.join(', '), 'success'); } catch(_){}
+    }
+  } catch (e) { console.warn('[GK] _opsPhotoMirrorSweep failed:', e); }
+  finally { _opsMirrorBusy = false; }
+}
+
 // Manual "Pull install pics" — for when the pics weren't uploaded to SharePoint
 // yet at the moment the auto-pull ran. Bypasses the per-job throttle.
 async function pullInstallPicsNow(jobId) {
@@ -25986,6 +26167,7 @@ function _bellStartPolling() {
   try { _reconcileFieldPayments(); } catch(_){}
   try { _spFolderRetrySweep(); } catch(_){}
   try { _opsInspectionSweep(); } catch(_){}
+  try { _opsPhotoMirrorSweep(); } catch(_){}
   _bellPollTimer = setInterval(() => {
     if (document.visibilityState === 'visible') {
       _bellPollOnce(); _activityPollOnce(); _leadInboxPollOnce();
@@ -25994,6 +26176,7 @@ function _bellStartPolling() {
       try { _reconcileFieldPayments(); } catch(_){}
       try { _spFolderRetrySweep(); } catch(_){}
       try { _opsInspectionSweep(); } catch(_){}
+      try { _opsPhotoMirrorSweep(); } catch(_){}
       // Outlook → CRM reschedule sync. Self-throttles to one Graph call every
       // few minutes regardless of how often this timer fires (2026-07-28).
       try { syncOutlookAppointments(true); } catch(_){}
@@ -26076,6 +26259,7 @@ function openConsentModal(customerId, channel) {
   document.getElementById('consent-partner-ref').value = '';
   document.getElementById('consent-form-name').value = 'greenkey-usa.com Contact form';
   document.getElementById('consent-form-id').value = '';
+  try { document.getElementById('consent-inquiry-via').value = 'Phone call'; document.getElementById('consent-inquiry-detail').value = ''; } catch(_){}
   document.getElementById('consent-verbal-read').checked = false;
   document.getElementById('consent-email-subject').value = '';
   document.getElementById('consent-email-body').value = '';
@@ -26092,8 +26276,10 @@ function openConsentModal(customerId, channel) {
     wrap.style.display = 'none';
   }
 
-  // Default to the verbal tab (most common capture channel for Jonathan)
-  switchConsentTab('verbal_phone');
+  // Default to "Requested quote" — nearly everyone in this CRM reached out to
+  // GreenKey first, so this is the common case (2026-08-04; was verbal_phone,
+  // whose script ceremony was pure friction for inbound leads).
+  switchConsentTab('inbound_inquiry');
   document.getElementById('consent-modal').classList.add('show');
 }
 
@@ -26118,7 +26304,16 @@ function saveConsent() {
   const notes = document.getElementById('consent-notes').value.trim();
 
   let record = null;
-  if (activeTab === 'partner_intake') {
+  if (activeTab === 'inbound_inquiry') {
+    const via = document.getElementById('consent-inquiry-via').value;
+    const detail = document.getElementById('consent-inquiry-detail').value.trim();
+    record = {
+      status: CONSENT_STATUSES.INBOUND_INQUIRY,
+      source: 'Customer contacted us — ' + via,
+      notes,
+      evidence: { contactedVia: via, inquiryDetail: detail }
+    };
+  } else if (activeTab === 'partner_intake') {
     const partner = document.getElementById('consent-partner-sel').value;
     const ref = document.getElementById('consent-partner-ref').value.trim();
     record = {
