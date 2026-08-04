@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14276,7 +14276,8 @@ function renderJobDetail(id) {
         <div style="font-size:13px;font-weight:600;color:${done?'var(--text-muted)':'var(--text-primary)'};${done?'text-decoration:line-through':''}">${escHtml(_apptLabel(a.type))}</div>
         <div style="font-size:11.5px;color:${col};margin-top:1px">${booked?'📅 ':'⏳ '}${escHtml(when)}${tech?' · '+escHtml(tech.name||tech.email||''):''}${done?' · completed':''}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-shrink:0">
+      <div style="display:flex;gap:5px;flex-shrink:0;align-items:center">
+        ${booked && !done && !a.outlookEventId ? `<input type="time" value="${escHtml(a.time||'')}" onchange="setApptTime('${id}','${a.id}',this.value)" title="Set the time in the CRM only — no calendar event is created or changed. For appointments linked to a calendar event, use Reschedule instead." style="font-size:11px;padding:2px 4px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:6px">` : ''}
         <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="scheduleInOutlook('${id}','${a.id}')" title="${booked?'Move this appointment: pick the new date/time — the old Outlook event is replaced automatically.':'Pick a date and time and create the Outlook event'}">${booked?'Reschedule':'Schedule'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px" onclick="completeAppt('${id}','${a.id}')" title="${done?'Mark as not completed':'Mark this appointment completed so it drops out of the scheduler'}">${done?'↺':'✓'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px;color:var(--red)" onclick="removeAppt('${id}','${a.id}')" title="Remove from the CRM (does NOT delete the Outlook event)">×</button>
@@ -28428,6 +28429,19 @@ function completeAppt(leadId, apptId) {
   const cur = getApptsById(leadId).find(a => a.id === apptId);
   if (!cur) return;
   upsertAppt(leadId, { id: apptId, completedAt: cur.completedAt ? null : new Date().toISOString() });
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+}
+
+// Set just the TIME on a booked appointment — CRM data only, no Outlook event
+// created or touched (2026-08-04, for re-timing the 20 restored-after-wipe
+// jobs without Reschedule minting duplicate calendar events). The input only
+// renders on UNLINKED appointments: on a linked one the sync would immediately
+// write the event's time back over a CRM-only edit.
+function setApptTime(leadId, apptId, val) {
+  const cur = getApptsById(leadId).find(a => a.id === apptId);
+  if (!cur || !_apptIsBooked(cur)) return;
+  upsertAppt(leadId, { id: apptId, time: val || '' });
+  toast(val ? ('Time set to ' + val + ' — CRM only, no calendar event touched.') : 'Time cleared.', 'success');
   try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
 }
 
