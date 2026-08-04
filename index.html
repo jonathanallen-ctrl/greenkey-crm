@@ -1260,7 +1260,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-03a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -28182,6 +28182,9 @@ function upsertAppt(leadId, appt) {
     techId: appt.techId !== undefined ? appt.techId : (at >= 0 ? list[at].techId : ''),
     outlookEventId: appt.outlookEventId !== undefined ? appt.outlookEventId : (at >= 0 ? list[at].outlookEventId : ''),
     outlookCalId:   appt.outlookCalId   !== undefined ? appt.outlookCalId   : (at >= 0 ? list[at].outlookCalId   : ''),
+    // Which signed-in account created the Outlook event (lowercased UPN).
+    // The sync uses this to decide who may trust "event missing" (2026-08-04).
+    outlookOwner:   appt.outlookOwner   !== undefined ? appt.outlookOwner   : (at >= 0 ? list[at].outlookOwner   : ''),
     note:   appt.note !== undefined ? appt.note : (at >= 0 ? list[at].note : ''),
     createdAt: (at >= 0 && list[at].createdAt) ? list[at].createdAt : new Date().toISOString(),
     createdBy: (at >= 0 && list[at].createdBy) ? list[at].createdBy : ((S.user && S.user.id) || ''),
@@ -28297,8 +28300,12 @@ async function syncOutlookAppointments(quiet) {
     // Response. The old `resp.ok` check here was always false on the parsed
     // object, so this function returned early on every call and the sync never
     // ran at all. Root-caused 2026-08-03 (Sherri's drag in Outlook didn't land).
+    // ⚠ Prefer header is REQUIRED (2026-08-04): without it Graph returns event
+    // times in UTC, and the "Outlook wins" move rewrote 14:30 ET as 18:30 —
+    // every synced move silently shifted the appointment by the UTC offset.
+    const _syncTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
     let data = null;
-    try { data = await _graphFetch(path); }
+    try { data = await _graphFetch(path, { headers: { 'Prefer': 'outlook.timezone="' + _syncTz + '"' } }); }
     catch (e) { console.warn('[GK] outlook sync: calendarView failed', e); return null; }
     const items = (data && data.value) || [];
     const byId = new Map();
@@ -28327,7 +28334,19 @@ async function syncOutlookAppointments(quiet) {
       if (!ev || ev.isCancelled) {
         // Only trust "missing" when we actually looked in the right window.
         if (!inWindow(appt.date)) return;
-        list[ai] = { ...list[ai], date: '', time: '', outlookEventId: '', outlookCalId: '' };
+        // ⚠ ABSENCE IS ONLY MEANINGFUL TO THE EVENT'S CREATOR (2026-08-04).
+        // The sync runs in every open CRM and calendarView is per-account —
+        // Sherri's sign-in cannot see Jonathan's calendar, so from her CRM a
+        // perfectly healthy event looks "deleted". That wiped two booked
+        // installs over and over on 8/4 (rebook → sweep → wiped again). A
+        // CANCELLED event we can actually SEE is safe for anyone to act on;
+        // a missing one may only be trusted by the account that created it.
+        // Rows with no recorded owner (pre-8/4) are never cleared on absence.
+        if (!ev) {
+          const _myU = (typeof _msal !== 'undefined' && _msal && (_msal.getAllAccounts()[0] || {}).username || '').toLowerCase();
+          if (!appt.outlookOwner || !_myU || appt.outlookOwner !== _myU) return;
+        }
+        list[ai] = { ...list[ai], date: '', time: '', outlookEventId: '', outlookCalId: '', outlookOwner: '' };
         notes.push(`Outlook event for the ${_apptLabel(appt.type).toLowerCase()} on ${appt.date} was ${ev ? 'cancelled' : 'deleted'}. Back in the scheduler queue — rebook it.`);
         missing++;
       } else {
@@ -29065,7 +29084,8 @@ async function openSchedInOutlook(_specOk) {
     // the tentative→busy confirmation flip still finds it where it always was.
     if (eventId && _schedApptId) {
       try {
-        upsertAppt(lead.id, { id: _schedApptId, outlookEventId: eventId, outlookCalId: (tgt && tgt.id) || '' });
+        const _me = (typeof _msal !== 'undefined' && _msal && (_msal.getAllAccounts()[0] || {}).username || '').toLowerCase();
+        upsertAppt(lead.id, { id: _schedApptId, outlookEventId: eventId, outlookCalId: (tgt && tgt.id) || '', outlookOwner: _me });
       } catch(_){}
     }
     // Reschedule = MOVE: the new event exists, so remove the one it replaces.
