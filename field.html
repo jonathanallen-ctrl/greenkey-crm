@@ -27,6 +27,11 @@
   .brand .b2{color:#36c777}
   .build{font-size:10px;color:#5d6675}
   h1{font-size:22px;font-weight:700;margin:8px 0 2px}
+  /* Detail views (field-14): the title row IS the way back. h1 becomes a tappable
+     "‹ My Jobs" in brand green; the view name moves to a small right-hand label. */
+  .h1row{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+  .h1row h1.hback{color:#36c777;cursor:pointer}
+  .hlab{font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#8b93a1;flex-shrink:0}
   .srch{width:100%;margin-top:10px;padding:11px 12px;border:1px solid #262b36;border-radius:10px;background:#171a21;color:#e8eaed;font-size:15px;outline:none}
   /* SMS composer (field-13). Phone-style multi-line box: THREE lines visible at
      rest so a whole text can be read back and reworded before sending, growing
@@ -78,7 +83,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-01 field-13';
+const BUILD = '2026-08-03 field-14';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -300,10 +305,17 @@ function renderLogin(){
     + '<div class="build muted" style="margin-top:8px">'+esc(BUILD)+'</div>'
     + '</div>';
 }
-function header(title){
+// header(title) — list screens: plain h1 title.
+// header(title, true) — detail screens: the h1 slot becomes a big tappable
+// "‹ My Jobs" (Jonathan 2026-08-03: the old small back link sat below the fold
+// inside the job and was easy to miss); the view name shrinks to a right label.
+function header(title, back){
   return '<div class="top"><div class="ttl"><div class="brand">Green<span class="b2">Key</span> Field <span class="muted" style="font-weight:500">'+esc(BUILD)+'</span></div>'
     + '<div><button class="chip" onclick="refresh()" style="margin-right:6px">↻</button><button class="chip" onclick="signOut()">Sign out</button></div></div>'
-    + '<h1>'+esc(title)+'</h1></div>';
+    + (back
+       ? '<div class="h1row"><h1 class="hback" onclick="goJobs()">‹ My Jobs</h1><span class="hlab">'+esc(title)+'</span></div>'
+       : '<h1>'+esc(title)+'</h1>')
+    + '</div>';
 }
 let _search='';
 function renderJobs(){
@@ -380,7 +392,7 @@ function openWalkdown(id){ location.hash='#wd='+encodeURIComponent(id); renderWa
 // the office reads it in the CRM and finalizes the structured snapshot there.
 function renderWalkdown(id){
   const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
-  if(!l){ $app().innerHTML=header('Walkdown')+'<div class="wrap"><a class="back" onclick="goJobs()">‹ Back</a><div class="empty">Job not found.</div></div>'; return; }
+  if(!l){ $app().innerHTML=header('Walkdown', true)+'<div class="wrap"><div class="empty">Job not found.</div></div>'; return; }
   const phone=leadPhone(l), addr=leadAddr(l);
   const tel = phone? 'tel:'+phone.replace(/[^0-9+]/g,'') : '';
   const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
@@ -415,9 +427,8 @@ function renderWalkdown(id){
       + '<input id="'+fid+'-other" class="srch" style="margin-top:6px;display:'+(isOther?'block':'none')+'" value="'+esc(isOther?cur:'')+'" placeholder="'+esc(ph||'Type it exactly as it reads on the label')+'">'
       + '</div>';
   };
-  $app().innerHTML = header('Walkdown')
+  $app().innerHTML = header('Walkdown', true)
     + '<div class="wrap">'
-    + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
     + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
     + (addr?'<div class="jaddr" style="font-size:14px;margin-bottom:6px">'+esc(addr)+'</div>':'')
     + '<div class="row2">'
@@ -483,7 +494,7 @@ async function saveWalkdown(jobId){
 }
 function renderDetail(id){
   const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
-  if(!l){ $app().innerHTML=header('Job')+'<div class="wrap"><a class="back" onclick="goJobs()">‹ Back</a><div class="empty">Job not found.</div></div>'; return; }
+  if(!l){ $app().innerHTML=header('Job', true)+'<div class="wrap"><div class="empty">Job not found.</div></div>'; return; }
   const phone=leadPhone(l), addr=leadAddr(l);
   const tel = phone? 'tel:'+phone.replace(/[^0-9+]/g,'') : '';
   const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
@@ -576,9 +587,8 @@ function renderDetail(id){
     +   '</div>'
     +   '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.45">Sends from the GreenKey business number. The office sees this conversation in the CRM too.</div>'
     + '</div></div>') : '';
-  $app().innerHTML = header('Job')
+  $app().innerHTML = header('Job', true)
     + '<div class="wrap">'
-    + '<a class="back" onclick="goJobs()">‹ My Jobs</a>'
     + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
     + (addr?'<div class="jaddr" style="font-size:14px;margin-bottom:6px">'+esc(addr)+'</div>':'')
     + '<div class="chips" style="margin-bottom:4px">'+(l.jobType?'<span class="chip blue">'+esc(prettyType(l.jobType))+'</span>':'')+(l.source?'<span class="chip">'+esc(l.source)+'</span>':'')+(schedDate(l)?'<span class="chip amber">📅 '+esc(schedDate(l).slice(0,10))+'</span>':'')+'</div>'
@@ -1165,6 +1175,12 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) c
     if(!hadData) loading('Loading your jobs…');
     try{ await spInit(); await syncFromSP(); }
     catch(e){ console.warn('[field] sync', e); if(!hadData){ $app().innerHTML='<div class="center"><div class="err">Could not load jobs.</div><div class="muted" style="font-size:13px;max-width:300px">'+esc(e.message||e)+'</div><button class="btn ghost" style="max-width:240px" onclick="location.reload()">Retry</button><button class="btn ghost" style="max-width:240px" onclick="signOut()">Sign out</button></div>'; return; } }
+    // Always open on My Jobs (field-14, Jonathan 2026-08-03). iOS relaunches the
+    // saved app with its last URL, so a leftover #job= hash restored whatever job
+    // was open when the phone was put away. Strip it here — replaceState so no
+    // hashchange fires — then route() lands on the list. refresh() still keeps
+    // you on the job you're looking at; only a cold open comes home.
+    if(location.hash){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){ location.hash=''; } }
     route();
   }catch(e){
     console.error('[field] boot', e);
