@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05q</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05s</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -18132,11 +18132,38 @@ function deriveJobCrew(lead) {
     if (sg.type === 'hand-trench' || sg.type === 'hand-dig') hoursTrench += (ft / 10) * 0.75;
     else if (sg.type === 'machine-trench') hoursTrench += 1.5 + (ft / 10) * 0.4;
   });
-  const hours = Math.round((hoursBase + hoursDifficult + hoursTrench) * 4) / 4;
+  // ── ADD-ONS (2026-08-05) ──
+  // ⚠ These existed in estimateJobDuration() and were NEVER carried into this
+  // function, so every EV job with run segments silently lost them — the model
+  // said "add-ons stack" and the code did not. Found by comparing Chrita Lewis's
+  // quote (35 ft run, Interior/Basement panel) against what the pool showed:
+  // 3.5 h, with the interior panel contributing nothing.
+  //
+  // Interior/basement panel is the old 2.0→2.5 base bump expressed as an
+  // adder. Pedestal is the big one — four hours, and dropping it silently is
+  // most of a working day.
+  let hoursAddons = 0;
+  try {
+    const _q  = (typeof _leadPrimaryQuote === 'function') ? _leadPrimaryQuote(lead) : null;
+    const _qq = (_q && _q.qq) || {};
+    if (_qq.panelLocation === 'interior') hoursAddons += 0.5;
+    const _mt = _qq.mountType;
+    if (_mt === 'post') hoursAddons += 0.75;
+    else if (_mt === 'pedestal-existing' || _mt === 'pedestal-pad' || _mt === 'pedestal-newpad') hoursAddons += 4.0;
+    else if (_mt === 'custom') hoursAddons += 1.0;
+    if ((_qq.tandemBreakers || 0) > 0) hoursAddons += 0.25;
+    // difficultyFee and crewDifficult are different signals that overlap in
+    // practice (one is "the customer was charged for a hard job", the other is
+    // "Jonathan has to be on it"). Only count the fee when the crew flag has not
+    // already added time, so a job flagged both ways is not charged twice.
+    if ((_qq.difficultyFee || 0) > 0 && !difficult) hoursAddons += 0.5;
+  } catch (_) {}
+
+  const hours = Math.round((hoursBase + hoursDifficult + hoursTrench + hoursAddons) * 4) / 4;
 
   return {
     size, effSize, required, hours, totalFt, runFt, trench, crossing, longRun, difficult,
-    hoursBase, hoursDifficult, hoursTrench,
+    hoursBase, hoursDifficult, hoursTrench, hoursAddons,
     reasons
   };
 }
@@ -18182,6 +18209,11 @@ function getJobHours(lead) {
   // whenever this is an EV job with a quote to read, and only fall back for job
   // types the model does not cover, or when there is genuinely no quote.
   const q      = (typeof _leadPrimaryQuote === 'function') ? _leadPrimaryQuote(lead) : null;
+  // A DETAILED quote carries explicit labour hours a human typed. That beats any
+  // derivation — it is someone who looked at the job saying how long it takes.
+  if (q && q.type === 'detailed' && parseFloat(q.laborHours) > 0) {
+    return Math.round(parseFloat(q.laborHours) * 4) / 4;
+  }
   const isEV   = !!lead && (lead.jobType === 'ev-residential');
   const hasGeom = !!(q && q.qq);
   if (isEV && hasGeom) return deriveJobCrew(lead).hours;
@@ -18258,8 +18290,12 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 function _unschedBannerHtml(arr) {
   if (!arr || !arr.length) return '';
   const geo    = arr.filter(l => l._unschedReason === 'geocode');
-  const budget = arr.filter(l => l._unschedReason !== 'geocode');
+  const nogap  = arr.filter(l => l._unschedReason === 'no-gap');
+  const budget = arr.filter(l => l._unschedReason !== 'geocode' && l._unschedReason !== 'no-gap');
   let html = '';
+  if (nogap.length) {
+    html += `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${nogap.length} job(s) had no gap the right shape between the jobs already booked that day — not that the day is full, but that the free stretches are too short or too far away. Try another date, move something, or enable Allow Overtime to use the end of the day.</div>`;
+  }
   if (budget.length) {
     html += `<div style="margin-top:12px;font-size:12.5px;color:var(--amber)">⚠ ${budget.length} job(s) didn't fit the day's hours — they remain in the pool for another day (or enable Allow Overtime and rebuild).</div>`;
   }
@@ -18434,6 +18470,10 @@ async function geocodeOne(address, cacheKey) {
 // ── SCHEDULER STATE ──
 const _sched = {
   date: new Date().toISOString().slice(0,10),
+  // Committed appointments the last build routed around. Recomputed on every
+  // build; deliberately NOT persisted, so a stale plan can never claim to have
+  // been built around work that has since moved.
+  anchors: [],
   durations: {},    // leadId → hours (derived, refreshed every render)
   // leadId → true when a HUMAN typed the hours. Only these are sticky; everything
   // else re-derives from the quote on every render. See the seeding block.
@@ -20215,8 +20255,12 @@ function renderSchedulerPage() {
     //   - regular job (lead set, no stopType)     — counts as work
     //   - distributor stop (stopType='distributor') — counts as work for total math
     //   - lunch/break (stopType='break')             — counts as break, NOT work
+    // ⚠ Committed work counts. Before 2026-08-05 this summed only the jobs the
+    // planner had just placed, so a day already holding seven hours of installs
+    // reported "2h 15m / 8h" and looked wide open.
+    const _anchorHrs = (_sched.anchors || []).reduce((s,a) => s + (a.jobHrs || 0), 0);
     let totalWork  = _sched.scheduled.reduce((s,x) =>
-      s + (x.stopType === 'break' ? 0 : (x.jobHrs||0)), 0);
+      s + (x.stopType === 'break' ? 0 : (x.jobHrs||0)), 0) + _anchorHrs;
     let totalDrive = _sched.scheduled.reduce((s,x) => s + (x.driveHrs||0), 0);
     const restroomHrs = _sched.scheduled
       .filter(x => x.stopType === 'break')
@@ -20299,7 +20343,10 @@ function renderSchedulerPage() {
 
     dayHtml = `
       <div style="margin-bottom:14px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Day utilization</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Day utilization${
+          (_sched.anchors && _sched.anchors.length)
+            ? ` · <span style="color:var(--green)">built around ${_sched.anchors.length} job${_sched.anchors.length===1?'':'s'} already booked (${fmtHrs(_sched.anchors.reduce((a,x)=>a+(x.jobHrs||0),0))})</span>`
+            : ''}</div>
         <div style="background:var(--bg-elevated);border-radius:6px;height:8px;overflow:hidden">
           <div style="height:100%;width:${pct}%;background:${barColor};border-radius:6px;transition:width 0.4s"></div>
         </div>
@@ -20495,6 +20542,43 @@ function getNextWorkday(iso) {
 // Resolve the per-day optimizer options from prefs + the current Scheduler
 // toggles. Geocodes the distributor address on demand. Returns an object that
 // can be passed directly to _optimizeDayPlan as the opts argument.
+// Turn everything already booked on the selected date into the day's anchors.
+// Jobs currently in the pool are EXCLUDED — we are scheduling those, not routing
+// around them (a job can legitimately be both if it was already booked and is
+// being rebuilt, and double-counting it would block its own slot).
+async function _buildDayAnchors(poolJobs) {
+  const out = [];
+  try {
+    if (typeof getApptsOnDate !== 'function') return out;
+    const poolIds = new Set((poolJobs || []).map(l => l.id));
+    const rows = getApptsOnDate(_sched.date, _sched.techId || '');
+    let untimed = 0;
+    for (const row of rows) {
+      const lead = row.lead, appt = row.appt;
+      if (!lead || !appt || poolIds.has(lead.id)) continue;
+      const startHrs = _parseHHMM(appt.time);
+      // ⚠ An appointment with no time cannot anchor a POSITION in the day. Say so
+      // out loud rather than silently planning as if the day were emptier than it
+      // is — that silence is the whole bug this feature exists to fix.
+      if (startHrs == null) { untimed++; continue; }
+      const remote = (typeof _schedIsRemote === 'function') && _schedIsRemote(appt.type);
+      const hours  = parseFloat(appt.hours) || ((typeof _apptHours === 'function') ? _apptHours(appt.type) : 1);
+      let coords = null;
+      if (!remote) {
+        const addr = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA', lead.siteZip].filter(Boolean).join(', ');
+        if (addr) { try { coords = await geocodeOne(addr, lead.id); } catch (_) {} }
+      }
+      out.push({ lead, appt, startHrs, hours, remote, coords, name: lead.customerName || lead.id });
+    }
+    if (untimed) {
+      toast(untimed + ' booked appointment' + (untimed === 1 ? '' : 's') + ' on this day ' +
+            (untimed === 1 ? 'has' : 'have') + ' no time set — the plan cannot route around ' +
+            (untimed === 1 ? 'it' : 'them') + '. Set a time on the job.', 'warning');
+    }
+  } catch (e) { console.warn('[GK] anchor build failed:', e); }
+  return out;
+}
+
 async function _buildSchedOpts() {
   const prefs = getPrefs();
   // Start time: per-day override takes precedence over prefs default.
@@ -20533,7 +20617,153 @@ async function _buildSchedOpts() {
 //   distributorCoords   — optional {lat,lon} for a distributor stop before first job
 //   distributorMin      — minutes spent at the distributor (default 30)
 //   restroomMin         — minutes for a gas/restroom break (overhead, no specific location)
+// ══════════════════════════════════════════════════════════════════════
+// ANCHORED DAY PLANNING (2026-08-05) — build AROUND what is already booked
+// ══════════════════════════════════════════════════════════════════════
+// THE BUG THIS EXISTS TO FIX. `getApptsOnDate()` was called in exactly two
+// places, both inside the render that draws the "Already on the calendar"
+// panel. `runScheduler()` never passed it to the optimizer. So the builder
+// assumed an empty day, started at the crew start time and filled forward:
+// Jonathan dropped a job onto a Friday holding Campbell 8:30 (4 h), Razo 1:00
+// (2 h) and Loughin 3:30 (1 h), and it placed work at 8:00 straight through
+// Campbell, then reported "6h 35m / 8h" on a day already carrying seven hours.
+// The panel's own footer promised "build a plan below to add more around these"
+// and nothing had ever been wired up behind it.
+//
+// WHY A SEPARATE FUNCTION. The greedy nearest-neighbour walk in
+// _optimizeDayPlan only ever appends — it has no concept of a slot reserved
+// later in the day, so anchors cannot be bolted onto it. This runs INSTEAD, and
+// only when the day actually has committed work. A day with no anchors still
+// goes through the original code path, unchanged, because that is the path
+// Jonathan has been using and trusting.
+//
+// THE ALGORITHM is cheapest insertion. Anchors are fixed points sorted by their
+// booked time; they carve the day into gaps. For every (candidate × gap) pair:
+//
+//     added drive = drive(prev→cand) + drive(cand→next) − drive(prev→next)
+//
+// Lowest added drive wins, subject to fitting the gap and honouring the
+// candidate's own time constraint. Repeat until nothing else fits. Evaluating
+// every pair is also what lets it answer "which of these five should I add",
+// not merely "where does this one go".
+//
+// ⚠ ANCHOR TIMES ARE NEVER MOVED. The customer was told 8:30. This fills around
+// them and will never propose reordering. "Suggest moving a booked job" is a
+// different feature with customer-notification consequences.
+//
+// ⚠ REMOTE ITEMS HOLD THE CLOCK, NOT THE TRUCK. A phone walkdown consumes its
+// hour without changing where the van is, so it cannot be a routing point — it
+// inherits the effective location of whatever came before it.
+function _optimizeWithAnchors(jobs, coords, homeCoords, dayHours, durationsMap, opts, anchors) {
+  const startHrs = (typeof opts.startHrs === 'number') ? opts.startHrs : 8.0;
+  const allowOT  = !!opts.allowOT;
+  const dayEnd   = startHrs + dayHours;
+  // ⚠ OVERTIME IS BOUNDED. "Allow overtime" means let the day run long, not
+  // schedule until dawn. Unbounded, the insertion loop happily stacked work into
+  // the small hours once the anchors pushed the tail past the normal day end —
+  // a headless run produced jobs starting at 11:41 PM and 1:27 AM. The original
+  // greedy has the same flaw; it never surfaced because starting from an empty
+  // day there was never enough work to reach midnight.
+  const OT_MAX_HRS = 4;
+  const hardEnd  = allowOT ? (dayEnd + OT_MAX_HRS) : dayEnd;
+  const EPS      = 1e-6;
+
+  // Anchors in clock order, each carrying an EFFECTIVE location: a remote item
+  // inherits the position of whatever preceded it, so drive maths never jumps
+  // to a phone call's address (it has none).
+  const slots = anchors.slice().sort((a, b) => a.startHrs - b.startHrs).map(a => ({
+    fixed: true, anchor: a, lead: a.lead || null,
+    startTime: a.startHrs, jobHrs: a.hours, endTime: a.startHrs + a.hours,
+    coords: a.remote ? null : (a.coords || null)
+  }));
+  let carry = homeCoords;
+  for (const s of slots) { if (s.coords) carry = s.coords; else s.coords = carry; }
+
+  const D = (a, b) => (a && b) ? driveTimeHrs(a.lat, a.lon, b.lat, b.lon) : 0;
+  const available = [];
+  const unscheduled = [];
+  for (const l of jobs) {
+    if (!coords[l.id]) { l._unschedReason = 'geocode'; unscheduled.push(l); }
+    else available.push(l);
+  }
+
+  while (available.length) {
+    let best = null;
+    for (let ci = 0; ci < available.length; ci++) {
+      const l  = available[ci];
+      const c  = coords[l.id];
+      const jobH = durationsMap[l.id] || getJobHours(l);
+      const tw = (typeof getApptConstraint === 'function')
+        ? getApptConstraint(l, (typeof _schedTargetAppt === 'function') ? _schedTargetAppt(l) : null)
+        : {};
+      const earliest = _parseHHMM(tw.earliest || tw.earliestStart);
+      const latest   = _parseHHMM(tw.latest   || tw.latestStart);
+
+      for (let g = 0; g <= slots.length; g++) {
+        const prev    = g === 0 ? null : slots[g - 1];
+        const prevEnd = prev ? prev.endTime : startHrs;
+        const prevLoc = prev ? prev.coords : homeCoords;
+        const next    = slots[g] || null;
+        const nextLoc = next ? next.coords : homeCoords;
+
+        const driveIn  = D(prevLoc, c);
+        const driveOut = D(c, nextLoc);
+        const added    = driveIn + driveOut - D(prevLoc, nextLoc);
+
+        let start = prevEnd + driveIn;
+        if (earliest != null && start < earliest) start = earliest;
+        if (latest != null && start > latest + EPS) continue;      // hard cutoff
+        const end = start + jobH;
+
+        if (next) {
+          if (end + driveOut > next.startTime + EPS) continue;      // would push a booked job
+        } else if (end + driveOut > hardEnd + 0.05) {
+          continue;   // would not get home by the day's end (or the overtime ceiling)
+        }
+        if (!best || added < best.added - EPS) {
+          best = { ci, g, added, start, end, jobH, driveIn, coords: c, lead: l,
+                   waitHrs: (earliest != null && prevEnd + driveIn < earliest) ? (earliest - (prevEnd + driveIn)) : 0 };
+        }
+      }
+    }
+    if (!best) break;
+    slots.splice(best.g, 0, {
+      fixed: false, lead: best.lead, coords: best.coords,
+      startTime: best.start, jobHrs: best.jobH, endTime: best.end,
+      waitHrs: best.waitHrs || undefined
+    });
+    available.splice(best.ci, 1);
+  }
+
+  // Anything left could not be placed. Distinguish "the day is full" from "there
+  // is no gap the right shape" — they call for completely different responses.
+  available.forEach(l => { l._unschedReason = 'no-gap'; unscheduled.push(l); });
+
+  // Final pass: recompute each planned slot's drive from whatever actually ends
+  // up before it, which may well be an anchor.
+  let cur = homeCoords, clock = startHrs;
+  const scheduled = [];
+  for (const s of slots) {
+    const dh = D(cur, s.coords);
+    if (!s.fixed) {
+      scheduled.push({
+        lead: s.lead, driveStart: Math.max(clock, s.startTime - dh),
+        driveHrs: dh, waitHrs: s.waitHrs,
+        startTime: s.startTime, jobHrs: s.jobHrs, endTime: s.endTime
+      });
+    }
+    cur = s.coords; clock = s.endTime;
+  }
+  const returnDriveHrs = homeCoords ? D(cur, homeCoords) : 0;
+  return { scheduled, unscheduled, returnDriveHrs, anchors: slots.filter(s => s.fixed) };
+}
+
 function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts) {
+  // Anchored days take the insertion planner instead. A day with nothing booked
+  // still runs the original greedy below, untouched.
+  if (opts && Array.isArray(opts.anchors) && opts.anchors.length) {
+    return _optimizeWithAnchors(jobs, coords, homeCoords, dayHours, durationsMap, opts, opts.anchors);
+  }
   opts = opts || {};
   const startHrs          = (typeof opts.startHrs === 'number') ? opts.startHrs : 8.0;
   const distCoords        = opts.distributorCoords || null;
@@ -20761,9 +20991,14 @@ async function runScheduler() {
 
   // Build the optimizer options from prefs + per-day toggles.
   const opts = await _buildSchedOpts();
+  // Everything already on the calendar for this date becomes a fixed anchor
+  // (2026-08-05). With anchors present the planner switches to cheapest
+  // insertion; with none it runs the original greedy, untouched.
+  opts.anchors = await _buildDayAnchors(jobs);
 
   // Run the optimizer.
   const result = _optimizeDayPlan(jobs, coords, homeCoords, dayHours, _sched.durations, opts);
+  _sched.anchors = result.anchors || [];
   // Re-insert custom stops chronologically (sorted by startTime).
   if (carryCustom.length) {
     for (const cs of carryCustom) {
