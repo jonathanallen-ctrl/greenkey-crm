@@ -1284,7 +1284,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-04f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6350,6 +6350,15 @@ function renderQuickQuoteForm(q){
         }
       </div>
     </div>
+    ${q.jobType!=='nema-1450' ? `<div class="qq-section">
+      <div class="qq-title">Scope Wording <span style="font-weight:400;color:var(--text-muted);font-size:11px">— optional, wording only, no price change (Sherri's scope format, 2026-08-05)</span></div>
+      <div class="fg"><div class="fl">Where does the charger go?</div>
+        <input class="li-inp" type="text" id="qq-charger-loc" value="${escHtml(qq.chargerLocText||'')}" placeholder="e.g. the exterior wall of the house to the left of the garage door" oninput="onQQChange('${q.id}')" style="width:100%">
+      </div>
+      <div class="fg" style="margin-top:8px"><div class="fl">Where is the panel?</div>
+        <input class="li-inp" type="text" id="qq-panel-loc" value="${escHtml(qq.panelLocText||'')}" placeholder="e.g. in the back right corner of the garage" oninput="onQQChange('${q.id}')" style="width:100%">
+      </div>
+    </div>` : ''}
     <div class="qq-section">
       <div class="qq-title">Add-Ons & Equipment</div>
       <div class="qq-row">
@@ -7197,6 +7206,10 @@ function onQQChange(qid){
   if(!isNema&&mountType==='pedestal-newpad') lm+=p.pedestalNewPad;
   // 'custom' adds nothing here on purpose — see pedestalPad comment.
   const mountCustom = (document.getElementById('qq-mount-custom')?.value || '').trim().slice(0,120);
+  // Scope-wording free text (2026-08-05, Sherri's EV scope format). Fall back to
+  // the saved value when the inputs aren't in the DOM so re-renders can't wipe them.
+  const chargerLocText = (document.getElementById('qq-charger-loc')?.value ?? (q.qq?.chargerLocText || '')).trim().slice(0,160);
+  const panelLocText   = (document.getElementById('qq-panel-loc')?.value   ?? (q.qq?.panelLocText   || '')).trim().slice(0,160);
   if(tandemBreakers>0) lm+=tandemBreakers*p.tandemBreaker;
   // BRH260 auto-adder — an Eaton BR panel on an EV load always gets a BRH
   // breaker. Applied automatically so it no longer depends on someone
@@ -7230,7 +7243,7 @@ function onQQChange(qid){
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
   const updated={
     ...q,
-    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran,mountCustom,..._evAddOns.patch},
+    qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran,mountCustom,chargerLocText,panelLocText,..._evAddOns.patch},
     permitFee,
     baseInstall,
     laborAndMaterials:lm,
@@ -8334,9 +8347,47 @@ function _autoScopePrimary(q){
     : (qq.mountType==='custom' && (qq.mountCustom||'').trim())
       ? ' The charger is mounted as follows: ' + (qq.mountCustom||'').trim().replace(/\.*$/, '') + '.'
     : '';
+  // ── Sherri's EV scope format (2026-08-05) ──
+  // "Install a <charger> on <location>. Install a <breaker> breaker and run
+  //  <wire + method> from the panel located <panel location> to the charger,
+  //  approximately <N> feet. <Tandems if any.>"
+  // Every slot fills from data already on the job; the two location slots come
+  // from the optional Scope Wording inputs and fall back to generic phrasing
+  // when blank. Charger name comes from lead.chargerInfo; breaker honours the
+  // BRH260 rule for Eaton BR panels; wire method follows the run segments.
+  const _sLead = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
+  const _ci = (_sLead && _sLead.chargerInfo) || {};
+  const chargerName = [_ci.make, _ci.model].filter(Boolean).join(' ') || 'customer-supplied Level 2 EV charger';
+  const _chLoc = (qq.chargerLocText || '').trim().replace(/\.+$/,'');
+  // Blank location = a LOUD placeholder, not quiet generic wording (Jonathan
+  // 2026-08-05): "[INSERT …]" is impossible to miss on review, where a generic
+  // sentence hides the gap and slips through to the customer. Square brackets
+  // on purpose — <angle brackets> read as an HTML tag and can vanish in the PDF.
+  const s1 = `Install a ${chargerName} on ${_chLoc || '[INSERT CHARGER LOCATION]'}.`;
+  const _snapS = (_sLead && _sLead.electricalSnapshot) || {};
   const wireOpt = _evnemaWire(qq);
-  const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5);
-  return `Furnish and install a dedicated 240-volt, 60-amp branch circuit from the main electrical panel in the ${loc} to the Level 2 EV charger location, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} Work includes mounting, connection, and setup of the charger.${mount} All work is performed to NEC and local code.`;
+  const _amps = wireOpt.id === '8cu' ? 50 : 60;
+  const breakerName = /^Eaton BR/.test(_snapS.panelBrand || '') ? 'BRH260' : `${_amps}-amp two-pole`;
+  const _INSULS  = { surface:'THHN/THWN-2', 'hand-trench':'THHN/THWN-2', 'machine-trench':'THHN/THWN-2', crawl:'SEU', attic:'SEU' };
+  const _METHODS = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'through the crawl space', attic:'through the attic' };
+  const _legs = segs.filter(s => s && s.type);
+  let wirePhrase, routeTail = '';
+  if (_legs.length <= 1) {
+    const _t = _legs[0] && _legs[0].type;
+    wirePhrase = `${wireOpt.gauge} ${_INSULS[_t] || 'THHN/THWN-2'}${wireOpt.metal === 'Al' ? ' (aluminum)' : ''} ${_METHODS[_t] || 'in conduit'}`;
+  } else {
+    wirePhrase = `${wireOpt.gauge}${wireOpt.metal === 'Al' ? ' aluminum' : ''} conductors`;
+    routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5).sentence || '';
+  }
+  const _pnLoc = (qq.panelLocText || '').trim().replace(/\.+$/,'') || '[INSERT PANEL LOCATION]';
+  const s2 = `Install a ${breakerName} breaker and run ${wirePhrase} from the panel located ${_pnLoc} to the charger, approximately ${totalFt} feet.${routeTail}`;
+  const _tn = qq.tandemBreakers || 0;
+  const _tWords = ['', 'One', 'Two', 'Three'];
+  const _brandTail = String(_snapS.panelBrand || '').replace(/^Eaton BRH$/, 'Eaton BR').split(' ').pop() || '';
+  const s3 = _tn > 0
+    ? ` ${_tWords[_tn] || _tn} ${_brandTail && _brandTail !== 'Other' ? _brandTail + ' ' : ''}tandem breaker${_tn > 1 ? 's are' : ' is'} required to make space in the panel.`
+    : '';
+  return `${s1} ${s2}${s3}${mount} All work is performed to NEC and local code.`;
 }
 
 function autoInclusions(q){
