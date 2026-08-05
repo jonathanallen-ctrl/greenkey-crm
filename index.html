@@ -381,7 +381,10 @@
   .kcol-lbl{font-size:11.5px;font-weight:600}
   .kcol-ct{font-size:10px;color:var(--text-muted);background:var(--bg-elevated);padding:1px 6px;border-radius:8px;font-family:var(--mono)}
   /* Per-column card scroll area */
-  .kcol-body{flex:1;overflow-y:auto;overflow-x:hidden;padding-right:3px;border-radius:var(--r);transition:background 0.15s,border 0.15s}
+  /* overscroll-behavior:contain (2026-08-05, Jonathan): when a column's vertical
+     scroll hits bottom, the leftover wheel used to CHAIN to the horizontal board
+     and yank it sideways. Contain stops the chain — column bottoms out and stays. */
+  .kcol-body{flex:1;overflow-y:auto;overflow-x:hidden;padding-right:3px;border-radius:var(--r);transition:background 0.15s,border 0.15s;overscroll-behavior:contain}
   .kcol-body::-webkit-scrollbar{width:3px}
   .kcol-body::-webkit-scrollbar-track{background:transparent}
   .kcol-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
@@ -1284,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -8357,7 +8360,11 @@ function _autoScopePrimary(q){
   // BRH260 rule for Eaton BR panels; wire method follows the run segments.
   const _sLead = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
   const _ci = (_sLead && _sLead.chargerInfo) || {};
-  const chargerName = [_ci.make, _ci.model].filter(Boolean).join(' ') || 'customer-supplied Level 2 EV charger';
+  // Model text reads as prose: "Hardwired" lowercased, and "EV charger" appended
+  // after the make/model unless the name already says charger (2026-08-05, Sherri).
+  let chargerName = [_ci.make, _ci.model].filter(Boolean).join(' ').replace(/\bHardwired\b/g, 'hardwired');
+  if (chargerName && !/charger/i.test(chargerName)) chargerName += ' EV charger';
+  if (!chargerName) chargerName = 'customer-supplied Level 2 EV charger';
   const _chLoc = (qq.chargerLocText || '').trim().replace(/\.+$/,'');
   // Blank location = a LOUD placeholder, not quiet generic wording (Jonathan
   // 2026-08-05): "[INSERT …]" is impossible to miss on review, where a generic
@@ -8367,9 +8374,15 @@ function _autoScopePrimary(q){
   const _snapS = (_sLead && _sLead.electricalSnapshot) || {};
   const wireOpt = _evnemaWire(qq);
   const _amps = wireOpt.id === '8cu' ? 50 : 60;
-  const breakerName = /^Eaton BR/.test(_snapS.panelBrand || '') ? 'BRH260' : `${_amps}-amp two-pole`;
-  const _INSULS  = { surface:'THHN/THWN-2', 'hand-trench':'THHN/THWN-2', 'machine-trench':'THHN/THWN-2', crawl:'SEU', attic:'SEU' };
-  const _METHODS = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'through the crawl space', attic:'through the attic' };
+  // Breaker names the panel family when known: BRH260 for Eaton BR, else
+  // "60-amp Homeline" / "60-amp QO" etc.; plain "two-pole" only when the
+  // snapshot has no brand (2026-08-05, Sherri).
+  const _brandTail = String(_snapS.panelBrand || '').replace(/^Eaton BRH$/, 'Eaton BR').split(' ').pop() || '';
+  const breakerName = /^Eaton BR/.test(_snapS.panelBrand || '')
+    ? 'BRH260'
+    : `${_amps}-amp ${(_brandTail && _brandTail !== 'Other') ? _brandTail : 'two-pole'}`;
+  const _INSULS  = { surface:'THHN/THWN-2', 'hand-trench':'THHN/THWN-2', 'machine-trench':'THHN/THWN-2', crawl:'SEU', attic:'SEU', unfinished:'SEU' };
+  const _METHODS = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'through the crawl space', attic:'through the attic', unfinished:'through the unfinished space' };
   const _legs = segs.filter(s => s && s.type);
   let wirePhrase, routeTail = '';
   if (_legs.length <= 1) {
@@ -8383,7 +8396,6 @@ function _autoScopePrimary(q){
   const s2 = `Install a ${breakerName} breaker and run ${wirePhrase} from the panel located ${_pnLoc} to the charger, approximately ${totalFt} feet.${routeTail}`;
   const _tn = qq.tandemBreakers || 0;
   const _tWords = ['', 'One', 'Two', 'Three'];
-  const _brandTail = String(_snapS.panelBrand || '').replace(/^Eaton BRH$/, 'Eaton BR').split(' ').pop() || '';
   const s3 = _tn > 0
     ? ` ${_tWords[_tn] || _tn} ${_brandTail && _brandTail !== 'Other' ? _brandTail + ' ' : ''}tandem breaker${_tn > 1 ? 's are' : ' is'} required to make space in the panel.`
     : '';
