@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05i</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -25190,28 +25190,38 @@ function _inspModalDone() {
 // the fresh one, so the poller tracks the NEW link and the old one shows the
 // "already responded/expired" page if ever clicked. Deliberate click: this only
 // clears the record and opens the review modal; nothing sends until Send there.
+// ⚠ 2026-08-05 — DESTRUCTIVE-ON-OPEN BUG, FIXED. This used to `delete
+// arr[i].inspection` and save the lead BEFORE opening the modal. So confirming
+// the dialog and then clicking "Not now" permanently erased the record of a
+// customer who had ALREADY picked their day — no email sent, no undo, and the
+// chip fell back to "never sent". Jonathan caught it on Naomi Slagowski, who had
+// already accepted a time, before it cost anything.
+//
+// Nothing is destroyed here now. The previous record is stashed and is replaced
+// by sendInspectionScheduling() only once a new email has actually gone out;
+// backing out at the modal leaves the job exactly as it was.
+let _inspResendPrev = null;
 function resendInspectionScheduling(leadId) {
-  if (!confirm('Send a fresh inspection-scheduling link? The previous link on this job will be abandoned (it dies on its own expiry).')) return;
-  try {
-    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
-    if (i >= 0) {
-      const prev = arr[i].inspection || {};
-      arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
-        id: 'note-insp-' + Date.now().toString(36),
-        text: `Fresh inspection-scheduling link issued (previous one from ${String(prev.sentAt||'').slice(0,10) || 'earlier'} abandoned, status was "${prev.status || '—'}").`,
-        authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
-      }]);
-      delete arr[i].inspection;
-      arr[i].updatedAt = new Date().toISOString();
-      saveLeads(arr);
-    }
-  } catch(_){}
+  const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
+  const prev = (lead && lead.inspection) || {};
+  const who  = (lead && lead.customerName) || 'This customer';
+  const msg  = (prev.status === 'picked' && prev.pickedDate)
+    ? `${who} has ALREADY picked ${prev.pickedDate} for the inspection.\n\n` +
+      `Sending a fresh link replaces that: they get emailed again and asked to pick a NEW day, ` +
+      `and the day they already chose stops being recorded on this job.\n\nSend anyway?`
+    : (prev.status === 'call_me')
+      ? `${who} asked GreenKey to call them rather than pick online.\n\n` +
+        `Sending a fresh link emails them the calendar again. Send anyway?`
+      : 'Send a fresh inspection-scheduling link? The previous link on this job will be abandoned (it dies on its own expiry).';
+  if (!confirm(msg)) return;
+  _inspResendPrev = { leadId, prev };
   openInspReviewModal(leadId);
 }
 
 // "Not now" — deliberate skip, with a trail and a way back (the Inspection
 // status chip on the job carries a Send button from now on).
 function dismissInspModal(leadId) {
+  _inspResendPrev = null;   // backed out of a resend — the old record stands
   try {
     const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
     if (i >= 0) {
@@ -25477,6 +25487,17 @@ async function sendInspectionScheduling(leadId) {
     // 7. Record it on the job.
     const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
     if (i >= 0) {
+      // A resend only overwrites the old record HERE — after the new email has
+      // actually gone out. Backing out of the modal leaves the job untouched.
+      if (_inspResendPrev && _inspResendPrev.leadId === leadId) {
+        const _p = _inspResendPrev.prev || {};
+        arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
+          id: 'note-insp-' + Date.now().toString(36) + '-r',
+          text: `Fresh scheduling link issued — the previous link from ${String(_p.sentAt||'').slice(0,10) || 'earlier'} is abandoned (status was "${_p.status || '—'}"${_p.pickedDate ? `; the customer had picked ${_p.pickedDate}` : ''}).`,
+          authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
+        }]);
+        _inspResendPrev = null;
+      }
       arr[i].inspection = { token, pickUrl, status: 'pending', sentAt: new Date().toISOString(), windowStart: winStart, windowEnd: winEnd, photosSent: atts.filter(a => !a.isInline).length, textSent: texted };
       arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
         id: 'note-insp-' + Date.now().toString(36),
