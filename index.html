@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05p</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05q</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -18164,13 +18164,31 @@ function isJobDifficult(lead) {
 }
 function getJobHours(lead) {
   if (lead && typeof lead.estHours === 'number' && lead.estHours > 0) return lead.estHours;
-  const d = deriveJobCrew(lead);
-  // Fall back to the old per-job-type estimate when there is no quote geometry to
-  // read — a service upgrade with no run segments should still say 5 hours.
+  // ⚠ 2026-08-05 — THE MOST COMMON JOB WAS SKIPPING THE MODEL ENTIRELY.
+  // This used to fall back to estimateJobDuration() whenever `_crewSegs(lead)`
+  // was empty. But a within-5-ft garage install legitimately HAS no run
+  // segments — the base 5 ft is included in the quote and nothing is added — and
+  // that is the bread-and-butter job. So a fully quoted, accepted garage install
+  // was handed to the legacy flat 2.0 for being EV, and the ramp (which would
+  // say 1.0 at a 5 ft run) never ran. "No segments" was being read as "no data"
+  // when it actually means "a short job".
+  //
+  // Jonathan caught this on the first real pool: Dudley and Kabilovic both read
+  // exactly 2.0 with accepted quotes on file.
+  //
+  // The fallback still matters for work the crew-geometry model does not
+  // describe — a service upgrade has no wire run to measure and should still say
+  // 5 hours, a `custom` job still has no model at all. So: use the geometry
+  // whenever this is an EV job with a quote to read, and only fall back for job
+  // types the model does not cover, or when there is genuinely no quote.
+  const q      = (typeof _leadPrimaryQuote === 'function') ? _leadPrimaryQuote(lead) : null;
+  const isEV   = !!lead && (lead.jobType === 'ev-residential');
+  const hasGeom = !!(q && q.qq);
+  if (isEV && hasGeom) return deriveJobCrew(lead).hours;
   if (!_crewSegs(lead).length && typeof estimateJobDuration === 'function') {
     try { return estimateJobDuration(lead); } catch (_) {}
   }
-  return d.hours;
+  return deriveJobCrew(lead).hours;
 }
 function setJobCrewField(leadId, field, value) {
   const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
@@ -18684,46 +18702,153 @@ function insertCustomStop({ title, durMin, startHrs, note }) {
   renderSchedulerPage();
 }
 
-// ── PER-JOB TIME WINDOW ─────────────────────────────────────────────────
+// ── PER-APPOINTMENT TIME CONSTRAINT ─────────────────────────────────────
 // Customer-driven constraints: "no earlier than 10 AM" (someone leaves for
-// work), "no later than 2 PM" (someone has to pick up kids). Stored on the
-// lead at scheduling.timeWindow so it survives across schedule rebuilds.
-// The optimizer respects both: a too-early arrival inserts a wait; a
-// too-late arrival sends the job to unscheduled with the reason logged.
-function editJobTimeWindow(leadId) {
-  const lead = getLead(leadId);
-  if (!lead) return;
-  const tw = lead.scheduling?.timeWindow || {};
-  const eStr = window.prompt(
-    `Earliest arrival time for ${lead.id}? Format HH:MM (24hr, e.g. 09:30).\nLeave blank to clear / no constraint.`,
-    tw.earliestStart || ''
-  );
-  if (eStr === null) return; // cancelled
-  const lStr = window.prompt(
-    `Latest arrival time for ${lead.id}? Format HH:MM (24hr, e.g. 15:00).\nLeave blank to clear / no constraint.`,
-    tw.latestStart || ''
-  );
-  if (lStr === null) return; // cancelled
-  // Validate
-  const valid = (s) => !s || /^\d{1,2}:\d{2}$/.test(s.trim());
-  if (!valid(eStr) || !valid(lStr)) {
-    toast('Time format must be HH:MM in 24-hour format (e.g. 09:30, 14:00).', 'error');
-    return;
+// work), "no later than 2 PM" (school pickup) — and, from 2026-08-05, a hard
+// FIXED time: the utility is meeting you there at 8, the gate opens at 7, the
+// customer can only do Tuesday at noon.
+//
+// ⚠ A fixed time is not a special case. A pinned job is simply an ANCHOR that
+// has not been booked yet — the same thing a committed appointment already is
+// to the optimizer. One concept, one code path. Do not build a parallel
+// "pinned jobs" mechanism.
+//
+// ⚠ Stored on the APPOINTMENT, not the lead. The old lead-level
+// `scheduling.timeWindow` meant a job's walkdown and its install had to share
+// one constraint, which is wrong — the walkdown might be the 8 AM one. Legacy
+// values are still READ as a fallback so nothing that was set before this
+// change is lost; they are simply never written again.
+//
+// `reason` exists because "08:00" alone is a mystery in six weeks. "08:00 —
+// customer leaves for work at 9" survives.
+
+// Which appointment does a scheduler pool card stand for? The unbooked
+// installation row if there is one, otherwise any unbooked row, otherwise
+// nothing — in which case the constraint falls back to the lead.
+function _schedTargetAppt(lead) {
+  try {
+    const as = (typeof getAppts === 'function') ? getAppts(lead) : [];
+    return as.find(a => !a.date && a.type === 'installation')
+        || as.find(a => !a.date)
+        || null;
+  } catch (_) { return null; }
+}
+
+// Resolve the effective constraint. Appointment wins; lead-level is legacy fallback.
+function getApptConstraint(lead, appt) {
+  const a = appt || {};
+  if (a.timeMode === 'fixed' && a.fixedTime) {
+    return { mode: 'fixed', earliest: a.fixedTime, latest: a.fixedTime, at: a.fixedTime, reason: a.timeReason || '' };
   }
-  const arr = getLeads();
-  const idx = arr.findIndex(l => l.id === leadId);
-  if (idx < 0) return;
-  if (!arr[idx].scheduling) arr[idx].scheduling = {};
-  arr[idx].scheduling.timeWindow = {
-    earliestStart: eStr.trim() || null,
-    latestStart:   lStr.trim() || null
+  if (a.timeMode === 'window' && (a.earliestStart || a.latestStart)) {
+    return { mode: 'window', earliest: a.earliestStart || null, latest: a.latestStart || null, reason: a.timeReason || '' };
+  }
+  if (a.timeMode === 'any') return { mode: 'any', earliest: null, latest: null, reason: '' };
+  const tw = (lead && lead.scheduling && lead.scheduling.timeWindow) || {};
+  if (tw.earliestStart || tw.latestStart) {
+    return { mode: 'window', earliest: tw.earliestStart || null, latest: tw.latestStart || null, reason: tw.reason || '', legacy: true };
+  }
+  return { mode: 'any', earliest: null, latest: null, reason: '' };
+}
+// Short label for a chip. 🔒 means immovable — that distinction has to be
+// visible at a glance, because a pinned job silently constrains the whole day.
+function apptConstraintLabel(c) {
+  if (!c || c.mode === 'any') return '🕘 Any time';
+  if (c.mode === 'fixed') return '🔒 ' + c.at;
+  if (c.earliest && c.latest) return '🕘 ' + c.earliest + '–' + c.latest;
+  if (c.earliest) return '🕘 ≥ ' + c.earliest;
+  if (c.latest) return '🕘 ≤ ' + c.latest;
+  return '🕘 Any time';
+}
+
+function editJobTimeWindow(leadId) {
+  const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
+  if (!lead) return;
+  const appt = _schedTargetAppt(lead);
+  const c = getApptConstraint(lead, appt);
+  const cust = lead.customerId && typeof getCustomer === 'function' ? getCustomer(lead.customerId) : null;
+  const who = cust && typeof custFullName === 'function' ? custFullName(cust) : (lead.customerName || lead.id);
+  const sel = m => c.mode === m ? ' checked' : '';
+  const old = document.getElementById('twin-modal'); if (old) old.remove();
+  document.body.insertAdjacentHTML('beforeend', `<div class="moverlay show" id="twin-modal">
+    <div class="modal" style="max-width:460px">
+      <div class="mtitle">When can this job happen?</div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px">${escHtml(who)}${appt ? ' · ' + escHtml(_apptLabel(appt.type)) : ''}${c.legacy ? ' · <span style="color:var(--amber,#f59e0b)">carried over from the job-level setting</span>' : ''}</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer">
+        <input type="radio" name="twmode" value="any"${sel('any')} onchange="_twModeChange()"> <span>Any time — the scheduler places it wherever it fits best</span></label>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer">
+        <input type="radio" name="twmode" value="window"${sel('window')} onchange="_twModeChange()"> <span>Within a window</span></label>
+      <div id="tw-window" style="display:${c.mode==='window'?'flex':'none'};gap:8px;align-items:center;margin:0 0 10px 26px">
+        <span style="font-size:12px;color:var(--text-muted)">no earlier than</span>
+        <input type="time" id="tw-early" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.earliest||''):'')}">
+        <span style="font-size:12px;color:var(--text-muted)">no later than</span>
+        <input type="time" id="tw-late" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.latest||''):'')}">
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer">
+        <input type="radio" name="twmode" value="fixed"${sel('fixed')} onchange="_twModeChange()"> <span>🔒 Fixed — it must start at a set time</span></label>
+      <div id="tw-fixed" style="display:${c.mode==='fixed'?'flex':'none'};gap:8px;align-items:center;margin:0 0 10px 26px">
+        <span style="font-size:12px;color:var(--text-muted)">starts at</span>
+        <input type="time" id="tw-at" class="jd-fi" style="width:120px" value="${escHtml(c.at||'')}">
+      </div>
+      <div style="margin-top:6px">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Why? (so it still makes sense in six weeks)</div>
+        <input type="text" id="tw-reason" class="jd-fi" style="width:100%" maxlength="120"
+               placeholder="e.g. customer leaves for work at 9 · utility meeting us on site · gate opens at 7"
+               value="${escHtml(c.reason || '')}">
+      </div>
+      <div class="mact">
+        <button class="btn btn-g" onclick="document.getElementById('twin-modal').remove()">Cancel</button>
+        <button class="btn btn-p" onclick="_saveApptConstraint('${leadId}')">Save</button>
+      </div>
+    </div>
+  </div>`);
+}
+function _twModeChange() {
+  const m = (document.querySelector('#twin-modal input[name=twmode]:checked') || {}).value;
+  const w = document.getElementById('tw-window'), f = document.getElementById('tw-fixed');
+  if (w) w.style.display = m === 'window' ? 'flex' : 'none';
+  if (f) f.style.display = m === 'fixed'  ? 'flex' : 'none';
+}
+function _saveApptConstraint(leadId) {
+  const mode = (document.querySelector('#twin-modal input[name=twmode]:checked') || {}).value || 'any';
+  const early = (document.getElementById('tw-early') || {}).value || '';
+  const late  = (document.getElementById('tw-late')  || {}).value || '';
+  const at    = (document.getElementById('tw-at')    || {}).value || '';
+  const why   = ((document.getElementById('tw-reason') || {}).value || '').trim().slice(0, 120);
+  if (mode === 'fixed' && !at) { toast('Pick the fixed start time, or choose Any time.', 'warning'); return; }
+  if (mode === 'window' && !early && !late) { toast('Set at least one end of the window, or choose Any time.', 'warning'); return; }
+  if (mode === 'window' && early && late && early > late) { toast('The earliest time is after the latest time.', 'error'); return; }
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return;
+  const target = _schedTargetAppt(arr[i]);
+  const patch = {
+    timeMode:      mode,
+    fixedTime:     mode === 'fixed'  ? at    : null,
+    earliestStart: mode === 'window' ? (early || null) : null,
+    latestStart:   mode === 'window' ? (late  || null) : null,
+    timeReason:    why || null
   };
-  arr[idx].updatedAt = new Date().toISOString();
+  if (target && Array.isArray(arr[i].appointments)) {
+    const ai = arr[i].appointments.findIndex(a => a.id === target.id);
+    if (ai >= 0) Object.assign(arr[i].appointments[ai], patch);
+  } else {
+    // No appointment row to hang it on yet — fall back to the lead, same shape
+    // the old code used, so the accessor keeps reading it.
+    if (!arr[i].scheduling) arr[i].scheduling = {};
+    arr[i].scheduling.timeWindow = (mode === 'any') ? {} : {
+      earliestStart: mode === 'fixed' ? at : (early || null),
+      latestStart:   mode === 'fixed' ? at : (late  || null),
+      reason: why || null
+    };
+  }
+  arr[i].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  // Force a rebuild on next click — the constraints affect ordering.
-  _sched.built = false;
-  toast('Time window saved.', 'success');
-  renderSchedulerPage();
+  _sched.built = false;              // constraints change ordering — force a rebuild
+  const c = getApptConstraint(arr[i], _schedTargetAppt(arr[i]));
+  toast(mode === 'any' ? 'Time constraint cleared' : ('Saved — ' + apptConstraintLabel(c)), 'success');
+  const el = document.getElementById('twin-modal'); if (el) el.remove();
+  try { renderSchedulerPage(); } catch (_) {}
+  try { if (S.jobDetailId === leadId) renderJobDetail(leadId); } catch (_) {}
 }
 
 // Convert 'HH:MM' (24hr) to decimal hours, or null if missing/invalid.
@@ -19939,18 +20064,20 @@ function renderSchedulerPage() {
         const inTodayChip = l.milestones?.installScheduled?.done && l.milestones.installScheduled.date === _sched.date
           ? `<span class="chip chip-ok" style="font-size:10.5px" title="Already committed to this date — uncheck and rebuild to remove from the schedule">📅 In today's plan</span>`
           : '';
-        // Time-window chip: shows the customer's earliest/latest start
-        // constraints (e.g. "🕘 ≥ 10:00", "🕘 ≤ 14:00", or "🕘 10:00–14:00").
-        // Click opens an editor; if no window set, the chip shows "🕘 Set time".
-        const _tw = l.scheduling?.timeWindow || {};
-        const _twHas = !!(_tw.earliestStart || _tw.latestStart);
-        let _twLabel = '🕘 Set time';
-        if (_twHas) {
-          if (_tw.earliestStart && _tw.latestStart) _twLabel = `🕘 ${_tw.earliestStart}–${_tw.latestStart}`;
-          else if (_tw.earliestStart) _twLabel = `🕘 ≥ ${_tw.earliestStart}`;
-          else if (_tw.latestStart)   _twLabel = `🕘 ≤ ${_tw.latestStart}`;
-        }
-        const _twChip = `<span class="chip${_twHas?' chip-info':''}" style="font-size:10.5px;cursor:pointer;${_twHas?'background:rgba(52,152,219,0.12);color:#3498db':''}" onclick="event.stopPropagation();editJobTimeWindow('${l.id}')" title="${_twHas ? 'Edit the customer time window. Click to change.' : 'Customer time window not set. Click to add an earliest or latest arrival constraint.'}">${_twLabel}</span>`;
+        // Time chip (2026-08-05): reads the per-APPOINTMENT constraint, falling
+        // back to the legacy lead-level window. A fixed time gets a lock and its
+        // own colour, because "immovable" has to be legible at a glance — a
+        // pinned job silently constrains the entire day around it.
+        const _tc     = getApptConstraint(l, _schedTargetAppt(l));
+        const _twHas  = _tc.mode !== 'any';
+        const _twFix  = _tc.mode === 'fixed';
+        const _twLabel = _twHas ? apptConstraintLabel(_tc) : '🕘 Set time';
+        const _twStyle = _twFix ? 'background:rgba(243,156,18,0.16);color:#f39c12;font-weight:600'
+                       : _twHas ? 'background:rgba(52,152,219,0.12);color:#3498db' : '';
+        const _twTitle = _twFix ? ('Fixed start — the day is built around this. ' + (_tc.reason || 'No reason recorded.') + ' Click to change.')
+                       : _twHas ? ('Time window' + (_tc.reason ? ' — ' + _tc.reason : '') + '. Click to change.')
+                       : 'No time constraint. Click to set a window or pin a fixed start time.';
+        const _twChip = `<span class="chip${_twHas?' chip-info':''}" style="font-size:10.5px;cursor:pointer;${_twStyle}" onclick="event.stopPropagation();editJobTimeWindow('${l.id}')" title="${escHtml(_twTitle)}">${_twLabel}</span>`;
         // Crew chip — the binding constraint on this business is people, not
         // calendar space, so it belongs on the card next to the duration.
         const _cSize = (typeof getJobCrewSize==='function') ? getJobCrewSize(l) : 1;
@@ -19979,9 +20106,19 @@ function renderSchedulerPage() {
                   onchange="_setSchedDuration('${l.id}', this.value)">
                 <span style="font-size:12px;color:var(--text-muted)">hrs</span>
               </div>
-              ${_sched.durationsManual[l.id]
-                ? `<div style="font-size:10px;color:var(--amber,#f59e0b);margin-top:2px;white-space:nowrap">set by hand · <span style="cursor:pointer;text-decoration:underline" onclick="_resetSchedDuration('${l.id}')">reset</span></div>`
-                : ''}
+              ${(() => {
+                if (_sched.durationsManual[l.id]) {
+                  return `<div style="font-size:10px;color:var(--amber,#f59e0b);margin-top:2px;white-space:nowrap">set by hand · <span style="cursor:pointer;text-decoration:underline" onclick="_resetSchedDuration('${l.id}')">reset</span></div>`;
+                }
+                const _ds = _durationSource(l);
+                const _guess = (_ds === 'no quote yet' || _ds === 'job-type default');
+                return `<div style="font-size:10px;margin-top:2px;white-space:nowrap;color:${_guess ? 'var(--amber,#f59e0b)' : 'var(--text-muted)'}"
+                             title="${_ds === 'no quote yet'
+                               ? 'No quote on this job yet, so the hours are a flat per-job-type default. Quote it, or type the hours you expect.'
+                               : _ds === 'job-type default'
+                                 ? 'This job type has no run-based model (service upgrade, custom work), so the hours are a flat per-type default. Type the hours you expect if you know better.'
+                                 : 'Calculated from the accepted quote: run length, crew size, trenching and add-ons.'}">${_guess ? '⚠ ' : ''}${_ds}</div>`;
+              })()}
               ${isScheduled?`<div style="font-size:11px;color:var(--green);margin-top:4px">✓ Scheduled</div>`:''}
             </div>
           </div>
@@ -20455,9 +20592,15 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
       // which code path reached it first (2026-08-05).
       const jobH  = durationsMap[l.id] || getJobHours(l);
       const arrival = clockHrs + drive;
-      const tw = l.scheduling?.timeWindow || {};
-      const earliestHrs = _parseHHMM(tw.earliestStart);
-      const latestHrs   = _parseHHMM(tw.latestStart);
+      // Per-appointment constraint, with the legacy lead-level window as
+      // fallback (2026-08-05). A FIXED time arrives here as earliest === latest,
+      // which the existing wait/cutoff logic below already enforces exactly:
+      // arrive early and it waits, arrive late and the job cannot go today.
+      const tw = (typeof getApptConstraint === 'function')
+        ? getApptConstraint(l, (typeof _schedTargetAppt === 'function') ? _schedTargetAppt(l) : null)
+        : (l.scheduling?.timeWindow || {});
+      const earliestHrs = _parseHHMM(tw.earliest || tw.earliestStart);
+      const latestHrs   = _parseHHMM(tw.latest   || tw.latestStart);
       // Latest constraint — hard stop. If we'd arrive after the cutoff, this
       // job can't be scheduled today. Skip; will fall through to unscheduled
       // when no other candidate fits.
@@ -20531,6 +20674,30 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
   }
 
   return { scheduled, unscheduled, returnDriveHrs, restroomHrs };
+}
+
+// ── WHERE DID THIS NUMBER COME FROM? (2026-08-05) ──
+// Jonathan spotted it on the first real pool after the ramp shipped: three of
+// four jobs read exactly 2.0 / 2.0 / 3.0 — not derived values at all, but the
+// per-job-type fallback `estimateJobDuration()` returns when a job has no
+// accepted quote carrying run segments (EV with no quote → flat 2.0; anything
+// that is not EV or a service/new service → flat 3.0). The ramp never ran on
+// them.
+//
+// That is the same failure shape as the mailing-city AHJ and the frozen
+// durations: a number that means "we measured this" and a number that means "we
+// have no idea" rendered identically. Label it. A guess that announces itself is
+// a usable input; a guess wearing a measurement's clothes is not.
+function _durationSource(lead) {
+  try {
+    if (lead && typeof lead.estHours === 'number' && lead.estHours > 0) return 'set on job';
+    const segs = (typeof _crewSegs === 'function') ? _crewSegs(lead) : [];
+    if (segs.length) return 'from quote';
+    const q = (typeof _leadPrimaryQuote === 'function') ? _leadPrimaryQuote(lead) : null;
+    if (lead && lead.jobType === 'ev-residential' && q && q.qq) return 'from quote · no extra run';
+    if (q) return 'job-type default';       // quoted, but the model does not cover this type
+    return 'no quote yet';
+  } catch (_) { return 'no quote yet'; }
 }
 
 // A typed duration is sticky and SAYS it is sticky (2026-08-05). Resetting drops
