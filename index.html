@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05k</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -23844,14 +23844,30 @@ async function _opsPhotoMirrorSweep() {
       const baseName = _buildSPLeadFolderName(lead, cust);
       if (!baseName) continue;
       const tailName = baseName.replace(/^.*? - /, '');       // "Kelly Project"
-      // 1. This job's CRM photos, all categories.
+      // 1. This job's INSTALL photos — and ONLY those.
+      // ⚠ 2026-08-05 (Sherri): this used to walk EVERY category folder and take
+      // every file in it, so "Completion pics" filled up with things that have no
+      // business there — pictures the CUSTOMER texted in (category `site`,
+      // source 'sms'), the quote PDF and the permit PDF (category `documents`).
+      // On the Rose Project it had filed 7 texted photos and 2 PDFs and ZERO
+      // completion photos. Sherri: "They're in the customers folder too and they
+      // need to be in there only." Completion pics means the closeout shots the
+      // field app uploads. Nothing else belongs in Operations.
       let photos = [];
       try {
         const cats = await _graphFetch('/drives/' + _spDrive + '/root:/' + encodeURI(SP_PHOTO_LIB_NAME + '/' + lead.id) + ':/children?$select=name,id,folder');
         for (const cat of (cats.value || [])) {
           if (!cat.folder) continue;
+          if (!/^install$/i.test(cat.name || '')) continue;        // ⚠ install ONLY — see above
           const f = await _graphFetch('/drives/' + _spDrive + '/items/' + cat.id + '/children?$select=name,id,file');
-          for (const it of (f.value || [])) if (it.file) photos.push(it);
+          for (const it of (f.value || [])) {
+            if (!it.file) continue;
+            // Belt and braces: a PDF that somehow lands in install/ is still not
+            // a completion picture.
+            const _mt = (it.file.mimeType || '').toLowerCase();
+            if (_mt && _mt.indexOf('image/') !== 0) continue;
+            photos.push(it);
+          }
         }
       } catch (_) { continue; }             // no photo folder yet → next job
       processed++;
@@ -25312,7 +25328,7 @@ function openInspReviewModal(leadId) {
     const src = _inspImgSrc(f);
     return `<div style="position:relative">
       <img src="${escHtml(src)}" loading="lazy" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block" onclick="openLightbox('${leadId}','${f.category}',${i})" onerror="_inspTileDead(this,'${escHtml(f.id)}')" alt="" title="Click to zoom — scroll to zoom closer">
-      <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}" checked style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
+      <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}"${f.category === 'install' ? ' checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
       ${f.category === 'install' ? '' : `<span style="position:absolute;bottom:4px;left:4px;font-size:9px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 5px">${escHtml(f.category)}</span>`}
     </div>`;
   }).join('');
@@ -25323,6 +25339,20 @@ function openInspReviewModal(leadId) {
       <div class="mtitle">Send inspection scheduling to ${escHtml(who)}?</div>
       <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
         The customer gets an email with the checked photos attached and a link to pick their inspection day, plus a text pointing at the email. <strong>Click any photo to zoom in and check it</strong> — uncheck anything that shouldn't ship.
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;padding:6px 9px;background:var(--bg-elevated);border-radius:6px">
+        ${(() => {
+          // ⚠ 2026-08-05: every image used to arrive pre-checked, so pictures the
+          // CUSTOMER texted us (category `site`) were queued to be emailed back to
+          // them as their own installation photos. Only install shots are ticked
+          // now; the rest stay visible and labelled so you can add one on purpose.
+          const _inst = files.filter(f => f.category === 'install').length;
+          const _other = files.length - _inst;
+          if (!files.length) return '';
+          return `<strong>${_inst}</strong> install photo${_inst === 1 ? '' : 's'} checked` +
+            (_other ? ` · <strong>${_other}</strong> other file${_other === 1 ? '' : 's'} (walkdown, customer texts) left unchecked — tick any you want to include` : '') +
+            (!_inst ? ` — <span style="color:var(--amber,#f59e0b)">no install photos on this job yet</span>` : '');
+        })()}
       </div>
       <div style="overflow-y:auto;flex:1;display:flex;flex-wrap:wrap;gap:8px;padding:4px 0">
         ${thumbs || '<div style="font-size:13px;color:var(--amber,#f59e0b);padding:12px">⚠ No photos on this job yet. You can send without photos, or cancel and chase the install shots first.</div>'}
