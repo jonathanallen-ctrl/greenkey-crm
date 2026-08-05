@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05h</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -25148,6 +25148,35 @@ async function _inspShrinkB64(url) {
   return c.toDataURL('image/jpeg', 0.8).split(',')[1];
 }
 
+// ── INSPECTION: what the office email needs (2026-08-05b) ──
+// The worker has no access to the AHJ directory (gk_ahjs is browser storage),
+// so the CRM resolves the county's portal URL / phone here and hands them to
+// /inspection/issue-token, which stores them on the row. Same matcher as
+// textInspectorForJob() — name contains the jurisdiction, or the jurisdiction
+// contains the name with "County"/"City" stripped — so the two can't disagree
+// about which AHJ a job belongs to.
+function _inspAhjFor(lead) {
+  try {
+    const ahjs = (typeof getAHJs === 'function') ? getAHJs() : [];
+    const j = (lead.jurisdiction || lead.siteCity || '').toLowerCase().trim();
+    if (!j || !ahjs.length) return null;
+    return ahjs.find(a => {
+      const an = (a.name || '').toLowerCase();
+      return an.includes(j) || j.includes(an.replace(/ county| city/, '').trim());
+    }) || null;
+  } catch (_) { return null; }
+}
+// Sherri's generated scope paragraph off the ACCEPTED quote (never the newest —
+// see _leadPrimaryQuote and the Brett Robertson fault it was written for).
+// Capped at 600 chars: enough for a pedestal job, short of a wall of text.
+function _inspScopeFor(lead) {
+  try {
+    const q = (typeof _leadPrimaryQuote === 'function') ? _leadPrimaryQuote(lead) : null;
+    const raw = (q && q.scope) || lead.scopeOfWork || lead.description || '';
+    return String(raw).replace(/\s+/g, ' ').trim().slice(0, 600);
+  } catch (_) { return ''; }
+}
+
 async function sendInspectionScheduling(leadId) {
   const btn = document.getElementById('insp-send-btn');
   const status = document.getElementById('insp-modal-status');
@@ -25171,7 +25200,11 @@ async function sendInspectionScheduling(leadId) {
     const tokResp = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/inspection/issue-token', {
       method: 'POST', headers: { 'Authorization': 'Bearer ' + workerToken, 'Content-Type': 'application/json' },
       body: JSON.stringify({ leadId, customerEmail: email, customerName: who, siteAddress: addr,
-        jurisdiction: lead.jurisdiction || lead.siteCity || '', windowStart: winStart, windowEnd: winEnd })
+        jurisdiction: lead.jurisdiction || lead.siteCity || '', windowStart: winStart, windowEnd: winEnd,
+        // Carried so the office email stands on its own (2026-08-05b).
+        scope: _inspScopeFor(lead),
+        ahjUrl: (_inspAhjFor(lead) || {}).url || '',
+        ahjPhone: (_inspAhjFor(lead) || {}).phone || '' })
     });
     if (!tokResp.ok) throw new Error('issue-token ' + tokResp.status);
     const { pickUrl, token } = await tokResp.json();
