@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1694,13 +1694,19 @@ const STAGES = [
   {id:'estimating',       label:'Estimating',        col:'amber'},
   {id:'quote-delivered',  label:'Awaiting Customer', col:'amber'},
   {id:'quote-approved',   label:'Quote Approved',    col:'green'},
-  {id:'utility-approval', label:'Awaiting Utility',  col:'purple'},
+  // 2026-08-05 (Jonathan): 'utility-approval' (Awaiting Utility) and
+  // 'pre-install' columns REMOVED — unused. Leads still carrying those stage
+  // ids are healed by _migrateRemovedStages() (utility-approval→quote-approved,
+  // pre-install→scheduled). 'waiting' added after installation for jobs being
+  // worked but parked on something external (e.g. utility connection to a new
+  // service). 'post-install-docs' KEEPS its id (49-reader rule / Walkdown
+  // precedent) — label only becomes "Post Install".
   {id:'permit-applied',   label:'Awaiting Permit',   col:'amber'},
   {id:'charger-confirmed',label:'Awaiting Charger',  col:'blue'},
   {id:'scheduled',        label:'Scheduling',        col:'green'},
-  {id:'pre-install',      label:'Pre-Install',       col:'amber'},
   {id:'installation',     label:'Installation',      col:'green'},
-  {id:'post-install-docs',label:'Post-Install Docs', col:'amber'},
+  {id:'waiting',          label:'Waiting',           col:'purple'},
+  {id:'post-install-docs',label:'Post Install',      col:'amber'},
   {id:'final-inspection', label:'Awaiting Inspection', col:'amber'},
   {id:'invoiced',         label:'Invoiced',          col:'green'},
   {id:'not-won',          label:'Not Won',           col:'muted'},
@@ -2267,15 +2273,13 @@ function setupKanbanWheelScroll() {
   kanban.addEventListener('wheel', (e) => {
     if (kanban.scrollWidth <= kanban.clientWidth) return;       // no horizontal overflow
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;        // user is already scrolling horizontally
-    const colBody = e.target.closest('.kcol-body');
-    if (colBody && colBody.scrollHeight > colBody.clientHeight) {
-      // Column has its own vertical content. Don't hijack the wheel until
-      // the column reaches its edge in the wheel direction.
-      const atTop    = colBody.scrollTop <= 0;
-      const atBottom = colBody.scrollTop + colBody.clientHeight >= colBody.scrollHeight - 1;
-      if (e.deltaY < 0 && !atTop)    return;
-      if (e.deltaY > 0 && !atBottom) return;
-    }
+    // 2026-08-05 (Jonathan): columns are DEAD ENDS for the wheel. The old
+    // behavior hijacked leftover deltaY once a column bottomed out and yanked
+    // the whole board sideways — on the first column it flung the board off
+    // screen every time. Now the wheel over a column only ever scrolls that
+    // column; the board moves via the scrollbar, the ◀ ▶ buttons, a trackpad's
+    // horizontal gesture, or the wheel over the board's own chrome (headers/gaps).
+    if (e.target.closest('.kcol-body')) return;
     e.preventDefault();
     kanban.scrollLeft += e.deltaY;
   }, { passive: false });
@@ -2319,11 +2323,15 @@ function moveLeadToStage(leadId, stageId) {
   if (idx<0) return;
   if (arr[idx].stage===stageId) return;
   const stageName = STAGES.find(s=>s.id===stageId)?.label || stageId;
+  const _prevStage = arr[idx].stage;
   _applyNotWonTransition(arr[idx], arr[idx].stage, stageId);
   arr[idx].stage = stageId;
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+  // Post Install → offer the inspection-scheduling email (deliberate click in
+  // the review modal; suppressed jobs get a phone task instead). 2026-08-05.
+  try { if (typeof maybeOfferInspectionScheduling === 'function') maybeOfferInspectionScheduling(leadId, _prevStage); } catch(_){}
   if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
   // Hint toward the Scheduler when moving into the Scheduled stage — that's
   // the trigger for adding to the schedulable pool, but the Scheduler is on a
@@ -3737,7 +3745,29 @@ function _pipeAfterRender(liveCapture) {
   _pipeRestorePending = false;
   if (target) requestAnimationFrame(() => _pipeApplyScroll(target));
 }
+// Heal leads still carrying stage ids removed 2026-08-05. Cheap no-op loop when
+// nothing needs moving; saves (and therefore syncs) only when something changed,
+// so a stale device writing an old stage back gets re-healed on the next render.
+function _migrateRemovedStages() {
+  const MAP = { 'utility-approval': 'quote-approved', 'pre-install': 'scheduled' };
+  const arr = getLeads();
+  let changed = false;
+  arr.forEach(l => {
+    if (MAP[l.stage]) {
+      l.jobNotes = (l.jobNotes || []).concat([{
+        id: 'note-mig-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+        text: `Pipeline column "${l.stage}" was removed — moved to "${MAP[l.stage]}".`,
+        authorName: 'System', timestamp: new Date().toISOString()
+      }]);
+      l.stage = MAP[l.stage];
+      l.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  });
+  if (changed) saveLeads(arr);
+}
 function renderPipeline() {
+  try { _migrateRemovedStages(); } catch(_){}
   populateTechFilter('pf-tech');
   const src  = (document.getElementById('pf-source')||{}).value||'';
   const type = (document.getElementById('pf-type')||{}).value||'';
@@ -3771,7 +3801,7 @@ function renderKanban(leads) {
       // Field two-status chip (2026-07-21): what the tech stamped, straight from milestones.
       const _fms = l.milestones||{};
       let techChip = '';
-      if (['scheduled','pre-install','installation','post-install-docs'].includes(l.stage)) {
+      if (['scheduled','installation','waiting','post-install-docs'].includes(l.stage)) {
         if (_fms.installCompleted && _fms.installCompleted.done) {
           techChip = `<span class="chip" style="background:rgba(46,204,113,.12);color:#2ecc71;border:1px solid rgba(46,204,113,.35)" title="Tech marked the install complete${_fms.installCompleted.date?(' '+_fms.installCompleted.date):''}${_fms.installCompleted.time?(' at '+_fms.installCompleted.time):''}">✓ Field done${_fms.installCompleted.time?(' '+_fms.installCompleted.time):''}</span>`;
         } else if (_fms.techArrived && _fms.techArrived.done) {
@@ -12457,7 +12487,22 @@ function _chipEditorHTML(leadId, key){
     }
     case 'inspection': {
       const fi=ms.finalInspPassed||{};
-      return _chipEditorShell('Final Inspection', row(fi.done
+      // Customer-scheduling status line + manual (re)send entry (2026-08-05):
+      // the drop-into-Post-Install modal can be dismissed with "Not now", and
+      // this is where it lives afterwards — right where anyone thinking
+      // "inspection" already clicks.
+      const _insp = lead.inspection || null;
+      const _inspLine = _insp
+        ? row(`<span style="font-size:12px;color:var(--text-muted)">Customer scheduling: <strong style="color:var(--text-primary)">${
+            _insp.status==='picked' ? '✓ picked ' + (_insp.pickedDate||'') :
+            _insp.status==='call_me' ? 'asked for a call' :
+            _insp.status==='expired' ? 'link expired — call them' :
+            'email sent ' + String(_insp.sentAt||'').slice(0,10) + ', awaiting pick'}</strong></span>`
+            + btn('📧 Send a fresh link', `resendInspectionScheduling('${leadId}')`))
+        : row(btnP('📧 Send inspection scheduling email',`openInspReviewModal('${leadId}')`)
+            + note('Emails the customer their install photos + the pick-a-day calendar, and texts them to check their inbox. Opens the photo review first — nothing sends until you click Send there.'));
+      return _chipEditorShell('Final Inspection', _inspLine
+        + row(fi.done
         ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${(fi.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
         : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`))
         + row(btn('📱 Text inspector — attach photos',`textInspectorForJob('${leadId}')`))
@@ -13192,6 +13237,7 @@ function updateJobStage(leadId, newStage) {
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
+  try { if (typeof maybeOfferInspectionScheduling === 'function') maybeOfferInspectionScheduling(leadId, _prevStage); } catch(_){}
   if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); // keep Sherri's info form current
   // Entering/leaving Not Won toggles the reason section, so re-render fully.
   if (S.jobDetailId === leadId && (newStage === 'not-won' || _prevStage === 'not-won')) {
@@ -24939,6 +24985,319 @@ async function sendCallReply(key, digits) {
   }
 }
 
+// ── INSPECTION SCHEDULING (2026-08-05, Jonathan) ────────────────────────────
+// A job dropped into Post Install offers to email the customer a Calendly-style
+// day picker (worker /inspection/*) with their install photos attached, plus a
+// "check your email" text. DELIBERATE CLICK: nothing sends without the review
+// modal's Send button. Suppressed → a phone-scheduling task instead, so no job
+// falls into a silent gap.
+const INSP_PRESENCE_TYPES = ['panel-replacement', 'new-service', 'service-upgrade', 'v2h-system', 'battery-system'];
+function _inspSuppressReason(lead) {
+  if (lead.specialJurisdiction) return `${lead.jurisdiction || 'This jurisdiction'} requires GreenKey on site for every inspection`;
+  if (lead.propertyType === 'commercial') return 'Commercial job — GreenKey attends the inspection';
+  if (INSP_PRESENCE_TYPES.includes(lead.jobType)) return `${(typeof prettyType === 'function' ? prettyType(lead.jobType) : lead.jobType)} — GreenKey attends the inspection`;
+  return null;
+}
+function _inspAddBusinessDays(from, n) {
+  const d = new Date(from); let added = 0;
+  while (added < n) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) added++; }
+  return d;
+}
+function _inspISO(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+
+// Called from BOTH stage setters after the stage is saved.
+function maybeOfferInspectionScheduling(leadId, prevStage) {
+  try {
+    const lead = getLead(leadId);
+    if (!lead || lead.stage !== 'post-install-docs' || prevStage === 'post-install-docs') return;
+    if (lead.inspection && lead.inspection.token) return;                     // already sent
+    const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
+    if (_jt && _jt.noPermit && !lead.inspectionRequired) return;              // nothing to inspect
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const email = ((cust && cust.email) || lead.customerEmail || '').trim();
+    const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (lead.customerName || lead.id);
+    const reason = _inspSuppressReason(lead);
+    if (reason || !email) {
+      const why = reason || 'No customer email on file';
+      upsertTask({
+        id: 'insp-' + lead.id,
+        title: `Schedule inspection by phone — ${who}`,
+        description: `${why}.\nThe automatic inspection-scheduling email was NOT sent for this job. Call the customer to set the inspection day${reason ? ' and plan for GreenKey to be there' : ''}.\nJurisdiction: ${lead.jurisdiction || lead.siteCity || '—'}`,
+        linkedId: lead.id, linkedLabel: who,
+        priority: 'high', status: 'open', source: 'auto-inspection', createdBy: S.user?.id || ''
+      });
+      toast(`Inspection email not sent — ${why}. Task created to schedule by phone.`, 'warning');
+      return;
+    }
+    // Several jobs can enter Post Install back-to-back. One modal at a time;
+    // the rest QUEUE and open as each is dealt with — replacing the open modal
+    // would silently drop a job's email (caught by Jonathan, 2026-08-05).
+    if (document.getElementById('insp-modal')) {
+      if (!_inspOfferQueue.includes(lead.id)) _inspOfferQueue.push(lead.id);
+      toast(`${who} queued — finish the current inspection email first (${_inspOfferQueue.length} waiting).`, 'info');
+      return;
+    }
+    openInspReviewModal(lead.id);
+  } catch (e) { console.warn('[GK] inspection offer failed:', e); }
+}
+
+let _inspOfferQueue = [];
+// Every way out of the modal funnels through here so the queue always advances.
+function _inspModalDone() {
+  document.getElementById('insp-modal')?.remove();
+  const next = _inspOfferQueue.shift();
+  if (next) setTimeout(() => { try { maybeOfferInspectionScheduling(next, ''); } catch(_){} }, 150);
+}
+// Re-send after the fact — customer lost the email, link expired, whatever.
+// The old token dies on the worker only by expiry, but the job record moves to
+// the fresh one, so the poller tracks the NEW link and the old one shows the
+// "already responded/expired" page if ever clicked. Deliberate click: this only
+// clears the record and opens the review modal; nothing sends until Send there.
+function resendInspectionScheduling(leadId) {
+  if (!confirm('Send a fresh inspection-scheduling link? The previous link on this job will be abandoned (it dies on its own expiry).')) return;
+  try {
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0) {
+      const prev = arr[i].inspection || {};
+      arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
+        id: 'note-insp-' + Date.now().toString(36),
+        text: `Fresh inspection-scheduling link issued (previous one from ${String(prev.sentAt||'').slice(0,10) || 'earlier'} abandoned, status was "${prev.status || '—'}").`,
+        authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
+      }]);
+      delete arr[i].inspection;
+      arr[i].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+  } catch(_){}
+  openInspReviewModal(leadId);
+}
+
+// "Not now" — deliberate skip, with a trail and a way back (the Inspection
+// status chip on the job carries a Send button from now on).
+function dismissInspModal(leadId) {
+  try {
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0) {
+      arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
+        id: 'note-insp-' + Date.now().toString(36),
+        text: 'Inspection scheduling email skipped at the Post Install prompt (Not now). Send it any time from the Inspection status chip on this job.',
+        authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
+      }]);
+      arr[i].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+    toast('Skipped — send later from the Inspection chip on the job.', 'info');
+  } catch(_){}
+  _inspModalDone();
+}
+
+// Photo-review modal: install shots preselected, click a thumbnail to open the
+// full lightbox (wheel-zoom to 8×) — the human gate before anything ships.
+function openInspReviewModal(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+  const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (lead.customerName || lead.id);
+  const files = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : [])
+    .filter(f => (f.mimeType || '').startsWith('image/'))
+    .sort((a, b) => (a.category === 'install' ? -1 : 0) - (b.category === 'install' ? -1 : 0));
+  const catIdx = {};   // index within its category — what openLightbox() expects
+  const thumbs = files.map(f => {
+    const i = catIdx[f.category] = (catIdx[f.category] ?? -1) + 1;
+    const src = f.downloadUrl || f.dataUrl || '';
+    return `<div style="position:relative">
+      <img src="${escHtml(src)}" loading="lazy" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block" onclick="openLightbox('${leadId}','${f.category}',${i})" title="Click to zoom — scroll to zoom closer">
+      <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}" checked style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
+      ${f.category === 'install' ? '' : `<span style="position:absolute;bottom:4px;left:4px;font-size:9px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 5px">${escHtml(f.category)}</span>`}
+    </div>`;
+  }).join('');
+  let el = document.getElementById('insp-modal');
+  if (el) el.remove();
+  document.body.insertAdjacentHTML('beforeend', `<div class="moverlay show" id="insp-modal">
+    <div class="modal" style="max-width:640px;max-height:92vh;display:flex;flex-direction:column">
+      <div class="mtitle">Send inspection scheduling to ${escHtml(who)}?</div>
+      <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
+        The customer gets an email with the checked photos attached and a link to pick their inspection day, plus a text pointing at the email. <strong>Click any photo to zoom in and check it</strong> — uncheck anything that shouldn't ship.
+      </div>
+      <div style="overflow-y:auto;flex:1;display:flex;flex-wrap:wrap;gap:8px;padding:4px 0">
+        ${thumbs || '<div style="font-size:13px;color:var(--amber,#f59e0b);padding:12px">⚠ No photos on this job yet. You can send without photos, or cancel and chase the install shots first.</div>'}
+      </div>
+      <div id="insp-modal-status" style="font-size:12px;color:var(--text-muted);min-height:18px;margin-top:8px"></div>
+      <div class="mact">
+        <button class="btn btn-g" onclick="dismissInspModal('${leadId}')">Not now</button>
+        <button class="btn btn-p" id="insp-send-btn" onclick="sendInspectionScheduling('${leadId}')">📧 Send email + text</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+async function _inspFetchB64(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error('fetch ' + r.status);
+  const blob = await r.blob();
+  return await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
+}
+// Shrink a photo for email attachment (~1280px, q0.8 → 150–300 KB) so seven
+// shots stay comfortably inside Graph's message-size ceiling.
+async function _inspShrinkB64(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error('fetch ' + r.status);
+  const blob = await r.blob();
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.8).split(',')[1];
+}
+
+async function sendInspectionScheduling(leadId) {
+  const btn = document.getElementById('insp-send-btn');
+  const status = document.getElementById('insp-modal-status');
+  const say = t => { if (status) status.textContent = t; };
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const lead = getLead(leadId); if (!lead) throw new Error('Job not found');
+    const cust = lead.customerId ? getCustomer(lead.customerId) : null;
+    const email = ((cust && cust.email) || lead.customerEmail || '').trim();
+    const phone = ((cust && cust.phone) || lead.customerPhone || '').trim();
+    const first = (cust && cust.firstName) || String(lead.customerName || 'there').split(' ')[0];
+    const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (lead.customerName || '');
+    const addr = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA'].filter(Boolean).join(', ');
+    // 1. Window: first pickable day is 3 business days out; horizon 8 weeks.
+    const winStart = _inspISO(_inspAddBusinessDays(new Date(), 3));
+    const endD = new Date(); endD.setDate(endD.getDate() + 56);
+    const winEnd = _inspISO(endD);
+    // 2. Mint the token on the worker.
+    say('Creating scheduling link…');
+    const workerToken = await _acquireSMSToken();
+    const tokResp = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/inspection/issue-token', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + workerToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadId, customerEmail: email, customerName: who, siteAddress: addr,
+        jurisdiction: lead.jurisdiction || lead.siteCity || '', windowStart: winStart, windowEnd: winEnd })
+    });
+    if (!tokResp.ok) throw new Error('issue-token ' + tokResp.status);
+    const { pickUrl, token } = await tokResp.json();
+    if (!pickUrl) throw new Error('no pick URL returned');
+    // 3. Photos: shrink each CHECKED one. Failures skip with a warning, never block.
+    const ids = [...document.querySelectorAll('#insp-modal .insp-pick:checked')].map(x => x.dataset.fid);
+    const files = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : []).filter(f => ids.includes(f.id));
+    const atts = [];
+    for (let i = 0; i < files.length; i++) {
+      say(`Preparing photo ${i + 1} of ${files.length}…`);
+      try {
+        const b64 = await _inspShrinkB64(files[i].downloadUrl || files[i].dataUrl);
+        atts.push({ '@odata.type': '#microsoft.graph.fileAttachment', name: 'installation-photo-' + (i + 1) + '.jpg', contentType: 'image/jpeg', contentBytes: b64 });
+      } catch (e) { console.warn('[GK] inspection photo skipped:', files[i].name, e); }
+    }
+    // 4. Inline logo (CID) so it renders even where remote images are blocked.
+    try {
+      atts.unshift({ '@odata.type': '#microsoft.graph.fileAttachment', name: 'gk-logo.png', contentType: 'image/png', contentBytes: await _inspFetchB64(GK_LOGO_URL), isInline: true, contentId: 'gklogo' });
+    } catch (_) {}
+    // 5. The email.
+    say('Sending email…');
+    const html = `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55">
+      <div style="height:5px;background:#8CC63F;border-radius:3px;margin:0 0 18px"></div>
+      <img src="cid:gklogo" alt="GreenKey" style="height:48px;margin:0 0 18px;display:block">
+      <p style="font-size:14px;margin:0 0 12px">Hi ${escHtml(first)},</p>
+      <p style="font-size:14px;margin:0 0 16px">Your installation is complete! The last step is the <strong>electrical inspection</strong>.${atts.some(a => !a.isInline) ? ' Photos of your completed installation are attached to this email for your records.' : ''}</p>
+      <p style="font-size:14px;margin:0 0 16px">Pick a day you can be home and we'll schedule the inspection:</p>
+      <div style="margin:24px 0;text-align:center">
+        <a href="${pickUrl}" style="display:inline-block;background:#8CC63F;color:#16290C;padding:14px 32px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px">📅 Pick Your Inspection Day</a>
+      </div>
+      <div style="background:#FFF7E6;border-left:4px solid #f39c12;padding:12px 16px;margin:0 0 16px;border-radius:0 8px 8px 0;font-size:13.5px;line-height:1.55">
+        <strong>You (or another adult) must be home to let the inspector in.</strong> The inspector arrives sometime during the day, typically between <strong>8 AM and 2 PM</strong>. If no one is home when they arrive, the inspection fails and rescheduling carries an additional <strong>$100 re-inspection fee</strong>.
+      </div>
+      <p style="font-size:13px;color:#666;margin:0 0 8px">Questions? Reply to this email or call us.</p>
+      <p style="font-size:11px;color:#888;margin:24px 0 0;border-top:1px solid #eee;padding-top:12px">GreenKey · greenkey-usa.com · this scheduling link is unique to you</p>
+    </div>`;
+    await _graphFetch('/me/sendMail', { method: 'POST', body: JSON.stringify({ message: {
+      subject: 'Your installation is complete — pick your electrical inspection day',
+      body: { contentType: 'HTML', content: html },
+      toRecipients: [{ emailAddress: { address: email } }],
+      attachments: atts
+    }, saveToSentItems: true }) });
+    // 6. The text (best-effort — email is the payload, the text is the nudge).
+    let texted = false;
+    if (phone) {
+      try {
+        say('Sending text…');
+        const e164 = phone.startsWith('+') ? phone : ('+1' + phone.replace(/\D/g, '').slice(-10));
+        const sr = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/sms/send', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + workerToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leadId, to: e164, message: `GreenKey: your installation is complete! We just emailed you your installation photos and a link to pick a day for the electrical inspection — you'll need to be home to let the inspector in. Check your inbox, and reply here with any questions.` })
+        });
+        texted = sr.ok;
+      } catch (e) { console.warn('[GK] inspection text failed:', e); }
+    }
+    // 7. Record it on the job.
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0) {
+      arr[i].inspection = { token, pickUrl, status: 'pending', sentAt: new Date().toISOString(), windowStart: winStart, windowEnd: winEnd, photosSent: atts.filter(a => !a.isInline).length, textSent: texted };
+      arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
+        id: 'note-insp-' + Date.now().toString(36),
+        text: `Inspection scheduling email sent to ${email} (${atts.filter(a => !a.isInline).length} photos attached${texted ? ', text sent' : ', text NOT sent'}). Pickable days ${winStart} → ${winEnd}.`,
+        authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
+      }]);
+      arr[i].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+    _inspModalDone();
+    toast(`Inspection scheduling sent to ${email}${texted ? ' + text' : ''}`, 'success');
+    try { if (S.jobDetailId === leadId) renderJobDetail(leadId); } catch (_) {}
+  } catch (e) {
+    console.warn('[GK] inspection send failed:', e);
+    say('Failed: ' + (e.message || e) + ' — nothing was recorded; fix and try again.');
+    if (btn) { btn.disabled = false; btn.textContent = '📧 Send email + text'; }
+  }
+}
+
+// Poll the worker for customer picks. Rides the bell timer, self-throttled.
+let _inspPollLastAt = 0;
+async function _inspPollOnce() {
+  try {
+    if (Date.now() - _inspPollLastAt < 5 * 60 * 1000) return;
+    _inspPollLastAt = Date.now();
+    const pend = getLeads().filter(l => l.inspection && l.inspection.token && l.inspection.status === 'pending');
+    if (!pend.length) return;
+    const workerToken = await _acquireSMSToken();
+    const r = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/inspection/status?tokens=' + pend.map(l => l.inspection.token).join(','), { headers: { 'Authorization': 'Bearer ' + workerToken } });
+    if (!r.ok) return;
+    const d = await r.json().catch(() => null);
+    if (!d || !d.statuses) return;
+    const arr = getLeads(); let changed = false;
+    for (const l of arr) {
+      const st = l.inspection && l.inspection.token && d.statuses[l.inspection.token];
+      if (!st || st.status === 'pending' || l.inspection.status !== 'pending') continue;
+      const cust = l.customerId ? getCustomer(l.customerId) : null;
+      const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (l.customerName || l.id);
+      const jur = l.jurisdiction || l.siteCity || 'the jurisdiction';
+      if (st.status === 'picked') {
+        l.inspection.status = 'picked'; l.inspection.pickedDate = st.pickedDate;
+        upsertTask({ id: 'insp-' + l.id, title: `Book inspection with ${jur} — ${who} picked ${st.pickedDate}`,
+          description: `Customer picked ${st.pickedDate} for the electrical inspection (they know to be home 8 AM–2 PM). Book it with ${jur}, then confirm the day with the customer.`,
+          linkedId: l.id, linkedLabel: who, priority: 'high', status: 'open', source: 'auto-inspection', createdBy: '' });
+        upsertNotification({ id: 'insp-' + l.inspection.token, type: 'inspection-picked', title: 'Inspection day picked',
+          description: `${who} picked ${st.pickedDate}`, jobId: l.id });
+        l.jobNotes = (l.jobNotes || []).concat([{ id: 'note-insp-' + Date.now().toString(36), text: `Customer picked ${st.pickedDate} for the electrical inspection${st.note ? ' — note: ' + st.note : ''}.`, authorName: 'Inspection scheduling', timestamp: new Date().toISOString() }]);
+      } else if (st.status === 'call_me') {
+        l.inspection.status = 'call_me';
+        upsertTask({ id: 'insp-' + l.id, title: `Call ${who} to schedule their inspection`,
+          description: `None of the offered days worked.${st.note ? '\nCustomer note: ' + st.note : ''}\nJurisdiction: ${jur}`,
+          linkedId: l.id, linkedLabel: who, priority: 'high', status: 'open', source: 'auto-inspection', createdBy: '' });
+        upsertNotification({ id: 'insp-' + l.inspection.token, type: 'inspection-call', title: 'Inspection: customer needs a call',
+          description: `${who}${st.note ? ' — ' + st.note : ''}`, jobId: l.id });
+        l.jobNotes = (l.jobNotes || []).concat([{ id: 'note-insp-' + Date.now().toString(36), text: `Customer asked for a call to schedule the inspection${st.note ? ' — note: ' + st.note : ''}.`, authorName: 'Inspection scheduling', timestamp: new Date().toISOString() }]);
+      } else if (st.status === 'expired') {
+        l.inspection.status = 'expired';
+        upsertTask({ id: 'insp-' + l.id, title: `Inspection link expired unanswered — ${who}`,
+          description: `The scheduling email got no response before the link expired. Call to schedule.`,
+          linkedId: l.id, linkedLabel: who, priority: 'high', status: 'open', source: 'auto-inspection', createdBy: '' });
+      } else continue;
+      l.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) { saveLeads(arr); try { updateTaskBadge(); updateNotifBadge(); } catch (_) {} try { if (typeof _bellRefreshUI === 'function') _bellRefreshUI(); } catch (_) {} }
+  } catch (e) { console.warn('[GK] inspection poll failed:', e); }
+}
+
 // "Done" resolves the CRM-side follow-up TASK, not the worker's acked flag —
 // the poller already sets acked=1 the moment a call is imported, so that column
 // means "the CRM has seen this", never "a human dealt with it".
@@ -26231,6 +26590,7 @@ function _bellStartPolling() {
   try { _spFolderRetrySweep(); } catch(_){}
   try { _opsInspectionSweep(); } catch(_){}
   try { _opsPhotoMirrorSweep(); } catch(_){}
+  try { _inspPollOnce(); } catch(_){}
   _bellPollTimer = setInterval(() => {
     if (document.visibilityState === 'visible') {
       _bellPollOnce(); _activityPollOnce(); _leadInboxPollOnce();
@@ -26240,6 +26600,7 @@ function _bellStartPolling() {
       try { _spFolderRetrySweep(); } catch(_){}
       try { _opsInspectionSweep(); } catch(_){}
       try { _opsPhotoMirrorSweep(); } catch(_){}
+      try { _inspPollOnce(); } catch(_){}
       // Outlook → CRM reschedule sync. Self-throttles to one Graph call every
       // few minutes regardless of how often this timer fires (2026-07-28).
       try { syncOutlookAppointments(true); } catch(_){}
