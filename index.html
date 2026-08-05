@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05h</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05i</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1943,6 +1943,88 @@ function checkJurisdiction(city='') {
   const c = city.toLowerCase();
   for (const j of SPEC_JURIS) if (c.includes(j.match)) return j;
   return null;
+}
+
+// ── WHICH AHJ IS THIS JOB ACTUALLY IN? (2026-08-05) ──
+// ⚠ Everything used to fall back to `lead.siteCity` — the MAILING city — because
+// checkJurisdiction() only ever matches Stafford/Spotsylvania and leaves
+// `lead.jurisdiction` EMPTY on every other job. In central Virginia that is wrong
+// constantly: most "Richmond, VA" addresses are Chesterfield or Henrico County,
+// so the AHJ lookup sent Sherri to the City of Richmond portal. Worse, a Stafford
+// or Spotsylvania County house with a Fredericksburg mailing address failed the
+// special-jurisdiction test entirely — quoted at the $250 permit fee instead of
+// $500, with no in-person-inspection warning.
+//
+// Order of truth:
+//   1. jurisdictionManual  — a human said so. Always wins, never overwritten.
+//   2. jurisdictionDerived — the geocoded county (see geocodeOne).
+//   3. jurisdiction        — the legacy special-jurisdiction value.
+//   4. siteCity            — the old wrong answer, kept only so nothing renders
+//                            blank, and labelled unverified everywhere it shows.
+function _jurisFromGeo(geo) {
+  if (!geo) return '';
+  if (geo.county) return geo.county;                    // "Chesterfield County"
+  if (geo.place) {
+    const p = String(geo.place).trim();
+    return /^city of /i.test(p) ? p : 'City of ' + p;   // VA independent city
+  }
+  return '';
+}
+function getLeadJurisdiction(lead) {
+  if (!lead) return { name: '', source: 'none' };
+  if (lead.jurisdictionManual)  return { name: lead.jurisdictionManual,  source: 'manual' };
+  if (lead.jurisdictionDerived) return { name: lead.jurisdictionDerived, source: 'derived' };
+  if (lead.jurisdiction)        return { name: lead.jurisdiction,        source: 'legacy' };
+  return { name: lead.siteCity || '', source: 'mailing-city' };
+}
+// Geocode the site address and remember the county. ⚠ Deliberately does NOT touch
+// specialJurisdiction, permitFee, or any quote — Jonathan, 2026-08-05: derive and
+// FLAG mismatches, change nothing automatically, so no live quote can move under
+// a customer who has already been sent it.
+async function ensureLeadJurisdiction(leadId, force) {
+  try {
+    const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
+    if (!lead) return null;
+    if (lead.jurisdictionDerived && !force) return lead.jurisdictionDerived;
+    const addr = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA', lead.siteZip].filter(Boolean).join(', ');
+    if (!addr || typeof geocodeOne !== 'function') return null;
+    const geo  = await geocodeOne(addr, lead.id);
+    const name = _jurisFromGeo(geo);
+    if (!name) return null;
+    const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+    if (i >= 0) {
+      arr[i].jurisdictionDerived   = name;
+      arr[i].jurisdictionDerivedAt = new Date().toISOString();
+      arr[i].updatedAt             = new Date().toISOString();
+      saveLeads(arr);
+    }
+    return name;
+  } catch (e) { console.warn('[GK] jurisdiction derive failed:', e); return null; }
+}
+// The money check: geocoded county says special, the job does not. Reported on
+// the job screen, never auto-corrected.
+function leadJurisMismatch(lead) {
+  if (!lead) return null;
+  const j = getLeadJurisdiction(lead);
+  if (!j.name || j.source === 'mailing-city') return null;
+  const isSpec = SPEC_JURIS.some(sj => j.name.toLowerCase().includes(sj.match));
+  if (isSpec && !lead.specialJurisdiction) {
+    return `Address geocodes to ${j.name}, but this job is NOT flagged special — the permit is likely $500, not $${lead.permitFee || 250}, and the inspection must be in person.`;
+  }
+  if (!isSpec && lead.specialJurisdiction) {
+    return `Flagged as a special jurisdiction, but the address geocodes to ${j.name}. Check before quoting the $500 permit.`;
+  }
+  return null;
+}
+function setLeadJurisdiction(leadId, val) {
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return;
+  if (!val) delete arr[i].jurisdictionManual;
+  else arr[i].jurisdictionManual = val;
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  toast(val ? ('AHJ set to ' + val) : 'Override cleared — using the geocoded county', 'success');
+  try { renderJobDetail(leadId); } catch (_) {}
 }
 
 // ── JOB ID ──
@@ -14134,6 +14216,45 @@ function renderJobDetail(id) {
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
       </div>
       <div class="jd-f" style="margin-top:6px"><div class="jd-fl">Site Address</div><div class="jd-fv">${addr}</div></div>
+      ${(() => {
+        // AHJ row (2026-08-05). The county comes from the geocoder, not the
+        // mailing city — see getLeadJurisdiction(). Derivation is kicked off in
+        // the background the first time a job is opened; it writes the lead and
+        // re-renders once, and returns early forever after, so this cannot loop.
+        const _j   = getLeadJurisdiction(lead);
+        const _ahj = (typeof _inspAhjFor === 'function') ? _inspAhjFor(lead) : null;
+        const _mm  = leadJurisMismatch(lead);
+        if (!lead.jurisdictionDerived && !lead.jurisdictionManual) {
+          setTimeout(() => { ensureLeadJurisdiction(lead.id).then(n => {
+            if (n && S.jobDetailId === lead.id) { try { renderJobDetail(lead.id); } catch (_) {} }
+          }); }, 60);
+        }
+        const _srcTxt = _j.source === 'manual'  ? 'set by hand'
+                      : _j.source === 'derived' ? 'from the address'
+                      : _j.source === 'legacy'  ? 'legacy value'
+                      : 'mailing city — NOT verified';
+        const _srcCol = (_j.source === 'mailing-city' || _j.source === 'none') ? 'var(--amber,#f59e0b)' : 'var(--text-muted)';
+        const _opts = (typeof getAHJs === 'function' ? getAHJs() : [])
+          .slice().sort((a,b) => (a.name||'').localeCompare(b.name||''))
+          .map(a => `<option value="${escHtml(a.name)}"${a.name === _j.name ? ' selected' : ''}>${escHtml(a.name)}</option>`).join('');
+        return `<div class="jd-f" style="margin-top:6px">
+          <div class="jd-fl">AHJ / County</div>
+          <div class="jd-fv">
+            ${escHtml(_j.name || '—')}
+            <span style="font-size:11px;color:${_srcCol};margin-left:6px">(${escHtml(_srcTxt)})</span>
+            ${_ahj && _ahj.url ? `<a href="${escHtml(_ahj.url)}" target="_blank" rel="noopener" style="font-size:11px;margin-left:8px">permit portal ↗</a>`
+              : _ahj && _ahj.phone ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px">${escHtml(_ahj.phone)}</span>`
+              : `<span style="font-size:11px;color:var(--amber,#f59e0b);margin-left:8px">not in the AHJ Directory</span>`}
+            <select onchange="setLeadJurisdiction('${lead.id}', this.value)"
+                    title="Override the geocoded county. Clearing it goes back to the address."
+                    style="margin-left:8px;font-size:11px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:1px 4px">
+              <option value="">${_j.source === 'manual' ? 'clear override' : 'override…'}</option>
+              ${_opts}
+            </select>
+          </div>
+        </div>
+        ${_mm ? `<div class="flag-banner" style="margin-top:8px">⚠ ${escHtml(_mm)}</div>` : ''}`;
+      })()}
       ${lead.specialJurisdiction?`<div style="margin-top:8px"><span class="chip chip-flag">⚠ ${lead.jurisdiction} — $500 permit / In-person inspection required</span></div>`:''}
     </div>
   </div>`;
@@ -17517,7 +17638,7 @@ function _renderInspPhotoGrid(){
   const grid=document.getElementById('insp-photo-grid'); if(!grid) return; const jid=_inspPickJob; if(!jid){ grid.innerHTML=''; return; }
   const imgs=(typeof getJobFiles==='function'?getJobFiles(jid):[]).filter(f=>(f.mimeType||'').indexOf('image/')===0 && (f.downloadUrl||f.dataUrl||f.spUrl));
   if(!imgs.length){ grid.innerHTML=`<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">No photos on this job yet. They auto-pull from SharePoint when the job is opened.</div>`; return; }
-  grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=f.downloadUrl||f.dataUrl||f.spUrl||'';
+  grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=_inspImgSrc(f);
     return `<div style="border:3px solid ${sel?'var(--green)':'var(--border)'};border-radius:8px;overflow:hidden;position:relative">
       <img onclick="_inspTogglePhoto('${f.id}')" src="${src}" title="${escHtml(f.name||'')}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;cursor:pointer">
       <button onclick="_inspPreviewPhotoById('${f.id}')" title="View full size" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,.62);color:#fff;border:none;border-radius:6px;padding:3px 7px;font-size:13px;cursor:pointer;line-height:1">🔍</button>
@@ -18197,7 +18318,10 @@ async function geocodeOne(address, cacheKey) {
   // stale coordinates. (Fixes the Property aerial / Street View / Earth links
   // not updating after a site address is changed. Older entries have no .addr,
   // so they self-heal on next lookup.)
-  if (cacheKey && cache[cacheKey] && cache[cacheKey].addr === _addrKey) return cache[cacheKey];
+  // `jurisV` marks an entry written by the version that ALSO captures the county
+  // (2026-08-05). Older entries match on .addr but carry no county, so they must
+  // re-geocode once to pick it up — the same self-healing trick .addr itself uses.
+  if (cacheKey && cache[cacheKey] && cache[cacheKey].addr === _addrKey && cache[cacheKey].jurisV === 1) return cache[cacheKey];
   if (!_addrKey) return null;
   try {
     // Mapbox Geocoding (2026-06-12, was Nominatim) — no rate-limit delay
@@ -18217,7 +18341,20 @@ async function geocodeOne(address, cacheKey) {
     const json = await res.json();
     const f = json && json.features && json.features[0];
     if (f && Array.isArray(f.center)) {
-      const coords = { addr: _addrKey, lat: f.center[1], lon: f.center[0] };
+      // Mapbox `context` carries the administrative hierarchy. For US addresses
+      // `district` is the COUNTY and `place` is the city/town. Virginia's
+      // independent cities (Richmond, Charlottesville, Petersburg…) belong to no
+      // county, so they come back with a place and NO district — which is exactly
+      // what separates a Richmond MAILING address sitting in Chesterfield from a
+      // real City of Richmond address. We were already paying for this call for
+      // the scheduler's routing and discarding the answer.
+      let _county = '', _place = '';
+      (f.context || []).forEach(c => {
+        const cid = String(c.id || '');
+        if (cid.indexOf('district') === 0) _county = c.text || '';
+        else if (cid.indexOf('place') === 0) _place = c.text || '';
+      });
+      const coords = { addr: _addrKey, lat: f.center[1], lon: f.center[0], county: _county, place: _place, jurisV: 1 };
       cache[cacheKey] = coords;
       saveGeoCache(cache);
       return coords;
@@ -18859,7 +18996,7 @@ function openSpecPrompt(leadId, next) {
       The tech needs the breaker <strong>type</strong> and <strong>size</strong> to bring the right parts. Read them off the panel photos below.
     </div>
     ${imgs.length ? `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px">
-        ${imgs.map(f => { const src = f.downloadUrl || f.dataUrl || f.spUrl;
+        ${imgs.map(f => { const src = _inspImgSrc(f);   // permanent copy first — expiring SP links broke these too (2026-08-05)
           return `<a href="${src}" target="_blank" rel="noopener" style="flex:0 0 auto"><img src="${src}" alt="" style="height:96px;border-radius:6px;border:1px solid var(--border);display:block"></a>`;
         }).join('')}
       </div>`
@@ -25091,6 +25228,65 @@ function dismissInspModal(leadId) {
   _inspModalDone();
 }
 
+// ── INSPECTION PHOTOS: expiring links (2026-08-05, Chase's first real job) ──
+// The CRM holds two kinds of image reference. `dataUrl` is a local base64 copy,
+// written by the device that uploaded the file, and never expires. `downloadUrl`
+// is a SharePoint-signed link that DIES ~1 HOUR after it was fetched, and it is
+// all a device has for photos somebody ELSE uploaded — which is every field-app
+// photo, seen from the office.
+//
+// This modal originally read `f.downloadUrl || f.dataUrl`, preferring the
+// expiring link over the permanent local copy even when both existed. Order
+// matches `_imgSrc()` now (dataUrl first), with spUrl as a last resort like the
+// inspector-SMS picker uses.
+function _inspImgSrc(f) {
+  if (!f) return '';
+  return f.dataUrl || f.downloadUrl || f.spUrl || '';
+}
+// A tile whose image 404s cannot be attached either — the send path fetches the
+// SAME url. So a dead tile unchecks itself: the modal must never claim it will
+// send something it cannot.
+function _inspTileDead(img, fid) {
+  try {
+    const cb = document.querySelector('#insp-modal .insp-pick[data-fid="' + fid + '"]');
+    if (cb) { cb.checked = false; cb.disabled = true; }
+    const wrap = img.parentNode;
+    img.style.display = 'none';
+    if (wrap && !wrap.querySelector('.insp-dead')) {
+      wrap.insertAdjacentHTML('beforeend',
+        '<div class="insp-dead" style="width:104px;height:104px;border-radius:8px;border:1px dashed #e74c3c;display:flex;align-items:center;justify-content:center;text-align:center;font-size:10px;color:#e74c3c;padding:6px;line-height:1.3">&#9888; link expired<br>will not send</div>');
+    }
+    _inspDeadTally();
+  } catch (_) {}
+}
+function _inspDeadTally() {
+  const n = document.querySelectorAll('#insp-modal .insp-dead').length;
+  const el = document.getElementById('insp-modal-status');
+  if (!el) return;
+  el.innerHTML = n
+    ? '<span style="color:#f59e0b">&#9888; ' + n + ' photo' + (n === 1 ? '' : 's') +
+      ' could not load and ' + (n === 1 ? 'has' : 'have') + ' been unchecked — ' +
+      (n === 1 ? 'it' : 'they') + ' will NOT be attached. Use &#128260; Refresh photos to re-fetch.</span>'
+    : '';
+}
+// Re-mint the expired SharePoint links, then redraw. _hydratePhotosFromSP already
+// refreshes a stale downloadUrl on records it already has; this just runs it on
+// demand for one job instead of waiting for the next sweep.
+async function _inspRefreshPhotos(leadId) {
+  const st = document.getElementById('insp-modal-status');
+  if (st) st.textContent = 'Refreshing photo links from SharePoint…';
+  try {
+    if (typeof _hydratePhotosFromSP === 'function') await _hydratePhotosFromSP(leadId);
+    openInspReviewModal(leadId);
+    const st2 = document.getElementById('insp-modal-status');
+    if (st2) st2.textContent = 'Photo links refreshed — anything still marked expired is missing from SharePoint.';
+  } catch (e) {
+    console.warn('[GK] inspection photo refresh failed:', e);
+    const st3 = document.getElementById('insp-modal-status');
+    if (st3) st3.textContent = 'Could not refresh: ' + (e.message || e);
+  }
+}
+
 // Photo-review modal: install shots preselected, click a thumbnail to open the
 // full lightbox (wheel-zoom to 8×) — the human gate before anything ships.
 function openInspReviewModal(leadId) {
@@ -25103,9 +25299,9 @@ function openInspReviewModal(leadId) {
   const catIdx = {};   // index within its category — what openLightbox() expects
   const thumbs = files.map(f => {
     const i = catIdx[f.category] = (catIdx[f.category] ?? -1) + 1;
-    const src = f.downloadUrl || f.dataUrl || '';
+    const src = _inspImgSrc(f);
     return `<div style="position:relative">
-      <img src="${escHtml(src)}" loading="lazy" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block" onclick="openLightbox('${leadId}','${f.category}',${i})" title="Click to zoom — scroll to zoom closer">
+      <img src="${escHtml(src)}" loading="lazy" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block" onclick="openLightbox('${leadId}','${f.category}',${i})" onerror="_inspTileDead(this,'${escHtml(f.id)}')" alt="" title="Click to zoom — scroll to zoom closer">
       <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}" checked style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
       ${f.category === 'install' ? '' : `<span style="position:absolute;bottom:4px;left:4px;font-size:9px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 5px">${escHtml(f.category)}</span>`}
     </div>`;
@@ -25123,6 +25319,7 @@ function openInspReviewModal(leadId) {
       </div>
       <div id="insp-modal-status" style="font-size:12px;color:var(--text-muted);min-height:18px;margin-top:8px"></div>
       <div class="mact">
+        <button class="btn btn-g" onclick="_inspRefreshPhotos('${leadId}')" title="Re-fetch SharePoint photo links — they expire about an hour after the last sync">🔄 Refresh photos</button>
         <button class="btn btn-g" onclick="dismissInspModal('${leadId}')">Not now</button>
         <button class="btn btn-p" id="insp-send-btn" onclick="sendInspectionScheduling('${leadId}')">📧 Send email + text</button>
       </div>
@@ -25158,7 +25355,9 @@ async function _inspShrinkB64(url) {
 function _inspAhjFor(lead) {
   try {
     const ahjs = (typeof getAHJs === 'function') ? getAHJs() : [];
-    const j = (lead.jurisdiction || lead.siteCity || '').toLowerCase().trim();
+    const j = ((typeof getLeadJurisdiction === 'function'
+                  ? getLeadJurisdiction(lead).name
+                  : (lead.jurisdiction || lead.siteCity)) || '').toLowerCase().trim();
     if (!j || !ahjs.length) return null;
     return ahjs.find(a => {
       const an = (a.name || '').toLowerCase();
@@ -25200,7 +25399,7 @@ async function sendInspectionScheduling(leadId) {
     const tokResp = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/inspection/issue-token', {
       method: 'POST', headers: { 'Authorization': 'Bearer ' + workerToken, 'Content-Type': 'application/json' },
       body: JSON.stringify({ leadId, customerEmail: email, customerName: who, siteAddress: addr,
-        jurisdiction: lead.jurisdiction || lead.siteCity || '', windowStart: winStart, windowEnd: winEnd,
+        jurisdiction: getLeadJurisdiction(lead).name || '', windowStart: winStart, windowEnd: winEnd,
         // Carried so the office email stands on its own (2026-08-05b).
         scope: _inspScopeFor(lead),
         ahjUrl: (_inspAhjFor(lead) || {}).url || '',
@@ -25213,12 +25412,27 @@ async function sendInspectionScheduling(leadId) {
     const ids = [...document.querySelectorAll('#insp-modal .insp-pick:checked')].map(x => x.dataset.fid);
     const files = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : []).filter(f => ids.includes(f.id));
     const atts = [];
+    const failed = [];
     for (let i = 0; i < files.length; i++) {
       say(`Preparing photo ${i + 1} of ${files.length}…`);
       try {
-        const b64 = await _inspShrinkB64(files[i].downloadUrl || files[i].dataUrl);
+        const b64 = await _inspShrinkB64(_inspImgSrc(files[i]));
         atts.push({ '@odata.type': '#microsoft.graph.fileAttachment', name: 'installation-photo-' + (i + 1) + '.jpg', contentType: 'image/jpeg', contentBytes: b64 });
-      } catch (e) { console.warn('[GK] inspection photo skipped:', files[i].name, e); }
+      } catch (e) {
+        console.warn('[GK] inspection photo failed:', files[i].name, e);
+        failed.push(files[i].name || 'unnamed photo');
+      }
+    }
+    // ⚠ 2026-08-05 — DO NOT put the silent skip back. This used to be
+    // `catch { console.warn(...) }` and nothing else, so a job whose SharePoint
+    // links had expired sent the customer an email missing photos that were
+    // ticked in the modal, with a success toast and no other trace. The photos
+    // are the point of the email (inspectors rely on them for what they will not
+    // inspect themselves), so a partial send is a failed send. Refuse, and say
+    // exactly which ones — the throw lands in the catch below, which re-enables
+    // the button and records nothing.
+    if (failed.length) {
+      throw new Error(`${failed.length} of ${files.length} checked photo${files.length === 1 ? '' : 's'} could not be loaded (${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ', …' : ''}). Their SharePoint links have most likely expired — click 🔄 Refresh photos and send again, or uncheck them.`);
     }
     // 4. Inline logo (CID) so it renders even where remote images are blocked.
     try {
