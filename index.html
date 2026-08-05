@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05k</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05p</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -18066,14 +18066,60 @@ function deriveJobCrew(lead) {
   // produced 4.5 hours for a 15 ft garage run. That was wrong: the multiplier
   // describes the SHORT job, and distance scales differently for one vs two.
   const runFt = totalFt - trenchFt;   // trenching is timed separately below
+  // ── HOURS, v2 (2026-08-05, Jonathan's footage table) ──
+  // ⚠ The 7/28 two-person curve below (1.0 hr flat to 10 ft, +15 min per 10 ft
+  // after) produced 1.5 / 2.25 / 2.75 / 3.5 hours at 25 / 50 / 75 / 100 ft —
+  // roughly HALF what these jobs actually take, and the gap widened with
+  // distance. Its reasoning ("one works the panel, one works the charger, the
+  // walk between them is noise") holds for a garage job and stops holding the
+  // moment the run gets long. Jonathan's numbers, for a TWO-MAN crew — the
+  // typical crew — measured on TOTAL run including the base 5 ft:
+  //     > 25 ft → 3 h    > 50 ft → 4 h    > 75 ft → 6 h    > 100 ft → 8 h+
+  // Trench footage is NOT part of runFt; it is priced separately below, and the
+  // add-ons (pedestal, post, difficult) still STACK on top of this.
+  // ── FIXED COST + PER-FOOT COST (Jonathan, 2026-08-05) ──
+  // Two earlier cuts were wrong in instructive ways. Hard bands made 25 ft = 2 h
+  // and 26 ft = 3 h — a full hour turning on a single foot ("those steps are too
+  // steep"). Ramping through four separate anchors then produced three different
+  // slopes, shallow in the middle and steep at both ends ("that's too extreme").
+  //
+  // The model Jonathan actually described is simpler and physically honest:
+  // getting into the panel and terminating the charger happen ONCE regardless of
+  // distance — *"getting into the panel and wiring the charger both take time
+  // that is separate from the circuit"* — so that fixed work is the steep early
+  // climb, 1 h at 10 ft rising to 3 h at 25 ft. Past 25 ft the only work left is
+  // pulling wire, and wire costs the same per foot at 60 ft as it does at 90.
+  // So there is exactly ONE slope above 25 ft: +1 hour per 25 ft.
+  //
+  //     10 ft → 1 h    25 ft → 3 h    50 ft → 4 h    75 ft → 5 h    100 ft → 6 h
+  //
+  // The final total is still quantised to 15 minutes, so this never yields a
+  // number nobody could write on a schedule.
+  // ⚠ Deliberately LIGHTER at the top than Jonathan's first table (>75 = 6,
+  // >100 = 8). He chose the uniform rate over those endpoints once the shape was
+  // visible. Re-check against measured jobs before trusting 100 ft and beyond.
+  function _twoManHours(ft) {
+    if (ft <= 10) return 1;
+    if (ft <= 25) return 1 + (ft - 10) * (2 / 15);   // fixed work loading in
+    return 3 + (ft - 25) * (1 / 25);                 // wire, at a flat rate
+  }
   // Hours must follow the EFFECTIVE crew size, not the derived one. Overriding a
   // job to two people has to shorten it — otherwise the override changes who goes
   // but not how long the day is, which is the whole reason for overriding.
   const effSize = (lead && typeof lead.crewSize === 'number' && lead.crewSize > 0)
     ? lead.crewSize : size;
-  const hoursBase = effSize >= 2
-    ? 1.0 + Math.max(0, Math.ceil((runFt - 10) / 10)) * 0.25
-    : 1.5 + Math.max(0, Math.ceil((runFt -  5) / 10)) * 0.50;
+  const _twoMan = _twoManHours(runFt);
+  // SOLO. Jonathan, 2026-08-05: one-man crews are only for small in-garage jobs
+  // under 20 ft, troubleshooting, walkdowns and inspections. Take whichever is
+  // larger of the tuned 7/28 short-job curve and half again the two-man time —
+  // one person can never be faster than two, and beyond the short jobs solo is
+  // out of policy anyway, so the pessimistic answer is the honest one.
+  // ⚠ The 7/28 note warns that a flat 1.5× multiplier once produced 4.5 hours for
+  // a 15 ft garage run. That failure came from multiplying a flat 3-hour
+  // BASELINE; here the two-man figure ramps from 1 h, so 15 ft gives 2.5 h and
+  // the short-job curve still floors it. Do not reintroduce a flat baseline.
+  const _soloShort = 1.5 + Math.max(0, Math.ceil((runFt - 5) / 10)) * 0.50;
+  const hoursBase = effSize >= 2 ? _twoMan : Math.max(_soloShort, _twoMan * 1.5);
   // Difficult runs — extra bends, awkward obstacles — cost roughly the same
   // ratio as distance does: half an hour with two people, a full hour solo.
   const hoursDifficult = difficult ? (effSize >= 2 ? 0.5 : 1.0) : 0;
@@ -18370,7 +18416,10 @@ async function geocodeOne(address, cacheKey) {
 // ── SCHEDULER STATE ──
 const _sched = {
   date: new Date().toISOString().slice(0,10),
-  durations: {},    // leadId → hours
+  durations: {},    // leadId → hours (derived, refreshed every render)
+  // leadId → true when a HUMAN typed the hours. Only these are sticky; everything
+  // else re-derives from the quote on every render. See the seeding block.
+  durationsManual: {},
   scheduled: [],    // ordered array of {lead, driveHrs, startTime, endTime}
   unscheduled: [],
   loading: false,
@@ -18418,6 +18467,7 @@ function _persistSched() {
       stopDistributor: _sched.stopDistributor,
       stopRestroom:    _sched.stopRestroom,
       durations:       _sched.durations,
+      durationsManual: _sched.durationsManual,
       included:        _sched.included,
       dayPlans:        _sched.dayPlans
     }));
@@ -18437,6 +18487,7 @@ function _loadSched() {
     _sched.stopDistributor = !!s.stopDistributor;
     _sched.stopRestroom    = !!s.stopRestroom;
     if (s.durations)       _sched.durations       = s.durations;
+    if (s.durationsManual) _sched.durationsManual = s.durationsManual;
     if (s.included)        _sched.included        = s.included;
     if (s.dayPlans)        _sched.dayPlans        = s.dayPlans;
     // Refresh lead snapshots inside saved plans — leads in localStorage may
@@ -19824,10 +19875,20 @@ function renderSchedulerPage() {
     // as disabled even though the checkboxes worked (reported 2026-07-28).
     // "Ready to schedule" should mean ready, and Select none is one click away.
     if (_sched.included[l.id] === undefined) _sched.included[l.id] = true;
-    if (_sched.durations[l.id] === undefined) {
-      // getJobHours honours a manual override, then the crew-geometry derivation,
-      // and only falls back to the old per-job-type guess when there is no quote
-      // run data to read (2026-07-28).
+    // ⚠ 2026-08-05 — DURATIONS MUST NEVER FREEZE. This used to seed once
+    // (`=== undefined`) and persist to localStorage forever, so a quote whose
+    // footage changed after the job first appeared in the pool kept its old
+    // duration and the scheduler quietly planned the wrong day, with nothing on
+    // screen to say so. Jonathan: "Having them fixed forever after the quote is
+    // accepted is unacceptable."
+    //
+    // Now the derived value is recomputed on EVERY render. Only an explicit hand
+    // edit is sticky (`durationsManual`), and the card labels it so a typed
+    // number is distinguishable from a derived one at a glance. getJobHours
+    // honours lead.estHours first, then the crew geometry, and only falls back to
+    // the old per-job-type guess when there is no quote run data to read.
+    if (!_sched.durationsManual[l.id] || _sched.durations[l.id] === undefined) {
+      if (_sched.durations[l.id] === undefined) delete _sched.durationsManual[l.id];
       _sched.durations[l.id] = (typeof getJobHours === 'function') ? getJobHours(l) : estimateJobDuration(l);
     }
   });
@@ -19914,9 +19975,13 @@ function renderSchedulerPage() {
                 <input type="number" step="0.25" min="0.25" max="12"
                   style="width:58px;padding:4px 6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);color:var(--text-primary);font-size:13px;font-family:var(--mono)"
                   value="${dur}"
-                  onchange="_sched.durations['${l.id}']=parseFloat(this.value)||dur;_sched.built=false;renderSchedulerPage()">
+                  title="Typing here pins the hours for this job until you reset it. Left alone, it tracks the accepted quote."
+                  onchange="_setSchedDuration('${l.id}', this.value)">
                 <span style="font-size:12px;color:var(--text-muted)">hrs</span>
               </div>
+              ${_sched.durationsManual[l.id]
+                ? `<div style="font-size:10px;color:var(--amber,#f59e0b);margin-top:2px;white-space:nowrap">set by hand · <span style="cursor:pointer;text-decoration:underline" onclick="_resetSchedDuration('${l.id}')">reset</span></div>`
+                : ''}
               ${isScheduled?`<div style="font-size:11px;color:var(--green);margin-top:4px">✓ Scheduled</div>`:''}
             </div>
           </div>
@@ -20383,7 +20448,12 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
       const c = coords[l.id];
       if (!c) { l._unschedReason = 'geocode'; unscheduled.push(l); available.splice(i,1); i--; continue; }
       const drive = driveTimeHrs(curLat, curLon, c.lat, c.lon);
-      const jobH  = durationsMap[l.id] || estimateJobDuration(l);
+      // ⚠ Fall back to getJobHours, NOT estimateJobDuration. The two disagree —
+      // a 50 ft standard run was 2.25 h by the crew geometry and 3.25 h by the old
+      // per-job-type guess — and the scheduler seeds from getJobHours, so using
+      // the other one here made the same job take different lengths depending on
+      // which code path reached it first (2026-08-05).
+      const jobH  = durationsMap[l.id] || getJobHours(l);
       const arrival = clockHrs + drive;
       const tw = l.scheduling?.timeWindow || {};
       const earliestHrs = _parseHHMM(tw.earliestStart);
@@ -20410,7 +20480,7 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
 
     const l = available[bestIdx];
     const c = coords[l.id];
-    const jobH   = durationsMap[l.id] || estimateJobDuration(l);
+    const jobH   = durationsMap[l.id] || getJobHours(l);   // see note above
     const driveH = driveTimeHrs(curLat, curLon, c.lat, c.lon);
     const waitH  = bestWait;
     scheduled.push({
@@ -20461,6 +20531,27 @@ function _optimizeDayPlan(jobs, coords, homeCoords, dayHours, durationsMap, opts
   }
 
   return { scheduled, unscheduled, returnDriveHrs, restroomHrs };
+}
+
+// A typed duration is sticky and SAYS it is sticky (2026-08-05). Resetting drops
+// back to the value derived from the accepted quote, so a job can never be
+// stranded on a number nobody remembers typing.
+function _setSchedDuration(leadId, val) {
+  const n = parseFloat(val);
+  if (!(n > 0)) { renderSchedulerPage(); return; }
+  _sched.durations[leadId]       = n;
+  _sched.durationsManual[leadId] = true;
+  _sched.built = false;
+  try { _persistSched(); } catch (_) {}
+  renderSchedulerPage();
+}
+function _resetSchedDuration(leadId) {
+  delete _sched.durationsManual[leadId];
+  delete _sched.durations[leadId];
+  _sched.built = false;
+  try { _persistSched(); } catch (_) {}
+  renderSchedulerPage();
+  toast('Duration back to the quote-derived estimate', 'info');
 }
 
 async function runScheduler() {
@@ -25285,6 +25376,24 @@ function _inspTileDead(img, fid) {
     _inspDeadTally();
   } catch (_) {}
 }
+// Sherri, 2026-08-05: nothing is preselected — picking the few she wants beats
+// unpicking the many she doesn't. These make that quick without putting the old
+// "everything is checked" default back.
+function _inspPickTally() {
+  const all = document.querySelectorAll('#insp-modal .insp-pick');
+  const on  = document.querySelectorAll('#insp-modal .insp-pick:checked');
+  const el  = document.getElementById('insp-pick-count');
+  if (el) el.innerHTML = '<strong>' + on.length + '</strong> of ' + all.length + ' selected';
+}
+function _inspPickAll(which) {
+  document.querySelectorAll('#insp-modal .insp-pick').forEach(cb => {
+    if (cb.disabled) return;                    // dead tile — cannot be sent, stays off
+    cb.checked = which === 'all'  ? true
+               : which === 'none' ? false
+               : (cb.dataset.cat === 'install');
+  });
+  _inspPickTally();
+}
 function _inspDeadTally() {
   const n = document.querySelectorAll('#insp-modal .insp-dead').length;
   const el = document.getElementById('insp-modal-status');
@@ -25328,7 +25437,7 @@ function openInspReviewModal(leadId) {
     const src = _inspImgSrc(f);
     return `<div style="position:relative">
       <img src="${escHtml(src)}" loading="lazy" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block" onclick="openLightbox('${leadId}','${f.category}',${i})" onerror="_inspTileDead(this,'${escHtml(f.id)}')" alt="" title="Click to zoom — scroll to zoom closer">
-      <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}"${f.category === 'install' ? ' checked' : ''} style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
+      <input type="checkbox" class="insp-pick" data-fid="${escHtml(f.id)}" data-cat="${escHtml(f.category||'')}" onchange="_inspPickTally()" style="position:absolute;top:6px;left:6px;width:18px;height:18px;accent-color:var(--green)">
       ${f.category === 'install' ? '' : `<span style="position:absolute;bottom:4px;left:4px;font-size:9px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 5px">${escHtml(f.category)}</span>`}
     </div>`;
   }).join('');
@@ -25338,22 +25447,15 @@ function openInspReviewModal(leadId) {
     <div class="modal" style="max-width:640px;max-height:92vh;display:flex;flex-direction:column">
       <div class="mtitle">Send inspection scheduling to ${escHtml(who)}?</div>
       <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
-        The customer gets an email with the checked photos attached and a link to pick their inspection day, plus a text pointing at the email. <strong>Click any photo to zoom in and check it</strong> — uncheck anything that shouldn't ship.
+        The customer gets an email with the photos you tick attached, plus a link to pick their inspection day and a text pointing at the email. <strong>Nothing is selected to start</strong> — click a photo to zoom in, then tick the ones you want to send. The <em>site</em> badge marks walkdown shots and pictures the customer texted in.
       </div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;padding:6px 9px;background:var(--bg-elevated);border-radius:6px">
-        ${(() => {
-          // ⚠ 2026-08-05: every image used to arrive pre-checked, so pictures the
-          // CUSTOMER texted us (category `site`) were queued to be emailed back to
-          // them as their own installation photos. Only install shots are ticked
-          // now; the rest stay visible and labelled so you can add one on purpose.
-          const _inst = files.filter(f => f.category === 'install').length;
-          const _other = files.length - _inst;
-          if (!files.length) return '';
-          return `<strong>${_inst}</strong> install photo${_inst === 1 ? '' : 's'} checked` +
-            (_other ? ` · <strong>${_other}</strong> other file${_other === 1 ? '' : 's'} (walkdown, customer texts) left unchecked — tick any you want to include` : '') +
-            (!_inst ? ` — <span style="color:var(--amber,#f59e0b)">no install photos on this job yet</span>` : '');
-        })()}
-      </div>
+      ${files.length ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;padding:6px 9px;background:var(--bg-elevated);border-radius:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span id="insp-pick-count"><strong>0</strong> of ${files.length} selected</span>
+        <span style="opacity:.4">·</span>
+        <span style="cursor:pointer;text-decoration:underline" onclick="_inspPickAll('install')">Install shots (${files.filter(f => f.category === 'install').length})</span>
+        <span style="cursor:pointer;text-decoration:underline" onclick="_inspPickAll('all')">All</span>
+        <span style="cursor:pointer;text-decoration:underline" onclick="_inspPickAll('none')">Clear</span>
+      </div>` : ''}
       <div style="overflow-y:auto;flex:1;display:flex;flex-wrap:wrap;gap:8px;padding:4px 0">
         ${thumbs || '<div style="font-size:13px;color:var(--amber,#f59e0b);padding:12px">⚠ No photos on this job yet. You can send without photos, or cancel and chase the install shots first.</div>'}
       </div>
@@ -25365,6 +25467,7 @@ function openInspReviewModal(leadId) {
       </div>
     </div>
   </div>`);
+  _inspPickTally();
 }
 
 async function _inspFetchB64(url) {
@@ -25450,6 +25553,16 @@ async function sendInspectionScheduling(leadId) {
     if (!pickUrl) throw new Error('no pick URL returned');
     // 3. Photos: shrink each CHECKED one. Failures skip with a warning, never block.
     const ids = [...document.querySelectorAll('#insp-modal .insp-pick:checked')].map(x => x.dataset.fid);
+    // Nothing is preselected any more, so "no photos" is a plausible slip rather
+    // than a deliberate choice. Ask once — but allow it, because a job with no
+    // usable shots still needs its scheduling link.
+    if (!ids.length && (typeof getJobFiles === 'function' ? getJobFiles(leadId) : []).some(f => (f.mimeType || '').indexOf('image/') === 0)) {
+      if (!confirm('No photos are selected.\n\nSend the inspection scheduling email with NO photos attached?')) {
+        if (btn) { btn.disabled = false; btn.textContent = '📧 Send email + text'; }
+        say('');
+        return;
+      }
+    }
     const files = (typeof getJobFiles === 'function' ? getJobFiles(leadId) : []).filter(f => ids.includes(f.id));
     const atts = [];
     const failed = [];
