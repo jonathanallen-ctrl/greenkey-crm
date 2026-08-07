@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05s</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05v</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1705,7 +1705,17 @@ const STAGES = [
   {id:'charger-confirmed',label:'Awaiting Charger',  col:'blue'},
   {id:'scheduled',        label:'Scheduling',        col:'green'},
   {id:'installation',     label:'Installation',      col:'green'},
-  {id:'waiting',          label:'Waiting',           col:'purple'},
+  // ── PUNCH LIST vs WAITING (2026-08-05, Jonathan) ──
+  // These look similar and are opposites, which is the whole reason they are two
+  // columns rather than one "Hold/Punchlist". PUNCH LIST is work GreenKey OWES —
+  // failed inspections, hotel snags, anything a man could be put on tomorrow.
+  // WAITING ON OTHERS is blocked on somebody else — utility connection, customer,
+  // platform, a part. One is a to-do list, the other is a watch list, and mixing
+  // them re-creates the camouflage the columns exist to remove: jobs you could
+  // dispatch tomorrow sitting next to jobs you cannot touch.
+  // The test: CAN I PUT A MAN ON IT TOMORROW? Yes → Punch List. No → Waiting.
+  {id:'punch-list',       label:'Punch List',        col:'amber'},
+  {id:'waiting',          label:'Waiting on Others', col:'purple'},
   {id:'post-install-docs',label:'Post Install',      col:'amber'},
   {id:'final-inspection', label:'Awaiting Inspection', col:'amber'},
   {id:'invoiced',         label:'Invoiced',          col:'green'},
@@ -3883,7 +3893,7 @@ function renderKanban(leads) {
       // Field two-status chip (2026-07-21): what the tech stamped, straight from milestones.
       const _fms = l.milestones||{};
       let techChip = '';
-      if (['scheduled','installation','waiting','post-install-docs'].includes(l.stage)) {
+      if (['scheduled','installation','punch-list','waiting','post-install-docs'].includes(l.stage)) {
         if (_fms.installCompleted && _fms.installCompleted.done) {
           techChip = `<span class="chip" style="background:rgba(46,204,113,.12);color:#2ecc71;border:1px solid rgba(46,204,113,.35)" title="Tech marked the install complete${_fms.installCompleted.date?(' '+_fms.installCompleted.date):''}${_fms.installCompleted.time?(' at '+_fms.installCompleted.time):''}">✓ Field done${_fms.installCompleted.time?(' '+_fms.installCompleted.time):''}</span>`;
         } else if (_fms.techArrived && _fms.techArrived.done) {
@@ -3898,7 +3908,10 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}</div>
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}${(() => {
+          const _po = (typeof openPunchCount === 'function') ? openPunchCount(l) : 0;
+          return _po ? `<span class="chip" style="background:rgba(243,156,18,.14);color:#f39c12;border:1px solid rgba(243,156,18,.35)" title="Open punch items — work GreenKey still owes on this job">🔧 ${_po} open</span>` : '';
+        })()}</div>
         <div class="kcard-foot" style="pointer-events:none">
           <span class="kcard-days">${daysAgo(l.stageAt||l.createdAt)}</span>
           ${!isLast?`<span class="knext" style="pointer-events:auto" onclick="event.stopPropagation();advanceStage('${l.id}')">Next →</span>`:''}
@@ -5133,7 +5146,8 @@ function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 // Unlocking takes TWO deliberate actions — see unlockQuoteForEdit().
 const QUOTE_PRICE_FIELDS = ['qq','lines','preProcessingTotal','quoteTotal','laborAndMaterials',
   'laborTotal','laborHours','laborRate','laborLines','matSubtotal','matAllowance','matTotal','rentalTotal',
-  'veteranDiscount','qmeritFee','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
+  'veteranDiscount','manualDiscount','discountMode','discountValue','discountLabel',
+  'qmeritFee','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
   'travelFeeType','depositAmount','isVeteran'];
 function _quoteIsCommitted(q){
   return !!q && (q.status==='approved' || q.status==='contingent-approved' || q.status==='invoiced');
@@ -6572,8 +6586,9 @@ function renderQuickQuoteForm(q){
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
-        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off the total)</span>
       </label>
+      ${_discountRowHTML(q,'onQQChange')}
       ${['Qmerit','Electrum','Treehouse'].includes(q.source) ? '' : `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
@@ -6734,8 +6749,9 @@ function _renderQQ_HVAC(q) {
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
-        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off the total)</span>
       </label>
+      ${_discountRowHTML(q,'onQQChange')}
       ${shouldZeroBuffer(q) ? '' : `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
@@ -6876,8 +6892,9 @@ function _renderQQ_CircuitReplacement(q) {
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
-        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off the total)</span>
       </label>
+      ${_discountRowHTML(q,'onQQChange')}
       ${shouldZeroBuffer(q) ? '' : `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
@@ -7043,8 +7060,9 @@ function _renderQQ_PanelReplacement(q) {
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="qq-veteran" ${q.qq?.isVeteran?'checked':''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
-        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off the total)</span>
       </label>
+      ${_discountRowHTML(q,'onQQChange')}
       ${shouldZeroBuffer(q) ? '' : `
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div class="fg"><div class="fl">Payment Processing Buffer (%)</div>
@@ -7346,12 +7364,16 @@ function onQQChange(qid){
   if(travelFeeType==='baked'&&travelFee>0) lm+=travelFee;
   // If a manual L&M total override is present, it replaces the computed lm.
   if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
-  // Veteran discount is a negative adjustment shown on the quote PDF.
-  const veteranDiscount = isVeteran ? Math.round(lm * (p.veteranDiscountPct||0.10) * 100) / 100 : 0;
-  const lmAfterDiscount = lm - veteranDiscount;
+  // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=Math.ceil(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
+  const _grossQ = lm + qmeritFee + permitFee;
+  const _dQ = _readQuoteDiscount(q);
+  const _ddQ = _applyQuoteDiscounts(_grossQ, isVeteran, p.veteranDiscountPct, _dQ);
+  const veteranDiscount = _ddQ.vet;
+  const manualDiscount  = _ddQ.man;
+  const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
+  const preProcessingTotal=Math.ceil(_grossQ - _ddQ.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
@@ -7363,6 +7385,8 @@ function onQQChange(qid){
     baseInstall,
     laborAndMaterials:lm,
     veteranDiscount,
+    manualDiscount,
+    ..._dQ,
     qmeritFee,
     preProcessingTotal,
     paymentBuffer,
@@ -7875,6 +7899,76 @@ function _qqReadAddOns() {
   };
 }
 
+
+// ══════════════════════════════════════════════════════════════════
+// DISCOUNTS (2026-08-05, Jonathan) — off the TOTAL, and manual is possible
+// ══════════════════════════════════════════════════════════════════
+// ⚠ THE MILITARY DISCOUNT USED TO COME OFF LABOUR & MATERIALS ONLY.
+// Jonathan: *"When I tell them it's a 10% discount and they see $50 off of a
+// $700 job, that isn't right."* On a $700 job ($500 L&M + $200 permit) 10% of
+// L&M is $50 — the customer does the arithmetic on the number at the bottom of
+// the page and gets $70. Rather than remembering to explain the base every
+// time, the discount now comes off the total the customer actually sees.
+//
+// ⚠ ORDER OF OPERATIONS MATTERS AND IS DELIBERATE:
+//   1. lm (labour, materials, rentals, baked travel)
+//   2. + Qmerit admin fee, computed on the UNDISCOUNTED lm — it is a real cost
+//      GreenKey owes Qmerit, so a customer discount must not shrink it
+//   3. + permit fee
+//   = GROSS. Discounts come off GROSS.
+//   4. payment processing buffer is then computed on the DISCOUNTED figure,
+//      because that is what the customer is actually charged.
+//
+// Discounts can never exceed the gross (no negative quotes).
+function _applyQuoteDiscounts(gross, isVeteran, vetPct, d) {
+  const g   = Math.max(0, gross || 0);
+  const vet = isVeteran ? Math.round(g * (vetPct || 0.10) * 100) / 100 : 0;
+  let man = 0;
+  const val = parseFloat(d && d.discountValue) || 0;
+  if (val > 0) {
+    man = (d.discountMode === 'pct')
+      ? Math.round(g * (val / 100) * 100) / 100
+      : Math.round(val * 100) / 100;
+  }
+  // Clamp the pair together so a 10% veteran plus a large manual cannot invert
+  // the quote. Veteran is preserved first — it is a promise, not a negotiation.
+  const cappedVet = Math.min(vet, g);
+  const cappedMan = Math.min(man, g - cappedVet);
+  return { vet: cappedVet, man: cappedMan, total: cappedVet + cappedMan };
+}
+// Read the manual-discount inputs. ⚠ The `??` fallback to the stored value is
+// load-bearing — the same trap the EV scope-wording fields hit on 2026-08-05: a
+// re-render without these inputs in the DOM would otherwise read null and wipe a
+// discount that was already saved.
+function _readQuoteDiscount(q) {
+  const el = id => document.getElementById(id);
+  const m = el('q-disc-mode'), v = el('q-disc-val'), l = el('q-disc-label');
+  return {
+    discountMode:  m ? m.value : ((q && q.discountMode) || 'amt'),
+    discountValue: v ? (parseFloat(v.value) || 0) : (parseFloat(q && q.discountValue) || 0),
+    discountLabel: l ? String(l.value || '').slice(0, 60) : ((q && q.discountLabel) || '')
+  };
+}
+// The manual-discount row, shared by all five quote panels so they cannot drift
+// apart the way the job-type handlers already did once.
+function _discountRowHTML(q, changeFn) {
+  const d = { discountMode: (q.discountMode || 'amt'), discountValue: (q.discountValue || ''), discountLabel: (q.discountLabel || '') };
+  return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+    <div class="fl" style="margin-bottom:4px">Manual discount <span style="font-weight:400;color:var(--text-muted)">— comes off the total, shown as its own line on the quote</span></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select class="fi" id="q-disc-mode" style="width:110px" onchange="${changeFn}('${q.id}')">
+        <option value="amt"${d.discountMode === 'amt' ? ' selected' : ''}>$ off</option>
+        <option value="pct"${d.discountMode === 'pct' ? ' selected' : ''}>% off</option>
+      </select>
+      <input class="fi" type="number" min="0" step="0.01" id="q-disc-val" style="width:110px"
+             placeholder="0" value="${d.discountValue}" oninput="${changeFn}('${q.id}')">
+      <input class="fi" type="text" id="q-disc-label" style="flex:1;min-width:160px" maxlength="60"
+             placeholder="Reason shown to the customer — e.g. Repeat customer, Referral"
+             value="${escHtml(d.discountLabel)}" oninput="${changeFn}('${q.id}')">
+    </div>
+  </div>`;
+}
+
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
   // ── Shared add-ons (2026-07-30) ──
@@ -7891,11 +7985,16 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const additionalLM = (typeof _additionalTasksLM === 'function') ? _additionalTasksLM(q) : 0;
   lm = lm + additionalLM;
   const isVeteran = !!qqPatch.isVeteran;
-  const veteranDiscount = isVeteran ? Math.round(lm * (p.veteranDiscountPct||0.10) * 100) / 100 : 0;
-  const lmAfterDiscount = lm - veteranDiscount;
+  // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
   let qmeritFee = 0;
-  if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lmAfterDiscount * p.qmeritPct);
-  const preProcessingTotal = Math.ceil(lmAfterDiscount + qmeritFee + permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lm * p.qmeritPct);
+  const _grossF = lm + qmeritFee + permitFee;
+  const _dF = _readQuoteDiscount(q);
+  const _ddF = _applyQuoteDiscounts(_grossF, isVeteran, p.veteranDiscountPct, _dF);
+  const veteranDiscount = _ddF.vet;
+  const manualDiscount  = _ddF.man;
+  const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
+  const preProcessingTotal = Math.ceil(_grossF - _ddF.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
   const paymentBuffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee = Math.ceil(preProcessingTotal * paymentBuffer / 100);
@@ -7906,6 +8005,8 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
     permitFee,
     laborAndMaterials: lm,
     veteranDiscount,
+    manualDiscount,
+    ..._dF,
     qmeritFee,
     preProcessingTotal,
     paymentBuffer,
@@ -8799,8 +8900,9 @@ function renderDetailedQuoteForm(q){
       <div class="qq-title">Discount</div>
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
         <input type="checkbox" id="dq-veteran" ${q.isVeteran?'checked':''} onchange="onDQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
-        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off Labor &amp; Materials)</span>
+        <span>Military Veteran Discount (${Math.round((getQQPricing().veteranDiscountPct||0.10)*100)}% off the total)</span>
       </label>
+      ${_discountRowHTML(q,'onDQChange')}
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-top:10px">
         <input type="checkbox" id="dq-skip-mat-allowance" ${(typeof q.skipMatAllowance==='boolean'?q.skipMatAllowance:(q.jobType==='energy-management'||q.jobType==='custom'))?'checked':''} onchange="onDQSkipMatAllowanceChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
         <span>Skip 10% materials buffer <span style="color:var(--text-muted);font-size:11.5px">(use when price already includes materials)</span></span>
@@ -9134,16 +9236,21 @@ function onDQChange(qid){
   const rentalTotal=rentals.reduce((s,r)=>s+(parseFloat(r.cost)||0),0);
   const travelBaked=travelFeeType==='baked'?travelFee:0;
   const lm=laborTotal+matTotal+rentalTotal+travelBaked;
-  const veteranDiscount=isVeteran?Math.round(lm*(p.veteranDiscountPct||0.10)*100)/100:0;
-  const lmAfterDiscount=lm-veteranDiscount;
+  // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lmAfterDiscount*p.qmeritPct);
-  const preProcessingTotal=Math.ceil(lmAfterDiscount+qmeritFee+permitFee);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
+  const _grossD = lm + qmeritFee + permitFee;
+  const _dD = _readQuoteDiscount(q);
+  const _ddD = _applyQuoteDiscounts(_grossD, isVeteran, p.veteranDiscountPct, _dD);
+  const veteranDiscount = _ddD.vet;
+  const manualDiscount  = _ddD.man;
+  const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
+  const preProcessingTotal=Math.ceil(_grossD - _ddD.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
   const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
   const quoteTotal=preProcessingTotal+paymentProcessingFee;
-  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
+  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,manualDiscount,..._dD,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
   // Live-refresh auto-generated scope text on the Detailed Quote form too.
   if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
@@ -9197,6 +9304,7 @@ function calcQuoteTotals(q){
   const rLabor  = Math.ceil(q.laborTotal||0);
   const rRental = Math.ceil(q.rentalTotal||0);
   const rVet    = Math.floor(q.veteranDiscount||0);
+  const rMan    = Math.floor(q.manualDiscount||0);
   const rQmerit = Math.ceil(q.qmeritFee||0);
   const rPermit = Math.ceil(q.permitFee||0);
   // For detailed quotes L&M is the sum of its shown parts (so the breakdown
@@ -9204,8 +9312,10 @@ function calcQuoteTotals(q){
   // value. Round either way.
   const _partsSum = rMat + rAllow + rLabor + rRental;
   const rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.ceil(q.laborAndMaterials||0);
-  const lmAfterDiscount = rLM - rVet;
-  const preProcessingTotal = lmAfterDiscount + rQmerit + rPermit;  // whole dollars, reconciles with the shown lines
+  // 2026-08-05: discounts subtract from the whole, not from L&M — the shown
+  // lines are L&M, Qmerit, permit, then the discounts as their own negatives.
+  const lmAfterDiscount = rLM - rVet;                    // legacy compat only
+  const preProcessingTotal = rLM + rQmerit + rPermit - rVet - rMan;  // reconciles with the shown lines
   const _round2 = (x) => Math.round(x * 100) / 100;
   // Per-tier processing fees — each computed independently from the base, so
   // the math is exact (avoids the "discount-off-discounted-price" rounding
@@ -9228,6 +9338,8 @@ function calcQuoteTotals(q){
     rentalTotal:rRental,
     laborAndMaterials:rLM,
     veteranDiscount:rVet,
+    manualDiscount:rMan,
+    discountLabel:(q.discountLabel||''),
     qmeritFee:rQmerit,
     permitFee:rPermit,
     preProcessingTotal,
@@ -9269,7 +9381,10 @@ function calcQuoteMarginPct(q){
   const t=calcQuoteTotals(q);
   // Revenue basis: L&M after discount. Permit + Qmerit fee are pass-throughs
   // (revenue == cost) so they cancel out of the margin either way.
-  const rev=(t.laborAndMaterials||0)-(t.veteranDiscount||0);
+  // ⚠ Both discounts reduce revenue. Omitting the manual one would report a
+  // margin the job does not actually have — the exact thing the margin floor
+  // exists to catch (2026-08-05).
+  const rev=(t.laborAndMaterials||0)-(t.veteranDiscount||0)-(t.manualDiscount||0);
   if(rev<=0) return null;
   return Math.round(((rev-cost)/rev)*1000)/10;
 }
@@ -9454,6 +9569,9 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
   }
   if((totals.veteranDiscount||0)>0){
     rows.push(`<div class="tot-row" style="color:var(--green)"><span>− Military Veteran Discount</span><span class="tot-num">−${fmt$(totals.veteranDiscount)}</span></div>`);
+  }
+  if((totals.manualDiscount||0)>0){
+    rows.push(`<div class="tot-row" style="color:var(--green)"><span>− ${escHtml(totals.discountLabel||'Discount')}</span><span class="tot-num">−${fmt$(totals.manualDiscount)}</span></div>`);
   }
   if((totals.permitFee||0) > 0) {
     rows.push(`<div class="tot-row"><span>Permitting</span><span class="tot-num">${fmt$(totals.permitFee)}</span></div>`);
@@ -11586,6 +11704,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     ? [..._bkPDF.map(r => ({desc:'   ' + r.desc, amt:r.amt})), {desc:_lmLabel + ' (all scopes)', amt:_lmPDF}]
     : [{desc:_lmLabel,amt:_lmPDF}];
   if((_totalsPDF.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(_totalsPDF.veteranDiscount||0)});
+  if((_totalsPDF.manualDiscount||0)>0) _pdfRows.push({desc:(_totalsPDF.discountLabel||'Discount'),amt:-(_totalsPDF.manualDiscount||0)});
   _pdfRows.push({desc:'Permitting',amt:_totalsPDF.permitFee||0});
   // 2026-07-02 (Jonathan): the headline TOTAL is now the NO-FEE (cash/Zelle/
   // check) price — matches verbal quotes. The processing fee no longer appears
@@ -11757,6 +11876,7 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
     _invRows=[{desc:'Labor & Materials',amt:_totalsInv.laborAndMaterials||0}];
   }
   if((_totalsInv.veteranDiscount||0)>0) _invRows.push({desc:'Military Veteran Discount',amt:-(_totalsInv.veteranDiscount||0)});
+  if((_totalsInv.manualDiscount||0)>0) _invRows.push({desc:(_totalsInv.discountLabel||'Discount'),amt:-(_totalsInv.manualDiscount||0)});
   _invRows.push({desc:'Permitting',amt:_totalsInv.permitFee||0});
   // Fall back to the choice stored on the quote so a re-download, and the
   // "email invoice" button, match the PDF that was generated the first time.
@@ -12586,7 +12706,7 @@ function _chipEditorHTML(leadId, key){
       return _chipEditorShell('Final Inspection', _inspLine
         + row(fi.done
         ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${(fi.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
-        : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`))
+        : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`)+btn('✕ Mark FAILED',`markInspectionFailed('${leadId}')`))
         + row(btn('📱 Text inspector — attach photos',`textInspectorForJob('${leadId}')`))
         + note('Texts the AHJ inspector and pre-loads this job so you can attach its install photos.'));
     }
@@ -13309,12 +13429,116 @@ function _applyNotWonTransition(leadObj, prevStage, newStage){
     if (leadObj.lostInfo) leadObj.lostInfo.isLost = false;
   }
 }
+
+// ══════════════════════════════════════════════════════════════════
+// PUNCH LIST (2026-08-05, Jonathan) — the work we still owe
+// ══════════════════════════════════════════════════════════════════
+// WHY. Failed inspections were sitting in "Awaiting Inspection" looking exactly
+// like jobs that had never been inspected; hotel snags and post-install odds and
+// ends lived only in Jonathan's head. His words: *"I need visibility on these
+// things so they don't remain in hiding while holding them separate from the
+// rest of the workflow so they aren't camouflaged by everything else."*
+//
+// ⚠ PUNCH LIST IS NOT "WAITING ON OTHERS". Punch List is work GreenKey owes —
+// a man could be put on it tomorrow. Waiting is blocked on somebody else
+// (utility connection, customer, platform, a part) and nothing we do moves it.
+// One is a to-do list, the other is a watch list. Keep them apart.
+//
+// ⚠ RETURN STAGE. A job in Punch List has lost its real place in the pipeline —
+// a failed inspection is still fundamentally AT inspection. `punchReturnStage`
+// is stamped on the way in so it goes back in one click instead of somebody
+// having to remember. Cleared on the way out.
+function getPunchItems(lead) {
+  return (lead && Array.isArray(lead.punchItems)) ? lead.punchItems : [];
+}
+function openPunchCount(lead) {
+  return getPunchItems(lead).filter(i => !i.done).length;
+}
+function _punchSave(leadId, mutate) {
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return null;
+  if (!Array.isArray(arr[i].punchItems)) arr[i].punchItems = [];
+  mutate(arr[i]);
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  return arr[i];
+}
+function addPunchItem(leadId, text) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  _punchSave(leadId, l => l.punchItems.push({
+    id: 'pi-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+    text: t.slice(0, 300), done: false,
+    addedAt: new Date().toISOString(), addedBy: (S.user && S.user.name) || 'CRM'
+  }));
+  try { renderJobDetail(leadId); } catch (_) {}
+}
+function togglePunchItem(leadId, itemId) {
+  _punchSave(leadId, l => {
+    const it = l.punchItems.find(x => x.id === itemId);
+    if (it) { it.done = !it.done; it.doneAt = it.done ? new Date().toISOString() : null; }
+  });
+  try { renderJobDetail(leadId); } catch (_) {}
+}
+function deletePunchItem(leadId, itemId) {
+  _punchSave(leadId, l => { l.punchItems = l.punchItems.filter(x => x.id !== itemId); });
+  try { renderJobDetail(leadId); } catch (_) {}
+}
+function _addPunchFromInput(leadId) {
+  const el = document.getElementById('punch-new');
+  if (!el) return;
+  const v = el.value; el.value = '';
+  addPunchItem(leadId, v);
+}
+// Send the job back where it came from. Refuses while items are still open —
+// that is the entire point of the column.
+function punchReturnJob(leadId) {
+  const lead = getLead(leadId); if (!lead) return;
+  const open = openPunchCount(lead);
+  if (open && !confirm(open + ' punch item' + (open === 1 ? ' is' : 's are') + ' still open.\n\nSend the job back anyway?')) return;
+  const back = lead.punchReturnStage || 'post-install-docs';
+  updateJobStage(leadId, back);
+  toast('Back to ' + ((STAGE_MAP && STAGE_MAP[back]) || back), 'success');
+}
+// Mark the inspection failed: the job goes to Punch List with the reason as its
+// first item and Awaiting Inspection stamped as where it returns to. Before this
+// a failed inspection was indistinguishable from one that had never happened.
+function markInspectionFailed(leadId) {
+  const why = window.prompt('What failed? This becomes the first punch item.', '');
+  if (why === null) return;
+  const t = String(why).trim();
+  _punchSave(leadId, l => {
+    l.punchReturnStage = 'final-inspection';
+    l.punchItems.push({
+      id: 'pi-' + Date.now().toString(36) + '-f',
+      text: t ? ('Failed inspection — ' + t.slice(0, 260)) : 'Failed inspection — reason not recorded',
+      done: false, addedAt: new Date().toISOString(),
+      addedBy: (S.user && S.user.name) || 'CRM', fromInspection: true
+    });
+    l.jobNotes = (l.jobNotes || []).concat([{
+      id: 'note-punch-' + Date.now().toString(36),
+      text: 'Inspection FAILED' + (t ? (': ' + t) : '') + '. Moved to Punch List; returns to Awaiting Inspection when the work is done.',
+      authorName: (S.user && S.user.name) || 'CRM', timestamp: new Date().toISOString()
+    }]);
+  });
+  updateJobStage(leadId, 'punch-list');
+  toast('Moved to Punch List — returns to Awaiting Inspection', 'warning');
+}
+
 function updateJobStage(leadId, newStage) {
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
   const _prevStage = arr[idx].stage;
   _applyNotWonTransition(arr[idx], _prevStage, newStage);
+  // Punch List remembers where the job came from, so "Back to …" is one click
+  // and nobody has to recall that a failed inspection returns to inspection
+  // rather than to Post Install (2026-08-05).
+  if (newStage === 'punch-list' && _prevStage !== 'punch-list') {
+    if (!arr[idx].punchReturnStage) arr[idx].punchReturnStage = _prevStage;
+  } else if (_prevStage === 'punch-list' && newStage !== 'punch-list') {
+    delete arr[idx].punchReturnStage;
+  }
   arr[idx].stage = newStage;
   arr[idx].stageAt = new Date().toISOString();
   arr[idx].updatedAt = new Date().toISOString();
@@ -14256,6 +14480,34 @@ function renderJobDetail(id) {
         ${_mm ? `<div class="flag-banner" style="margin-top:8px">⚠ ${escHtml(_mm)}</div>` : ''}`;
       })()}
       ${lead.specialJurisdiction?`<div style="margin-top:8px"><span class="chip chip-flag">⚠ ${lead.jurisdiction} — $500 permit / In-person inspection required</span></div>`:''}
+      ${(() => {
+        // Punch list (2026-08-05). Shown whenever the job is IN the column or
+        // still carries open items — an item must never be able to hide just
+        // because the job moved on.
+        const _pi = (typeof getPunchItems === 'function') ? getPunchItems(lead) : [];
+        const _open = _pi.filter(x => !x.done).length;
+        if (lead.stage !== 'punch-list' && !_pi.length) return '';
+        const _back = lead.punchReturnStage;
+        const _rows = _pi.length ? _pi.map(it => `<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:12.5px">
+            <input type="checkbox" ${it.done?'checked':''} onchange="togglePunchItem('${lead.id}','${it.id}')" style="width:15px;height:15px;margin-top:2px;accent-color:var(--green);cursor:pointer">
+            <span style="flex:1;${it.done?'text-decoration:line-through;color:var(--text-muted)':''}">${escHtml(it.text)}</span>
+            <span style="font-size:10.5px;color:var(--text-muted);white-space:nowrap">${escHtml((it.addedBy||'').split(' ')[0])} ${escHtml(String(it.addedAt||'').slice(5,10))}</span>
+            <span style="cursor:pointer;color:var(--red,#e74c3c);font-size:11px" title="Remove" onclick="deletePunchItem('${lead.id}','${it.id}')">✕</span>
+          </div>`).join('')
+          : `<div style="font-size:12px;color:var(--text-muted);padding:4px 0">Nothing listed yet — add what's outstanding so it isn't only in somebody's head.</div>`;
+        return `<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(243,156,18,.35);border-radius:8px;background:rgba(243,156,18,.06)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:12.5px;font-weight:600;color:#f39c12">🔧 Punch List${_open?` — ${_open} open`:(_pi.length?' — all done':'')}</div>
+            ${_back ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="punchReturnJob('${lead.id}')">↩ Back to ${escHtml((typeof STAGE_MAP!=='undefined' && STAGE_MAP[_back]) || _back)}</button>` : ''}
+          </div>
+          ${_rows}
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <input class="jd-fi" id="punch-new" style="flex:1" maxlength="300" placeholder="Add an item — what's left to do?"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();_addPunchFromInput('${lead.id}')}">
+            <button class="btn btn-g" style="padding:4px 12px;font-size:12px" onclick="_addPunchFromInput('${lead.id}')">+ Add</button>
+          </div>
+        </div>`;
+      })()}
     </div>
   </div>`;
 
@@ -20546,12 +20798,18 @@ function getNextWorkday(iso) {
 // Jobs currently in the pool are EXCLUDED — we are scheduling those, not routing
 // around them (a job can legitimately be both if it was already booked and is
 // being rebuilt, and double-counting it would block its own slot).
-async function _buildDayAnchors(poolJobs) {
+async function _buildDayAnchors(poolJobs, dateStr, techId) {
   const out = [];
   try {
     if (typeof getApptsOnDate !== 'function') return out;
+    // ⚠ Date and tech are PARAMETERS, not `_sched` reads. Multi-day mode builds
+    // several dates in one pass, and a builder that quietly anchored every day to
+    // whatever `_sched.date` happened to be would be worse than no anchors at all
+    // — it would route each day around the wrong day's appointments.
+    const _d = dateStr || _sched.date;
+    const _t = (techId !== undefined && techId !== null) ? techId : (_sched.techId || '');
     const poolIds = new Set((poolJobs || []).map(l => l.id));
-    const rows = getApptsOnDate(_sched.date, _sched.techId || '');
+    const rows = getApptsOnDate(_d, _t);
     let untimed = 0;
     for (const row of rows) {
       const lead = row.lead, appt = row.appt;
@@ -20571,7 +20829,7 @@ async function _buildDayAnchors(poolJobs) {
       out.push({ lead, appt, startHrs, hours, remote, coords, name: lead.customerName || lead.id });
     }
     if (untimed) {
-      toast(untimed + ' booked appointment' + (untimed === 1 ? '' : 's') + ' on this day ' +
+      toast(untimed + ' booked appointment' + (untimed === 1 ? '' : 's') + ' on ' + _d + ' ' +
             (untimed === 1 ? 'has' : 'have') + ' no time set — the plan cannot route around ' +
             (untimed === 1 ? 'it' : 'them') + '. Set a time on the job.', 'warning');
     }
@@ -20994,7 +21252,7 @@ async function runScheduler() {
   // Everything already on the calendar for this date becomes a fixed anchor
   // (2026-08-05). With anchors present the planner switches to cheapest
   // insertion; with none it runs the original greedy, untouched.
-  opts.anchors = await _buildDayAnchors(jobs);
+  opts.anchors = await _buildDayAnchors(jobs, _sched.date, _sched.techId || '');
 
   // Run the optimizer.
   const result = _optimizeDayPlan(jobs, coords, homeCoords, dayHours, _sched.durations, opts);
@@ -21142,11 +21400,18 @@ async function buildSchedDay(date) {
     if (c) coords[l.id] = c;
   }
   const opts = await _buildSchedOpts();
+  // ⚠ 2026-08-05: multi-day shipped in `crm-2026-08-05s` WITHOUT this line, so
+  // single-day built around booked work and multi-day still planned straight
+  // through it — two modes that look identical and disagree about whether the
+  // calendar exists. Jonathan caught it by asking. Each date anchors to its OWN
+  // committed appointments and its OWN tech.
+  opts.anchors = await _buildDayAnchors(pool, date, plan.techId || '');
   const result = _optimizeDayPlan(pool, coords, homeCoords, dayHours, _sched.durations, opts);
   plan.scheduled       = result.scheduled;
   plan.unscheduled     = result.unscheduled;
   plan.returnDriveHrs  = result.returnDriveHrs;
   plan.restroomHrs     = result.restroomHrs || 0;
+  plan.anchors         = result.anchors || [];
   plan.built           = true;
   _sched.loading = false;
   renderSchedulerPage();
