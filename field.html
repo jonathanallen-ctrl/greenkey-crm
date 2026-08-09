@@ -90,7 +90,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-04 field-16';
+const BUILD = '2026-08-08 field-17';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -780,7 +780,16 @@ async function uploadPhoto(jobId, file, catKey){
   const conv = await resizeImage(file, 2048, 0.88);
   const tag = (catKey||'other').replace(/[^a-z0-9-]/gi,'');
   const fname = tag+'__'+Date.now()+'_'+(conv.name||'photo.jpg').replace(/[^A-Za-z0-9._-]/g,'_');
-  const path = SP_PHOTO_LIB+'/'+jobId+'/install/'+fname;       // CRM auto-pulls this folder
+  // ⚠ 2026-08-08 — WALKDOWN SHOTS GO TO site/, EVERYTHING ELSE TO install/.
+  // Every photo used to land in install/ regardless of which screen took it,
+  // with the shot type encoded only in the filename prefix. The CRM reads the
+  // category off the FOLDER, so Chase's Matt Baldwin walkdown (GK-2026-5537499,
+  // 2026-08-05) showed up as seven install photos on a job that had not been
+  // installed. The office also has an Operations mirror that copies install/
+  // into "Completion pics" — so left alone, pre-quote walkdown pictures would
+  // eventually be filed as completion evidence.
+  const folder = (tag === 'walkdown') ? 'site' : 'install';
+  const path = SP_PHOTO_LIB+'/'+jobId+'/'+folder+'/'+fname;    // CRM auto-pulls both folders
   const r = await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/root:/'+encodeURI(path)+':/content',
     { method:'PUT', headers:{ Authorization:'Bearer '+_gToken, 'Content-Type':conv.type||'image/jpeg' }, body:conv.blob });
   if(!r.ok) throw new Error('upload '+r.status);

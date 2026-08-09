@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-05v</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -17809,6 +17809,19 @@ function saveInspectorForm(){
 function _deleteInspectorConfirm(id){ const i=getInspector(id); if(!i) return; if(!confirm('Remove inspector "'+(i.name||'')+'"?')) return; deleteInspector(id); closeDrawer(); toast('Inspector removed','success'); try{ if(typeof renderPermittingPage==='function') renderPermittingPage(); }catch(e){} try{ if(typeof _refreshAHJDetail==='function') _refreshAHJDetail(); }catch(e){} }
 
 let _inspSmsId=null, _inspSmsPoll=null, _inspSelPhotos={}, _inspPickJob=null;
+// Which category the inspector-photo picker is showing: 'all' | 'install' | 'site'
+// | 'documents'. Defaults to INSTALL, because that is what an inspector is
+// almost always being sent (2026-08-08).
+let _inspPhotoCat='install';
+function _inspSetPhotoCat(c){ _inspPhotoCat=c||'all'; try{ _renderInspPhotoGrid(); }catch(_){} try{ _inspRenderCatChips(); }catch(_){} }
+function _inspRenderCatChips(){
+  const el=document.getElementById('insp-cat-chips'); if(!el) return;
+  const jid=_inspPickJob;
+  const all=(jid && typeof getJobFiles==='function')?getJobFiles(jid).filter(f=>(f.mimeType||'').indexOf('image/')===0):[];
+  const n=c=>c==='all'?all.length:all.filter(f=>(f.category||'site')===c).length;
+  const chip=(c,lab)=>`<span class="chip" style="cursor:pointer;font-size:11px;${_inspPhotoCat===c?'background:rgba(52,152,219,.16);color:#3498db;font-weight:600':''}" onclick="_inspSetPhotoCat('${c}')">${lab} ${n(c)}</span>`;
+  el.innerHTML = chip('install','Install') + chip('site','Site') + chip('all','All');
+}
 function openInspectorSMS(inspId, preJobId){
   const insp=getInspector(inspId); if(!insp){ toast('Inspector not found','error'); return; }
   if(typeof _smsConfigured!=='function' || !_smsConfigured()){ toast('Texting is not configured','warning'); return; }
@@ -17851,6 +17864,7 @@ function _inspTogglePicker(forceOpen){
     p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection. Tap a photo to attach it · tap 🔍 to view full size before sending.</div>
       <select class="fsel" id="insp-pick-job" style="width:100%;margin-bottom:8px" onchange="_inspSetPickJob(this.value)"><option value="">— Select a job —</option>${opts}</select>
       <div id="insp-pick-addr"></div>
+      <div id="insp-cat-chips" style="display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap"></div>
       <div id="insp-photo-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;max-height:340px;overflow:auto"></div>`;
     if(_inspPickJob){ _renderInspPickAddr(); _renderInspPhotoGrid(); }
   }
@@ -17886,13 +17900,68 @@ function _inspPreviewPhotoById(fileId){
 function _awaitingInspectionJobs(){
   return getLeads().filter(l=>{ const ms=l.milestones||{}; if(ms.finalInspPassed&&ms.finalInspPassed.done) return false; return l.stage==='final-inspection' || (ms.installScheduled&&ms.installScheduled.date && ['scheduled','installation','post-install-docs','final-inspection'].includes(l.stage)); });
 }
+
+// ── WHAT IS THIS PHOTO OF? (2026-08-08) ──
+// The field app names every shot `<key>__<timestamp>_<original>`, where the key
+// is the required-shot slot it filled. That is the most useful label there is
+// when you are picking pictures to send an inspector — far better than a
+// thumbnail — and nothing in the CRM was surfacing it. Jonathan: *"It makes it
+// difficult to pick the right pictures without opening each one and looking
+// closely."* Keys mirror SHOTS in field.html; keep them in step.
+const GK_SHOT_LABELS = {
+  'walkdown':       'Walkdown',
+  'panel-wiring':   'Panel wiring',
+  'panel-labeled':  'Panel — cover on, labeled',
+  'run':            'Conduit / wire run',
+  'charger-wiring': 'Charger wiring',
+  'charger-done':   'Completed charger',
+  'charger-serial': 'Serial # + amp setting',
+  'commissioning':  'Commissioning',
+  'other':          'Other'
+};
+function shotLabelFor(f) {
+  const n = String((f && (f.name || f.spName)) || '');
+  const i = n.indexOf('__');
+  if (i > 0) {
+    const k = n.slice(0, i).toLowerCase();
+    if (GK_SHOT_LABELS[k]) return GK_SHOT_LABELS[k];
+  }
+  return '';
+}
+// Install shots read best in the order the tech is asked to take them, so the
+// grid mirrors the closeout checklist rather than upload time.
+const _GK_SHOT_ORDER = ['panel-wiring','panel-labeled','run','charger-wiring','charger-done','charger-serial','commissioning','other','walkdown'];
+function _shotRank(f) {
+  const n = String((f && (f.name || f.spName)) || '');
+  const i = n.indexOf('__');
+  const k = i > 0 ? n.slice(0, i).toLowerCase() : '';
+  const r = _GK_SHOT_ORDER.indexOf(k);
+  return r < 0 ? 99 : r;
+}
+
 function _renderInspPhotoGrid(){
   const grid=document.getElementById('insp-photo-grid'); if(!grid) return; const jid=_inspPickJob; if(!jid){ grid.innerHTML=''; return; }
-  const imgs=(typeof getJobFiles==='function'?getJobFiles(jid):[]).filter(f=>(f.mimeType||'').indexOf('image/')===0 && (f.downloadUrl||f.dataUrl||f.spUrl));
-  if(!imgs.length){ grid.innerHTML=`<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">No photos on this job yet. They auto-pull from SharePoint when the job is opened.</div>`; return; }
+  try { _inspRenderCatChips(); } catch(_){}
+  let imgs=(typeof getJobFiles==='function'?getJobFiles(jid):[]).filter(f=>(f.mimeType||'').indexOf('image/')===0 && (f.downloadUrl||f.dataUrl||f.spUrl));
+  // Filter + order (2026-08-08). Site and install photos used to arrive as one
+  // undifferentiated wall of thumbnails, so picking the right shot for an
+  // inspector meant opening them one at a time.
+  if (_inspPhotoCat && _inspPhotoCat !== 'all') imgs = imgs.filter(f => (f.category||'site') === _inspPhotoCat);
+  imgs = imgs.slice().sort((a,b) => _shotRank(a) - _shotRank(b));
+  if(!imgs.length){
+    const _anyCat = (typeof getJobFiles==='function'?getJobFiles(jid):[]).some(f=>(f.mimeType||'').indexOf('image/')===0);
+    grid.innerHTML=`<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">${_anyCat
+      ? 'No <strong>'+escHtml(_inspPhotoCat)+'</strong> photos on this job — try another filter above.'
+      : 'No photos on this job yet. They auto-pull from SharePoint when the job is opened.'}</div>`;
+    return; }
   grid.innerHTML=imgs.map(f=>{ const sel=!!_inspSelPhotos[f.id]; const src=_inspImgSrc(f);
+    const _lbl=shotLabelFor(f); const _cat=(f.category||'site');
     return `<div style="border:3px solid ${sel?'var(--green)':'var(--border)'};border-radius:8px;overflow:hidden;position:relative">
-      <img onclick="_inspTogglePhoto('${f.id}')" src="${src}" title="${escHtml(f.name||'')}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;cursor:pointer">
+      <img onclick="_inspTogglePhoto('${f.id}')" src="${src}" title="${escHtml((_lbl?_lbl+' — ':'')+(f.name||''))}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;cursor:pointer">
+      <div style="position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.78));color:#fff;font-size:10px;line-height:1.25;padding:12px 5px 3px;pointer-events:none">
+        ${_lbl?`<div style="font-weight:600">${escHtml(_lbl)}</div>`:''}
+        <div style="opacity:.75">${escHtml(_cat)}</div>
+      </div>
       <button onclick="_inspPreviewPhotoById('${f.id}')" title="View full size" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,.62);color:#fff;border:none;border-radius:6px;padding:3px 7px;font-size:13px;cursor:pointer;line-height:1">🔍</button>
       ${sel?`<div style="position:absolute;top:5px;left:5px;background:var(--green);color:#fff;border-radius:50%;width:20px;height:20px;font-size:13px;text-align:center;line-height:20px;font-weight:700">✓</div>`:''}
     </div>`;
@@ -24319,6 +24388,17 @@ async function _hydratePhotosFromSP(jobId) {
       // Sanity-check: if the category we derived isn't a known category,
       // fall back to 'site'. This protects against unusual SP folder shapes.
       if (!VALID_CATS.includes(category)) category = 'site';
+      // ⚠ 2026-08-08 — THE FIELD APP UPLOADS EVERYTHING TO install/.
+      // `uploadPhoto()` in field.html hardcodes `<job>/install/` no matter which
+      // screen took the picture, and encodes the shot type in the FILENAME
+      // instead: `walkdown__…`, `panel-wiring__…`, `charger-done__…`. So a
+      // walkdown photo is a file called walkdown__* living in the install
+      // folder, and the CRM — which reads the category off the FOLDER — showed
+      // Chase's whole Matt Baldwin walkdown as install photos.
+      // The filename is the more reliable signal, so it wins. field-17 also
+      // uploads walkdown shots to site/ going forward; this rule fixes every
+      // walkdown taken before that, without moving a single file in SharePoint.
+      if (/^walkdown__/i.test(String(item.name || ''))) category = 'site';
       if (!itemJobId) { skipped++; continue; }
 
       // Fetch the signed download URL. SharePoint children endpoint omits
@@ -24339,6 +24419,17 @@ async function _hydratePhotosFromSP(jobId) {
         // Repair miscategorized records (the 2026-06-08 photo-category bug).
         if (existing.category !== category && !VALID_CATS.includes(existing.category)) {
           existing.category = category;
+          recategorized++;
+          wroteAnything = true;
+        }
+        // ⚠ Narrow, deliberate second repair (2026-08-08): a walkdown__ file
+        // recorded as 'install'. Kept this specific ON PURPOSE — a blanket
+        // "folder always wins" rule would silently revert any category a human
+        // set by hand in the CRM. This only ever moves walkdown photos out of
+        // install, which is never something anyone chose.
+        else if (existing.category === 'install' && category === 'site'
+                 && /^walkdown__/i.test(String(item.name || ''))) {
+          existing.category = 'site';
           recategorized++;
           wroteAnything = true;
         }
@@ -24624,6 +24715,11 @@ async function _opsPhotoMirrorSweep() {
             // a completion picture.
             const _mt = (it.file.mimeType || '').toLowerCase();
             if (_mt && _mt.indexOf('image/') !== 0) continue;
+            // ⚠ 2026-08-08: nor is a WALKDOWN shot. The field app writes them
+            // into install/ (see the hydrator note), so without this every
+            // pre-quote walkdown photo would be copied into Sherri's Completion
+            // pics the moment the job reached Scheduling.
+            if (/^walkdown__/i.test(it.name || '')) continue;
             photos.push(it);
           }
         }
