@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -15349,6 +15349,39 @@ function getJobFiles(jid) { return _filesCache.filter(f => f.jobId === jid); }
 //   1. Local base64 dataUrl (fastest, works offline) — typical for files this device uploaded
 //   2. SharePoint downloadUrl (signed direct link, ~1 hr expiry) — typical for cross-device hydrated stubs
 //   3. SharePoint webUrl (browser link, NOT directly embeddable but works for documents)
+// ── WHY CAN'T I SEE THIS PHOTO? (2026-08-08) ──
+// Every broken tile used to say the same thing — "Cannot display · click ↻ Sync
+// to refresh the link" — regardless of cause. For Brett Robertson's five site
+// photos that advice was simply wrong: the binaries are not in SharePoint at
+// all, and refreshPhotosFromSP() can only re-push a file this device still holds
+// locally (`f.dataUrl`). Sync on a machine that never had them does nothing,
+// forever, with no explanation. Same failure shape as the mailing-city AHJ and
+// the flat duration defaults: one message covering several different truths.
+function _photoWhyBroken(f) {
+  const nm = String((f && f.name) || '').toLowerCase();
+  const mt = String((f && f.mimeType) || '').toLowerCase();
+  if (mt.indexOf('video/') === 0 || /\.(mov|mp4|m4v|avi|3gp)$/.test(nm)) {
+    return { msg: 'Video', hint: 'Videos do not preview here — click to open it.' };
+  }
+  const hasLocal  = !!(f && f.dataUrl);
+  const hasRemote = !!(f && (f.spUrl || f.downloadUrl || f.spDriveItemId));
+  // A 404 on the item ID is the ONLY reliable "it is really gone" signal —
+  // an unreachable PATH just means somebody moved the folder (2026-08-08).
+  if (f && f.spMissing) {
+    return { msg: 'Deleted in SharePoint',
+             hint: 'The file was looked up by its SharePoint ID and no longer exists. Re-upload it, or delete this tile.' };
+  }
+  if (!hasLocal && !hasRemote) {
+    return { msg: 'Not in SharePoint',
+             hint: 'This never finished uploading and this device has no copy. ↻ Sync cannot recover it — open the job on the device the photo was taken on and press ↻ Sync there, or delete this tile.' };
+  }
+  if (/\.(heic|heif)$/.test(nm) && !hasLocal) {
+    return { msg: 'HEIC — no preview',
+             hint: 'iPhone format; Chrome and Edge cannot render it. Click to download, or re-upload from the phone so the CRM converts it to JPEG.' };
+  }
+  return { msg: 'Cannot display', hint: 'The image link has expired. Click ↻ Sync above to refresh it.' };
+}
+
 function _imgSrc(f) {
   if (!f) return '';
   if (f.dataUrl) return f.dataUrl;
@@ -15562,12 +15595,12 @@ function renderFMPhotos(jobId, cat) {
          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
            <svg width="36" height="36" viewBox="0 0 24 24" fill="rgba(0,0,0,0.55)" stroke="white" stroke-width="1.5"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.55)"/><polygon points="10,8 16,12 10,16" fill="white" stroke="none"/></svg>
          </div>`
-      : `<img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      : (() => { const _wb = _photoWhyBroken(f); return `<img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
          <div class="pthumb-err" style="display:none;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:8px">
            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg>
-           <span style="font-size:11px">Cannot display</span>
-           <span style="font-size:10px;color:var(--text-muted);line-height:1.3">Click <strong>↻ Sync</strong> above to refresh the link</span>
-         </div>`;
+           <span style="font-size:11px">${escHtml(_wb.msg)}</span>
+           <span style="font-size:10px;color:var(--text-muted);line-height:1.3">${escHtml(_wb.hint)}</span>
+         </div>`; })();
     return `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer;position:relative">
       ${_media}
       <div class="plabel">${escHtml(f.name)}</div>
@@ -16231,7 +16264,7 @@ function renderFMJobCat(jobId, cat) {
 
   const thumbs = files.map((f,i) => `<div class="pthumb" onclick="openLightbox('${jobId}','${cat}',${i})" style="cursor:pointer">
     <img src="${_imgSrc(f)}" alt="${escHtml(f.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-    <div class="pthumb-err" style="display:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>Cannot display</span></div>
+    <div class="pthumb-err" style="display:none;flex-direction:column;text-align:center;padding:6px" title="${escHtml(_photoWhyBroken(f).hint)}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-6 4 4"/></svg><span>${escHtml(_photoWhyBroken(f).msg)}</span></div>
     <div class="plabel">${escHtml(f.name)}</div>
     <button class="prem" onclick="event.stopPropagation();fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button>
   </div>`).join('');
@@ -24493,6 +24526,55 @@ async function _hydratePhotosFromSP(jobId) {
 //   non-images → 'documents'. Deduped by spDriveItemId / name+jobId; throttled.
 const SP_NEEDS_INSPECTION_PATH = 'Operations/Active Projects/NEEDS INSPECTION COMPLETED';
 const _opsFolderPullAt = {};
+// ── REFRESH BY ITEM ID — SURVIVES FOLDER MOVES (2026-08-08) ──
+// ⚠ THE REAL FIX for photos that go dead when Sherri moves a job folder.
+// Every refresh path in the CRM used to work by PATH: the photo-library
+// hydrator walks `GreenKeyCRM_Photos/<jobId>`, and the Operations puller
+// searched exactly one bucket, `NEEDS INSPECTION COMPLETED`. So the moment a
+// job folder moved into a weekly Active Projects folder (Brett Robertson →
+// `Active Projects/8-17-2026/`), NOTHING could find it: the puller returned 0,
+// the stored signed URL expired ~50 minutes later, and every tile went dead
+// permanently while the files sat safely in SharePoint the whole time.
+//
+// A SharePoint driveItem ID is STABLE ACROSS MOVES. Asking for the item by ID
+// returns a fresh download URL wherever the file now lives, so this makes link
+// refresh completely location-independent. Sherri can reorganise Operations
+// however she likes and the CRM keeps up.
+//
+// A 404 here is the ONLY reliable signal that a file is genuinely gone — that
+// is what `spMissing` records, and it is what the broken-tile message reads.
+async function _refreshUrlsByItemId(jobId) {
+  if (!_gToken || !_spDrive) return { refreshed: 0, missing: 0 };
+  const URL_FRESH_MS = 50 * 60 * 1000;
+  const targets = (_filesCache || []).filter(f =>
+    f.jobId === jobId && f.spDriveItemId &&
+    (!f.downloadUrl || (Date.now() - (f.downloadUrlFetchedAt || 0)) > URL_FRESH_MS));
+  let refreshed = 0, missing = 0;
+  for (const f of targets) {
+    try {
+      const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${f.spDriveItemId}`,
+                            { headers: { 'Authorization': 'Bearer ' + _gToken } });
+      if (r.status === 404) {
+        f.spMissing = true; missing++;
+        try { await _idbPut(f); } catch (_) {}
+        continue;
+      }
+      if (!r.ok) continue;
+      const item = await r.json();
+      const url = item['@microsoft.graph.downloadUrl'] || '';
+      if (!url) continue;
+      f.downloadUrl = url;
+      f.downloadUrlFetchedAt = Date.now();
+      f.spUrl = item.webUrl || f.spUrl || '';
+      f.spName = item.name || f.spName || null;
+      f.spMissing = false;
+      try { await _idbPut(f); } catch (_) {}
+      refreshed++;
+    } catch (e) { console.warn('[GK] item-id refresh failed for', f.name, e); }
+  }
+  return { refreshed, missing };
+}
+
 async function _hydrateOpsFolderFromSP(jobId, force){
   if (!_gToken || !_spDrive || !jobId) return { added: 0 };
   const lead = getLead(jobId); if (!lead) return { added: 0 };
@@ -24505,23 +24587,48 @@ async function _hydrateOpsFolderFromSP(jobId, force){
     const cust = lead.customerId ? getCustomer(lead.customerId) : null;
     const baseName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
     if (!baseName) return { added: 0 };
-    // READ-ONLY: resolve the bucket; if it's missing or we lack access, do nothing.
-    const bResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(SP_NEEDS_INSPECTION_PATH)}`, { headers: { 'Authorization': `Bearer ${_gToken}` } });
-    if (!bResp.ok) return { added: 0 };
-    const bucket = await bResp.json();
-    // Prefix-match the job's base name among the bucket's child folders.
-    const matches = [];
-    let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${bucket.id}/children?$top=200`;
-    while (next){
-      const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
-      if (!r.ok) break;
-      const data = await r.json();
-      for (const it of (data.value||[])){
-        if (it.folder && it.name && (it.name===baseName || it.name.startsWith(baseName))) matches.push(it);
+    // READ-ONLY. ⚠ 2026-08-08: this used to look in ONE bucket — NEEDS
+    // INSPECTION COMPLETED — so the moment Sherri moved a job folder into a
+    // weekly Active Projects folder (Brett Robertson → `8-17-2026`), the puller
+    // found nothing, returned 0, and every file it had imported went stale and
+    // un-refreshable. Search the week folders too, in the same order the
+    // Operations photo mirror resolves them: the job's own scheduled week first,
+    // then the other weeks, then the NEEDS INSPECTION bucket.
+    const buckets = [];
+    try {
+      const apResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI('Operations/Active Projects')}:/children?$top=200&$select=name,id,folder`,
+                                 { headers: { 'Authorization': `Bearer ${_gToken}` } });
+      if (apResp.ok) {
+        const ap = await apResp.json();
+        const weeks = [], needs = [];
+        for (const it of (ap.value || [])) {
+          if (!it.folder || !it.name) continue;
+          if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(it.name)) weeks.push(it);
+          else if (/NEEDS INSPECTION/i.test(it.name)) needs.push(it);
+        }
+        const schedDate = (lead.milestones && lead.milestones.installScheduled && lead.milestones.installScheduled.date) || '';
+        const wantWeek = (schedDate && typeof _opsMondayName === 'function') ? _opsMondayName(schedDate) : null;
+        weeks.sort((a, b) => (a.name === wantWeek ? -1 : 0) - (b.name === wantWeek ? -1 : 0));
+        buckets.push(...weeks, ...needs);
       }
-      next = data['@odata.nextLink'] || null;
+    } catch (_) {}
+    if (!buckets.length) return { added: 0 };
+    // Prefix-match the job's base name among each bucket's child folders.
+    const matches = [];
+    for (const bucket of buckets) {
+      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${bucket.id}/children?$top=200`;
+      while (next){
+        const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+        if (!r.ok) break;
+        const data = await r.json();
+        for (const it of (data.value||[])){
+          if (it.folder && it.name && it.name !== 'Archive' && (it.name===baseName || it.name.startsWith(baseName))) matches.push(it);
+        }
+        next = data['@odata.nextLink'] || null;
+      }
+      if (matches.length) break;   // found the job's folder — stop looking
     }
-    if (!matches.length) return { added: 0 };   // job not in this bucket yet — do NOTHING
+    if (!matches.length) return { added: 0 };   // job not filed in Operations yet — do NOTHING
     // Walk matched folders; flag files inside a "Completion pics" subfolder.
     const filesFound = [];
     async function _walk(itemId, inCompletion){
@@ -24531,6 +24638,11 @@ async function _hydrateOpsFolderFromSP(jobId, force){
         if (!r.ok) break;
         const data = await r.json();
         for (const it of (data.value||[])){
+          // ⚠ 2026-08-08: skip ARCHIVE. Sherri parks superseded files there
+          // (e.g. "Treehouse - Shield Project/ARCHIVE"), and the walk used to
+          // recurse straight into it and import them as current. The Operations
+          // photo mirror has always skipped Archive; this had not.
+          if (it.folder && /^archive$/i.test(it.name||'')) continue;
           if (it.folder) await _walk(it.id, inCompletion || /^completion\s*pics$/i.test(it.name||''));
           else if (it.file) filesFound.push({ item: it, inCompletion });
         }
@@ -24957,6 +25069,12 @@ async function refreshPhotosFromSP(jobId) {
     }
   }
 
+  // STEP 1b: refresh signed URLs BY ITEM ID first. Works regardless of where
+  // the file now lives, so a job folder moved into a weekly Operations folder
+  // no longer strands its photos (2026-08-08).
+  let _byId = { refreshed: 0, missing: 0 };
+  try { _byId = await _refreshUrlsByItemId(jobId); } catch (_) {}
+
   const result = await _hydratePhotosFromSP(jobId);
   if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
   const added         = result.added         || 0;
@@ -24971,6 +25089,8 @@ async function refreshPhotosFromSP(jobId) {
   const LONG = 12000;
   const parts = [];
   if (retried > 0)       parts.push(`${retried} photo${retried===1?'':'s'} uploaded`);
+  if (_byId.refreshed>0) parts.push(`${_byId.refreshed} link${_byId.refreshed===1?'':'s'} restored by ID`);
+  if (_byId.missing>0)   parts.push(`${_byId.missing} file${_byId.missing===1?'':'s'} no longer in SharePoint`);
   if (added > 0)         parts.push(`${added} new from SP`);
   if (refreshed > 0)     parts.push(`${refreshed} link${refreshed===1?'':'s'} refreshed`);
   if (recategorized > 0) parts.push(`${recategorized} record${recategorized===1?'':'s'} re-categorized`);
