@@ -90,7 +90,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-08 field-17';
+const BUILD = '2026-08-08 field-18';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -468,8 +468,17 @@ function renderJobs(){
     + body + '</div>';
   if(_search){ const i=$app().querySelector('.srch'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
 }
+// Dates read MM/DD/YYYY wherever a human sees one (2026-08-08, Sherri).
+// ⚠ DISPLAY ONLY. Milestone `.date` writes and the today/upcoming comparisons
+// above stay ISO. Parsed textually — new Date('2026-08-11') is UTC midnight and
+// renders a day early in Eastern time.
+function mdy(v){
+  if(v===null||v===undefined||v==='') return '';
+  var str=String(v), m=str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? (m[2]+'/'+m[3]+'/'+m[1]) : str;
+}
 function jobCard(l){
-  const t=prettyType(l.jobType); const d=schedDate(l).slice(0,10);
+  const t=prettyType(l.jobType); const d=mdy(schedDate(l));
   return '<a class="card" onclick="openJob(\''+esc(l.id)+'\')">'
     + '<div class="jrow"><div style="flex:1;min-width:0">'
     + '<div class="jname">'+esc(custName(l))+'</div>'
@@ -493,7 +502,7 @@ function entryCard(e){
     + '<span class="chip '+(wd?'amber':'blue')+'">'+(wd?'🔍 ':'')+esc(apptLabel(a.type))+'</span>'
     + (t?'<span class="chip">'+esc(t)+'</span>':'')
     + (l.source?'<span class="chip">'+esc(l.source)+'</span>':'')
-    + '<span class="chip amber">📅 '+esc(a.date.slice(0,10))+(when?' '+esc(when):'')+'</span>'
+    + '<span class="chip amber">📅 '+esc(mdy(a.date))+(when?' '+esc(when):'')+'</span>'
     + '</div></div><div class="chev">›</div></div></a>';
 }
 function walkdownCard(l){
@@ -622,7 +631,7 @@ function renderDetail(id){
   if(paid){
     payCard = '<div class="card"><div class="lab">Payment</div>'
       + '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Collected'+(paid.amount?(' · '+fmt$(paid.amount)):'')+(paid.method?(' · '+esc(String(paid.method).toUpperCase())):'')+'</div>'
-      + (paid.collectedAt?'<div class="muted" style="font-size:12px;margin-top:2px">'+esc(paid.collectedAt.slice(0,10))+'</div>':'')
+      + (paid.collectedAt?'<div class="muted" style="font-size:12px;margin-top:2px">'+esc(mdy(paid.collectedAt))+'</div>':'')
       + '<button class="btn ghost" style="margin-top:10px" onclick="doClearPayment(\''+esc(l.id)+'\')">Undo</button></div>';
   } else if(!isDirect(l)){
     payCard = '<div class="card"><div class="lab">Payment</div><div class="muted" style="font-size:14px">'+esc(l.source||'Platform')+' invoices the customer — do not collect on site.</div></div>';
@@ -710,7 +719,7 @@ function renderDetail(id){
     + '<div class="wrap">'
     + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
     + (addr?'<div class="jaddr" style="font-size:14px;margin-bottom:6px">'+esc(addr)+'</div>':'')
-    + '<div class="chips" style="margin-bottom:4px">'+(l.jobType?'<span class="chip blue">'+esc(prettyType(l.jobType))+'</span>':'')+(l.source?'<span class="chip">'+esc(l.source)+'</span>':'')+(schedDate(l)?'<span class="chip amber">📅 '+esc(schedDate(l).slice(0,10))+'</span>':'')+'</div>'
+    + '<div class="chips" style="margin-bottom:4px">'+(l.jobType?'<span class="chip blue">'+esc(prettyType(l.jobType))+'</span>':'')+(l.source?'<span class="chip">'+esc(l.source)+'</span>':'')+(schedDate(l)?'<span class="chip amber">📅 '+esc(mdy(schedDate(l)))+'</span>':'')+'</div>'
     + '<div class="row2">'
     + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')

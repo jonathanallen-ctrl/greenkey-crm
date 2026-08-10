@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1841,6 +1841,25 @@ const SPEC_JURIS = [
   {match:'stafford',     name:'Stafford County, VA'},
   {match:'spotsylvania', name:'Spotsylvania County, VA'}
 ];
+// ── DATES READ MM/DD/YYYY WHEREVER A HUMAN SEES ONE (2026-08-08, Sherri) ──
+// She has no military background, and `2026-08-11` reads as nothing useful to
+// her. Applied at DISPLAY sites only.
+// ⚠ STORAGE STAYS ISO. Milestone `.date` fields, <input type="date"> values,
+// worker payloads, CSV keys, and anything compared or sorted must remain
+// YYYY-MM-DD — those are not display and must never be routed through here.
+// ⚠ Parsed TEXTUALLY, not via `new Date()`. `new Date('2026-08-11')` is UTC
+// midnight, which renders as 08/10 in Eastern time — off by one, every time.
+function mdy(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return '';
+    return String(v.getMonth()+1).padStart(2,'0') + '/' + String(v.getDate()).padStart(2,'0') + '/' + v.getFullYear();
+  }
+  const str = String(v);
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[2] + '/' + m[3] + '/' + m[1];
+  return str;   // not an ISO date — pass through rather than blank it
+}
 function fmtPhone(el) {
   let v = el.value.replace(/\D/g,'').slice(0,10);
   if (v.length > 6) v = '(' + v.slice(0,3) + ') ' + v.slice(3,6) + '-' + v.slice(6);
@@ -4035,7 +4054,7 @@ function renderLeadsPage() {
       <td>${sourceChip(l.source)}</td>
       <td>${(l.workKind&&l.workKind!=='install')||l.propertyType==='commercial'?`<span class="chip">${escHtml(stageLabelFor(l))}</span>`:stageChip(l.stage)}</td>
       <td>${infoFlag}</td>
-      <td style="font-size:12px;color:var(--text-muted)">${l.createdAt?l.createdAt.slice(0,10):'—'}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${l.createdAt?mdy(l.createdAt):'—'}</td>
     </tr>`;
   }).join('')}
   </tbody></table></div>`;
@@ -4169,7 +4188,7 @@ function renderCustomerDetail(custId) {
             <td style="padding:10px 16px;${i<leads.length-1?'border-bottom:1px solid var(--border)':''}">${typeChip(l.jobType)}</td>
             <td style="padding:10px 16px;${i<leads.length-1?'border-bottom:1px solid var(--border)':''}">${sourceChip(l.source)}</td>
             <td style="padding:10px 16px;${i<leads.length-1?'border-bottom:1px solid var(--border)':''}">${stageChip(l.stage)}</td>
-            <td style="padding:10px 16px;font-size:12px;color:var(--text-muted);${i<leads.length-1?'border-bottom:1px solid var(--border)':''}">${l.createdAt?l.createdAt.slice(0,10):'—'}</td>
+            <td style="padding:10px 16px;font-size:12px;color:var(--text-muted);${i<leads.length-1?'border-bottom:1px solid var(--border)':''}">${l.createdAt?mdy(l.createdAt):'—'}</td>
           </tr>`).join('')}
         </tbody></table>`
       : `<div class="empty" style="padding:40px 20px"><div class="etitle">No jobs yet</div><div class="edesc">Click "+ New Job" to create one.</div></div>`}
@@ -5863,7 +5882,7 @@ function renderQuotesPage(){
       <td><span class="chip chip-blue">${q.type==='quick'?'Quick':'Detailed'}</span></td>
       <td>${quoteStatusChip(q.status, q)}</td>
       <td style="font-family:var(--mono)" title="No-fee (cash) price — what the customer sees as TOTAL. Card adds 3%.">${fmt$((typeof _quoteNet==='function')?_quoteNet(q):(q.quoteTotal||0))}</td>
-      <td style="font-size:12px;color:var(--text-muted)">${q.createdAt?q.createdAt.slice(0,10):'—'}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${q.createdAt?mdy(q.createdAt):'—'}</td>
       <td><button class="btn btn-g" style="padding:4px 10px;font-size:11px" onclick="event.stopPropagation();previewQuotePDF('${q.id}')">PDF</button></td>
     </tr>`;
   }).join('')}</tbody></table></div>`;
@@ -6215,7 +6234,7 @@ function renderQuoteBuilder(qid){
       return `<div style="margin:0 0 14px;padding:10px 14px;border:1px solid var(--amber);background:var(--amber-dim);border-radius:var(--r);display:flex;align-items:center;gap:10px;font-size:12.5px">
         <span style="font-size:16px">🔓</span>
         <div style="flex:1;line-height:1.45"><strong>UNLOCKED — edits to an accepted quote will be saved.</strong>
-          <span style="color:var(--text-secondary)">${q.editUnlockReason?('“'+escHtml(q.editUnlockReason)+'” — '):''}${q.editUnlockedBy?escHtml(q.editUnlockedBy)+', ':''}${(q.editUnlockedAt||'').slice(0,10)}. Re-send the customer an updated PDF if the total changes.</span></div>
+          <span style="color:var(--text-secondary)">${q.editUnlockReason?('“'+escHtml(q.editUnlockReason)+'” — '):''}${q.editUnlockedBy?escHtml(q.editUnlockedBy)+', ':''}${mdy((q.editUnlockedAt||''))}. Re-send the customer an updated PDF if the total changes.</span></div>
         <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="relockQuote('${q.id}')">🔒 Re-lock</button>
       </div>`;
     })()}
@@ -6304,7 +6323,7 @@ function renderQuoteBuilder(qid){
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="10" height="10" rx="1"/><path d="M2 10V3a1 1 0 0 1 1-1h7"/></svg>
             Duplicate as New Option
           </button>
-          ${isDirect?`${q.invoiceId?`<button class="btn btn-g btn-full" onclick="emailInvoice('${q.id}')" title="${q.invoiceEmailedAt?`Last emailed ${q.invoiceEmailedAt.slice(0,10)} to ${q.invoiceEmailedTo||''}`:'Email the invoice PDF to the bill-to party'}">
+          ${isDirect?`${q.invoiceId?`<button class="btn btn-g btn-full" onclick="emailInvoice('${q.id}')" title="${q.invoiceEmailedAt?`Last emailed ${mdy(q.invoiceEmailedAt)} to ${q.invoiceEmailedTo||''}`:'Email the invoice PDF to the bill-to party'}">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 4l7 5 7-5"/></svg>
             Email Invoice ${(typeof isQuoteBilledToReferrer==='function'&&isQuoteBilledToReferrer(q))?`to ${q.source}`:'to Customer'}${q.invoiceEmailedAt?' ✓':''}
           </button>`:''}<button class="btn btn-g btn-full" onclick="generateInvoice('${q.id}')">
@@ -9625,7 +9644,7 @@ function renderMarginBox(q,totals,isQmerit){
   if(_mchk.pct!=null){
     const ok=!_mchk.below;
     marginRow=`<div class="margin-row" style="font-weight:600;color:${ok?'var(--green)':'var(--red)'}"><span>${ok?'✓':'⚠'} Est. Gross Margin</span><span class="margin-num">${_mchk.pct}% ${ok?'':'(below '+MARGIN_FLOOR_PCT+'% floor)'}</span></div>`
-      + (_mchk.overridden?`<div class="margin-row" style="color:var(--amber);font-size:11px"><span>Floor overridden by ${q.marginOverride.by}</span><span class="margin-num" title="${(q.marginOverride.reason||'').replace(/"/g,'&quot;')}">${(q.marginOverride.at||'').slice(0,10)}</span></div>`:'');
+      + (_mchk.overridden?`<div class="margin-row" style="color:var(--amber);font-size:11px"><span>Floor overridden by ${q.marginOverride.by}</span><span class="margin-num" title="${(q.marginOverride.reason||'').replace(/"/g,'&quot;')}">${mdy((q.marginOverride.at||''))}</span></div>`:'');
   }
   return `<div class="margin-box">
     <div class="margin-title">🔒 Internal Margin (Admin Only)</div>
@@ -9864,7 +9883,7 @@ async function emailQuote(qid){
     listEl.innerHTML = platformNote + (allForLead.map(x => {
       const checked = (!isPlatform && x.id === qid) ? 'checked' : '';
       const labelTxt = x.label ? x.label : `Quote ${x.id}`;
-      const when = (x.updatedAt||x.createdAt||'').slice(0,10);
+      const when = mdy((x.updatedAt||x.createdAt||''));
       // NET (no-fee) price — matches the Total line in the email body and the
       // PDF headline (Jonathan 2026-07-11; was showing the fee-included total).
       const amt = fmt$((typeof _quoteNet==='function') ? _quoteNet(x) : (x.quoteTotal||0));
@@ -12438,7 +12457,7 @@ function _renderPreInstallStrip(lead) {
   // Quote Approved (read-only, derived).
   const _quoteApproved = latestApproved || ms.quoteApproved?.done;
   states.push(_quoteApproved
-    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: (latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||'')).slice(0,10), click: `clickQuoteChip('${lead.id}')`, tip: 'Approved — from a CRM quote, or marked manually. Click to change.' }
+    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: mdy((latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||''))), click: `clickQuoteChip('${lead.id}')`, tip: 'Approved — from a CRM quote, or marked manually. Click to change.' }
     : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', click: `clickQuoteChip('${lead.id}')`, tip: 'No approved CRM quote. Click to mark approved manually — for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).' });
 
   // Charger — shown only for jobs that involve a charger (EV jobs, or any job
@@ -12461,7 +12480,7 @@ function _renderPreInstallStrip(lead) {
 
   // Permit Received — manual upload-or-toggle.
   states.push(ms.permitReceived?.done
-    ? { state: 'done',    icon: '✓', label: 'Permit',  meta: (ms.permitReceived.date||'').slice(0,10), click: `clickPermitChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
+    ? { state: 'done',    icon: '✓', label: 'Permit',  meta: mdy((ms.permitReceived.date||'')), click: `clickPermitChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
     : { state: 'pending', icon: '·', label: 'Permit',  meta: '', click: `clickPermitChip('${lead.id}')`, tip: 'Click to upload permit doc or mark received without doc.' });
 
   // Miss Utility — auto-detected from quotes/scope, or manually flagged.
@@ -12518,7 +12537,7 @@ function _renderPreInstallStrip(lead) {
 
   // Final Inspection — manual upload-or-toggle.
   states.push(ms.finalInspPassed?.done
-    ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: (ms.finalInspPassed.date||'').slice(0,10), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
+    ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: mdy((ms.finalInspPassed.date||'')), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
     : { state: 'pending', icon: '·', label: 'Inspection',  meta: '', click: `clickInspectionChip('${lead.id}')`, tip: 'Click to upload pass cert or mark passed without doc.' });
 
   // Platform closeout — only for platform-pay sources (Qmerit/Electrum/Treehouse).
@@ -12526,7 +12545,7 @@ function _renderPreInstallStrip(lead) {
   // settable now that the full milestone checklist is gone.
   if (typeof PLATFORM_PAY_SOURCES !== 'undefined' && PLATFORM_PAY_SOURCES.includes(lead.source)) {
     states.push(ms.platformCloseout?.done
-      ? { state:'done',    icon:'✓', label:'Closeout', meta:(ms.platformCloseout.date||'').slice(0,10), click:`openChipEditor('${lead.id}','closeout')`, tip:'Platform closeout submitted. Click to view or undo.' }
+      ? { state:'done',    icon:'✓', label:'Closeout', meta:mdy((ms.platformCloseout.date||'')), click:`openChipEditor('${lead.id}','closeout')`, tip:'Platform closeout submitted. Click to view or undo.' }
       : { state:'pending', icon:'·', label:'Closeout', meta:'', click:`openChipEditor('${lead.id}','closeout')`, tip:`Mark the ${lead.source} platform closeout done — clears the Awaiting Closeout list.` });
   }
 
@@ -12636,7 +12655,7 @@ function _chipEditorHTML(leadId, key){
         row(`<span style="font-size:12px;width:96px">Permit #</span><input class="jd-fi" style="width:160px" value="${escHtml(ap.permitNo||'')}" onchange="saveMsField('${leadId}','permitApplied','permitNo',this.value)">`)+
         row(`<span style="font-size:12px;width:96px">Applied date</span><input type="date" class="jd-fi" style="width:160px" value="${ap.date||''}" onchange="saveMsField('${leadId}','permitApplied','date',this.value)">`)+
         row(`<span style="font-size:12px;width:96px">Received</span>`+(rc.done
-          ? `<span style="font-size:12px;color:var(--green)">✓ ${(rc.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','permitReceived',false);renderJobDetail('${leadId}')`)
+          ? `<span style="font-size:12px;color:var(--green)">✓ ${mdy((rc.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','permitReceived',false);renderJobDetail('${leadId}')`)
           : btnP('Upload permit doc',`_uploadJobDocument('${leadId}','permit')`)+btn('Mark received (no doc)',`_setMilestone('${leadId}','permitReceived',true);_createUploadFollowupTask('${leadId}','permit');renderJobDetail('${leadId}')`))));
     }
     case 'missutility': {
@@ -12699,13 +12718,13 @@ function _chipEditorHTML(leadId, key){
             _insp.status==='picked' ? '✓ picked ' + (_insp.pickedDate||'') :
             _insp.status==='call_me' ? 'asked for a call' :
             _insp.status==='expired' ? 'link expired — call them' :
-            'email sent ' + String(_insp.sentAt||'').slice(0,10) + ', awaiting pick'}</strong></span>`
+            'email sent ' + mdy(String(_insp.sentAt||'')) + ', awaiting pick'}</strong></span>`
             + btn('📧 Send a fresh link', `resendInspectionScheduling('${leadId}')`))
         : row(btnP('📧 Send inspection scheduling email',`openInspReviewModal('${leadId}')`)
             + note('Emails the customer their install photos + the pick-a-day calendar, and texts them to check their inbox. Opens the photo review first — nothing sends until you click Send there.'));
       return _chipEditorShell('Final Inspection', _inspLine
         + row(fi.done
-        ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${(fi.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
+        ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${mdy((fi.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
         : btnP('Upload pass certificate',`_uploadJobDocument('${leadId}','inspection-pass')`)+btn('Mark passed (no doc)',`_setMilestone('${leadId}','finalInspPassed',true);_createUploadFollowupTask('${leadId}','inspection-pass');renderJobDetail('${leadId}')`)+btn('✕ Mark FAILED',`markInspectionFailed('${leadId}')`))
         + row(btn('📱 Text inspector — attach photos',`textInspectorForJob('${leadId}')`))
         + note('Texts the AHJ inspector and pre-loads this job so you can attach its install photos.'));
@@ -12734,7 +12753,7 @@ function _chipEditorHTML(leadId, key){
     case 'closeout': {
       const cl=ms.platformCloseout||{};
       return _chipEditorShell((lead.source||'Platform')+' Closeout', row(cl.done
-        ? `<span style="font-size:12px;color:var(--green)">✓ Submitted ${(cl.date||'').slice(0,10)}</span>`+btn('Undo',`_setMilestone('${leadId}','platformCloseout',false);renderJobDetail('${leadId}')`)
+        ? `<span style="font-size:12px;color:var(--green)">✓ Submitted ${mdy((cl.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','platformCloseout',false);renderJobDetail('${leadId}')`)
         : btnP('Mark closeout submitted',`_setMilestone('${leadId}','platformCloseout',true);renderJobDetail('${leadId}')`))
         + note('Submitting the platform closeout clears this job from the "Awaiting Closeout" list on the dashboard.'));
     }
@@ -14290,7 +14309,7 @@ function renderJobDetail(id) {
       Pipeline
     </button>
     <div class="jd-meta">
-      <div class="jd-id">${id}${lead.createdAt?`<span style="font-weight:400;color:var(--text-muted);font-size:11px;margin-left:8px">· Received ${lead.createdAt.slice(0,10)}</span>`:''}</div>
+      <div class="jd-id">${id}${lead.createdAt?`<span style="font-weight:400;color:var(--text-muted);font-size:11px;margin-left:8px">· Received ${mdy(lead.createdAt)}</span>`:''}</div>
       <div class="jd-name">${custName}</div>
       <div class="jd-chips">
         ${typeChip(lead.jobType)}${lead.source==='Qmerit'?`<span onclick="showQmeritInfo('${id}')" style="cursor:pointer" title="View Qmerit program details">${sourceChip(lead.source)}</span>`:sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
@@ -14577,7 +14596,7 @@ function renderJobDetail(id) {
       <div class="jd-fg">
         <div class="jd-f"><div class="jd-fl">Job Type</div><div class="jd-fv">${typeChip(lead.jobType)}</div></div>
         <div class="jd-f"><div class="jd-fl">Lead Source</div><div class="jd-fv">${sourceChip(lead.source)}</div></div>
-        <div class="jd-f"><div class="jd-fl">Date Received</div><div class="jd-fv" style="font-size:12px">${lead.createdAt?.slice(0,10)||'—'}</div></div>
+        <div class="jd-f"><div class="jd-fl">Date Received</div><div class="jd-fv" style="font-size:12px">${mdy(lead.createdAt)||'—'}</div></div>
         <div class="jd-f"><div class="jd-fl">Permit Fee</div><div class="jd-fv">${fmt$(Math.max(lead.permitFee || 0, defaultPermitFee({ jobType: lead.jobType, source: lead.source, specialJurisdiction: lead.specialJurisdiction })))}</div></div>
       </div>
       ${lead.description?`<div class="jd-f" style="margin-top:8px"><div class="jd-fl">Description</div><div class="jd-fv" style="font-size:12.5px;white-space:pre-wrap;color:var(--text-secondary)">${lead.description}</div></div>`:''}
@@ -14600,7 +14619,7 @@ function renderJobDetail(id) {
                 ${lostReasonOpts}
               </select>
             </div>
-            ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Lost</div><div class="jd-fv" style="font-size:12px">${lostInfo.lostAt.slice(0,10)}</div></div>`:''}
+            ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Lost</div><div class="jd-fv" style="font-size:12px">${mdy(lostInfo.lostAt)}</div></div>`:''}
           </div>
           <div class="jd-f" style="margin-top:8px">
             <div class="jd-fl">Notes (optional)</div>
@@ -14620,7 +14639,7 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">Reason</div>
           <select class="jd-fsel" id="lost-reason"><option value=""${!lostInfo.reason?' selected':''}>— Select a reason —</option>${lostReasonOpts}</select>
         </div>
-        ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Not Won</div><div class="jd-fv" style="font-size:12px">${lostInfo.lostAt.slice(0,10)}${lostInfo.lostAtStage?` · from ${STAGE_MAP[lostInfo.lostAtStage]?.label||lostInfo.lostAtStage}`:''}</div></div>`:''}
+        ${lostInfo.lostAt?`<div class="jd-f"><div class="jd-fl">Marked Not Won</div><div class="jd-fv" style="font-size:12px">${mdy(lostInfo.lostAt)}${lostInfo.lostAtStage?` · from ${STAGE_MAP[lostInfo.lostAtStage]?.label||lostInfo.lostAtStage}`:''}</div></div>`:''}
       </div>
       <div class="jd-f" style="margin-top:8px"><div class="jd-fl">Notes (optional)</div>
         <textarea class="jd-fi" id="lost-notes" placeholder="Quick context — competitor name, price gap, etc." rows="2" style="width:100%;resize:vertical;font-family:inherit;font-size:12.5px">${escHtml(lostInfo.notes||'')}</textarea>
@@ -15073,7 +15092,7 @@ function renderJobDetail(id) {
         <div>
           <span style="color:var(--amber);font-weight:500">📝 Schedule note</span>
           <span style="color:var(--text-secondary)"> — ${escHtml(_ov.reason)}</span>
-          <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">Added by ${escHtml(_ov.setBy||'—')} on ${(_ov.setAt||'').slice(0,10)}</div>
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">Added by ${escHtml(_ov.setBy||'—')} on ${mdy((_ov.setAt||''))}</div>
         </div>
         <button class="btn btn-g" style="padding:3px 8px;font-size:11px" onclick="clearScheduleOverrideAndRerender('${id}')">Clear</button>
       </div>`;
@@ -15151,7 +15170,7 @@ function renderJobDetail(id) {
     <div class="ms-body">
       <div class="ms-lbl${isArchived?' done':''}">${isArchived?'Archived':'Ready to close?'}</div>
       ${isArchived
-        ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">Archived ${(ms.archived?.date||'').slice(0,10)||''}</div>`
+        ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px">Archived ${mdy((ms.archived?.date||''))||''}</div>`
         : `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${_closeDone} of ${_closeItems.length} done</div>
            <div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">
              ${_closeItems.map(([lbl,ok]) => `<div style="font-size:11.5px;color:${ok?'var(--green)':'var(--text-muted)'}">${ok?'✓':'○'} ${escHtml(lbl)}</div>`).join('')}
@@ -15617,7 +15636,7 @@ function renderFMPhotos(jobId, cat) {
     <td><div class="fm-mini-thumb" onclick="openLightbox('${jobId}','${cat}',${i})">${_miniMedia}</div></td>
     <td style="font-size:12.5px">${escHtml(f.name)}</td>
     <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
-    <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
+    <td style="font-size:11px;color:var(--text-muted)">${mdy(f.uploadedAt)||'—'}</td>
     <td style="font-size:11px;color:var(--text-muted)">${escHtml(f.uploadedBy||'—')}</td>
     <td><button class="li-del" onclick="fmDeleteFile('${f.id}','${jobId}','${cat}',null)" title="Delete">×</button></td>
   </tr>`;
@@ -15674,7 +15693,7 @@ function renderFMDocuments(jobId) {
       <td><a href="javascript:void(0)" onclick="openFMFile('${f.id}')" style="color:var(--blue);font-size:12.5px;text-decoration:none;cursor:pointer">${escHtml(f.name)}</a></td>
       <td style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted)">${ext}</td>
       <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${fmtSize(f.size)}</td>
-      <td style="font-size:11px;color:var(--text-muted)">${f.uploadedAt?.slice(0,10)||'—'}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${mdy(f.uploadedAt)||'—'}</td>
       <td style="font-size:11px;color:var(--text-muted)">${escHtml(f.uploadedBy||'—')}</td>
       <td style="white-space:nowrap">
         <button onclick="fmDownloadFile('${f.id}')" title="Download to disk" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 7px;cursor:pointer;color:var(--text-secondary);font-size:11px;margin-right:4px" onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">↓</button>
@@ -16150,7 +16169,7 @@ function renderLB() {
   if (imgEl && !_isVid)  imgEl.src = _imgSrc(f);
   if (infoEl) infoEl.innerHTML = `
     <span style="font-weight:500;color:white;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(f.name)}</span>
-    <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${f.uploadedAt?.slice(0,10)||'—'} · ${escHtml(f.uploadedBy||'—')}</span>`;
+    <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${mdy(f.uploadedAt)||'—'} · ${escHtml(f.uploadedBy||'—')}</span>`;
   if (ctrEl)  ctrEl.textContent = `${LBIdx+1} / ${LBFiles.length}`;
   const prevEl = document.getElementById('lb-prev');
   const nextEl = document.getElementById('lb-next');
@@ -16227,7 +16246,7 @@ function renderFMJobCat(jobId, cat) {
         <a href="javascript:void(0)" onclick="openFMFile('${f.id}')" style="color:var(--blue);text-decoration:none;cursor:pointer;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(f.name)}">${escHtml(f.name)}</a>
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${ext}</span>
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted);flex-shrink:0">${fmtSize(f.size)}</span>
-        <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">${f.uploadedAt?.slice(0,10)||''}</span>
+        <span style="font-size:10.5px;color:var(--text-muted);flex-shrink:0">${mdy(f.uploadedAt)||''}</span>
         <button onclick="fmDownloadFile('${f.id}')" title="Download to disk" style="background:none;border:1px solid var(--border);border-radius:4px;padding:1px 6px;cursor:pointer;color:var(--text-secondary);font-size:11px;flex-shrink:0" onmouseover="this.style.borderColor='var(--blue)';this.style.color='var(--blue)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">↓</button>
         <button class="li-del" style="flex-shrink:0" onclick="fmDeleteFile('${f.id}','${jobId}','documents',null)" title="Delete">×</button>
       </div>`;
@@ -17199,7 +17218,7 @@ function renderNotifList() {
     const acts = n.status==='pending'
       ? `<button class="btn btn-p" style="padding:5px 12px;font-size:12px" onclick="resolveNotif('${n.id}','approved')">✓ Approve</button>
          <button class="btn btn-g" style="padding:5px 12px;font-size:12px;color:var(--red);border-color:rgba(231,76,60,0.4)" onclick="resolveNotif('${n.id}','denied')">✕ Deny</button>`
-      : `<span style="font-size:11px;color:var(--text-muted)">Resolved ${n.resolvedAt?.slice(0,10)||''}</span>`;
+      : `<span style="font-size:11px;color:var(--text-muted)">Resolved ${mdy(n.resolvedAt)||''}</span>`;
     return `<div class="notif-row">
       <div class="notif-ico">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--amber)" stroke-width="1.5"><path d="M8 2a4.5 4.5 0 0 1 4.5 4.5V9l1.5 2H2L3.5 9V6.5A4.5 4.5 0 0 1 8 2z"/><path d="M6.5 13.5a1.5 1.5 0 0 0 3 0"/></svg>
@@ -17211,7 +17230,7 @@ function renderNotifList() {
           ${n.jobId?`<span style="font-family:var(--mono);font-size:10px">${n.jobId}</span>`:''}
           ${custName?` · ${escHtml(custName)}`:''}
           ${n.requestedByName?` · by ${escHtml(n.requestedByName)}`:''}
-          · ${n.createdAt?.slice(0,10)||''}
+          · ${mdy(n.createdAt)||''}
         </div>
         <div class="notif-acts">${acts}</div>
         ${n.status!=='pending'&&n.note?`<div style="font-size:12px;color:var(--text-secondary);margin-top:6px;padding:7px 10px;background:var(--bg-elevated);border-radius:var(--r);line-height:1.4">${escHtml(n.note)}</div>`:''}
@@ -18134,8 +18153,8 @@ function renderActivePermits() {
 
     const permitNum = applied.number ? `<span style="font-family:var(--mono);font-size:12px">${escHtml(applied.number)}</span>` : `<span style="color:var(--text-muted);font-size:12px">—</span>`;
     const jurisdiction = escHtml(l.jurisdiction || 'Standard');
-    const appliedDate = applied.date ? applied.date.slice(0,10) : '—';
-    const receivedDate = received.date ? received.date.slice(0,10) : '—';
+    const appliedDate = applied.date ? mdy(applied.date) : '—';
+    const receivedDate = received.date ? mdy(received.date) : '—';
     const insp = l.inspectionRequired ? `<span class="chip chip-flag" style="font-size:10px">In-person</span>` : '';
 
     return `<tr class="clickable" onclick="openLeadDetail('${l.id}')">
@@ -20437,7 +20456,7 @@ function renderSchedulerPage() {
         const isSelected = !!_sched.included[l.id];
         const isExcluded = !isSelected;
         const overrideChip = l.scheduleOverride?.reason
-          ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${(l.scheduleOverride.setAt||'').slice(0,10)}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
+          ? `<span class="chip chip-warn" style="font-size:10.5px" title="Set by ${escHtml(l.scheduleOverride.setBy||'—')} on ${mdy((l.scheduleOverride.setAt||''))}">⚠ Override: ${escHtml(l.scheduleOverride.reason)}</span>`
           : '';
         // ── Missing-prereq warning chips (non-blocking) ──
         // Surface what's not yet captured so the dispatcher can see at a
@@ -22363,7 +22382,7 @@ function rptThisMonth(period) {
       <td style="padding:8px 14px">${typeChip(q.jobType)}</td>
       <td style="padding:8px 14px">${sourceChip(q.source)}</td>
       <td style="padding:8px 14px;font-family:var(--mono);text-align:right">${fmtDollar(q.quoteTotal)}</td>
-      <td style="padding:8px 14px;font-size:12px;color:var(--text-muted)">${(q.invoiceDate||q.updatedAt||'').slice(0,10)}</td>
+      <td style="padding:8px 14px;font-size:12px;color:var(--text-muted)">${mdy((q.invoiceDate||q.updatedAt||''))}</td>
     </tr>`;
   }).join('');
   return `<div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:20px;flex-wrap:wrap">
@@ -22458,7 +22477,7 @@ function rptQmeritRoyalty(period) {
     const lead=leads.find(l=>l.id===q.leadId);
     const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
     const name=cust?custFullName(cust):(q.leadId||'—');
-    return `<tr><td style="padding:7px 14px;font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td><td style="padding:7px 14px">${escHtml(name)}</td><td style="padding:7px 14px">${sourceChip(q.source)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(q.quoteTotal)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(q.quoteTotal*0.03)}</td><td style="padding:7px 14px;font-size:12px;color:var(--text-muted)">${(q.invoiceDate||q.updatedAt||'').slice(0,10)}</td></tr>`;
+    return `<tr><td style="padding:7px 14px;font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td><td style="padding:7px 14px">${escHtml(name)}</td><td style="padding:7px 14px">${sourceChip(q.source)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(q.quoteTotal)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(q.quoteTotal*0.03)}</td><td style="padding:7px 14px;font-size:12px;color:var(--text-muted)">${mdy((q.invoiceDate||q.updatedAt||''))}</td></tr>`;
   }).join('');
   return `<div style="background:var(--amber-dim);border-bottom:1px solid var(--amber);padding:14px 18px">
     <div style="font-size:11px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Qmerit Quarterly Royalty (3% of All Residential EV Revenue)</div>
@@ -22609,7 +22628,7 @@ function rptLostLeads(period) {
     const notes = l.lostInfo.notes || '';
     const notesShort = notes.length > 60 ? escHtml(notes.slice(0,60)) + '…' : escHtml(notes);
     return `<tr onclick="navigate('jobs');setTimeout(()=>openJobDetail('${l.id}'),60)" style="cursor:pointer">
-      <td style="padding:8px 14px;font-family:var(--mono);font-size:12px;color:var(--text-muted)">${(l.lostInfo.lostAt||'').slice(0,10)||'—'}</td>
+      <td style="padding:8px 14px;font-family:var(--mono);font-size:12px;color:var(--text-muted)">${mdy((l.lostInfo.lostAt||''))||'—'}</td>
       <td style="padding:8px 14px;font-family:var(--mono);font-size:12px">${l.id}</td>
       <td style="padding:8px 14px">${escHtml(name)}</td>
       <td style="padding:8px 14px">${typeChip(l.jobType)}</td>
@@ -22670,7 +22689,7 @@ function exportReportCSV() {
       const quotes=_revenueLines(period);
       const leads=getLeads(),custs=getCustomers();
       rows=[['Job ID','Customer','Type','Source','Amount','Invoice Date']];
-      quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',q.quoteTotal||0,(q.invoiceDate||q.updatedAt||'').slice(0,10)]);});
+      quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',q.quoteTotal||0,mdy((q.invoiceDate||q.updatedAt||''))]);});
       filename=currentReport==='thismonth'?'jobs-this-period':'revenue-by-type';break;
     }
     case 'overdue':{
@@ -22685,7 +22704,7 @@ function exportReportCSV() {
       const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
       const leads=getLeads(),custs=getCustomers();
       rows=[['Job ID','Customer','Source','Amount','3% Royalty','Date']];
-      allEV.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,(q.quoteTotal||0)*0.03,(q.invoiceDate||q.updatedAt||'').slice(0,10)]);});
+      allEV.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,(q.quoteTotal||0)*0.03,mdy((q.invoiceDate||q.updatedAt||''))]);});
       filename='qmerit-royalty';break;
     }
     case 'margins':{
@@ -22710,7 +22729,7 @@ function exportReportCSV() {
       filtered.sort((a,b)=>new Date(b.lostInfo.lostAt||0)-new Date(a.lostInfo.lostAt||0)).forEach(l=>{
         const c=custs.find(x=>x.id===l.customerId);
         const q=quotes.filter(x=>x.leadId===l.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))[0];
-        rows.push([(l.lostInfo.lostAt||'').slice(0,10),l.id,c?custFullName(c):(l.customerName||''),l.jobType||'',l.source||'',STAGE_MAP[l.stage]?.label||l.stage||'',l.lostInfo.reason||'',l.lostInfo.notes||'',q?.quoteTotal||0]);
+        rows.push([mdy((l.lostInfo.lostAt||'')),l.id,c?custFullName(c):(l.customerName||''),l.jobType||'',l.source||'',STAGE_MAP[l.stage]?.label||l.stage||'',l.lostInfo.reason||'',l.lostInfo.notes||'',q?.quoteTotal||0]);
       });
       filename='lost-leads';break;
     }
@@ -24543,8 +24562,13 @@ const _opsFolderPullAt = {};
 //
 // A 404 here is the ONLY reliable signal that a file is genuinely gone — that
 // is what `spMissing` records, and it is what the broken-tile message reads.
-async function _refreshUrlsByItemId(jobId) {
+async function _refreshUrlsByItemId(jobId, force) {
   if (!_gToken || !_spDrive) return { refreshed: 0, missing: 0 };
+  // Archived work is left alone unless a human explicitly asks (the ↻ Sync
+  // button passes force). Opening an archived job to look at it should not
+  // quietly re-fetch every link it has (2026-08-08).
+  const _l = (typeof getLead === 'function') ? getLead(jobId) : null;
+  if (!force && _l && (_l.stage === 'archived' || _l.stage === 'not-won')) return { refreshed: 0, missing: 0, skipped: 'archived' };
   const URL_FRESH_MS = 50 * 60 * 1000;
   const targets = (_filesCache || []).filter(f =>
     f.jobId === jobId && f.spDriveItemId &&
@@ -24578,6 +24602,13 @@ async function _refreshUrlsByItemId(jobId) {
 async function _hydrateOpsFolderFromSP(jobId, force){
   if (!_gToken || !_spDrive || !jobId) return { added: 0 };
   const lead = getLead(jobId); if (!lead) return { added: 0 };
+  // ⚠ 2026-08-08 (Jonathan): "After a file goes into archive we don't need the
+  // CRM to continue to update every 50 minutes for ever and ever." An archived
+  // job is finished — its records stay in the CRM and its files stay in
+  // SharePoint, but nothing re-walks its folder. Note `archived` sorts AFTER
+  // `invoiced` in STAGES, so the scheduled-or-later gate below passed it; this
+  // has to be an explicit exclusion.
+  if (lead.stage === 'archived' || lead.stage === 'not-won') return { added: 0, skipped:'archived' };
   const _si = STAGES.findIndex(s=>s.id==='scheduled');
   const _li = STAGES.findIndex(s=>s.id===lead.stage);
   if (_si<0 || _li<0 || _li < _si) return { added: 0, skipped:'early-stage' };   // not scheduled yet → skip
@@ -25073,7 +25104,7 @@ async function refreshPhotosFromSP(jobId) {
   // the file now lives, so a job folder moved into a weekly Operations folder
   // no longer strands its photos (2026-08-08).
   let _byId = { refreshed: 0, missing: 0 };
-  try { _byId = await _refreshUrlsByItemId(jobId); } catch (_) {}
+  try { _byId = await _refreshUrlsByItemId(jobId, true); } catch (_) {}   // manual Sync = force, even on archived
 
   const result = await _hydratePhotosFromSP(jobId);
   if (result.error) { toast('Sync failed: ' + result.error, 'error'); return; }
@@ -26519,7 +26550,7 @@ async function sendInspectionScheduling(leadId) {
         const _p = _inspResendPrev.prev || {};
         arr[i].jobNotes = (arr[i].jobNotes || []).concat([{
           id: 'note-insp-' + Date.now().toString(36) + '-r',
-          text: `Fresh scheduling link issued — the previous link from ${String(_p.sentAt||'').slice(0,10) || 'earlier'} is abandoned (status was "${_p.status || '—'}"${_p.pickedDate ? `; the customer had picked ${_p.pickedDate}` : ''}).`,
+          text: `Fresh scheduling link issued — the previous link from ${mdy(String(_p.sentAt||'')) || 'earlier'} is abandoned (status was "${_p.status || '—'}"${_p.pickedDate ? `; the customer had picked ${_p.pickedDate}` : ''}).`,
           authorName: S.user?.name || 'CRM', timestamp: new Date().toISOString()
         }]);
         _inspResendPrev = null;
