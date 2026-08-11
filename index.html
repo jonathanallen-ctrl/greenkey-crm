@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08h</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1312,7 +1312,8 @@
             <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
               <div style="font-size:12px;font-weight:600;color:var(--text-primary)">Customer activity</div>
               <div style="display:flex;align-items:center;gap:10px">
-                <button onclick="acknowledgeAllNotifs()" style="background:none;border:none;color:var(--green);cursor:pointer;font-size:11px;font-weight:600;padding:0">Acknowledge all</button>
+                <button id="bell-acked-tog" onclick="_bellToggleAcked()" title="Acknowledging hides an item from this list — it does not delete it. This shows what has already been handled." style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;font-weight:600;padding:0">Acknowledged</button>
+                <button id="bell-ackall" onclick="acknowledgeAllNotifs()" style="background:none;border:none;color:var(--green);cursor:pointer;font-size:11px;font-weight:600;padding:0">Acknowledge all</button>
                 <button onclick="toggleSmsBell()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
               </div>
             </div>
@@ -13678,6 +13679,87 @@ function addJobNote(leadId) {
   toast('Note added', 'success');
 }
 
+// ── REPLY TO CUSTOMER (2026-08-11) ──
+// Sends from the signed-in user's OWN mailbox via Graph, not from the
+// notifications@ address: the customer sees a real person, and her reply lands
+// in his inbox instead of a no-reply void. The sent message is written into Job
+// Notes so the whole exchange lives on the job rather than half here and half
+// in Outlook. Note is written ONLY after the send succeeds — a note claiming we
+// emailed her when we didn't is worse than no note at all.
+function toggleCustomerReply(leadId) {
+  const w = document.getElementById('reply-wrap-' + leadId);
+  if (!w) return;
+  const showing = w.style.display !== 'none';
+  w.style.display = showing ? 'none' : 'block';
+  if (!showing) { const b = document.getElementById('reply-body-' + leadId); if (b) b.focus(); }
+}
+
+async function sendCustomerReply(leadId) {
+  const lead = getLead(leadId);
+  if (!lead) { toast('Job not found', 'error'); return; }
+  const cust = getCustomer(lead.customerId);
+  const to = (cust && cust.email || '').trim();
+  if (!to) { toast('No email address on file for this customer', 'error'); return; }
+
+  const subjEl = document.getElementById('reply-subj-' + leadId);
+  const bodyEl = document.getElementById('reply-body-' + leadId);
+  const btn    = document.getElementById('reply-send-' + leadId);
+  const subject  = (subjEl && subjEl.value || '').trim() || 'Your GreenKey appointment';
+  const bodyText = (bodyEl && bodyEl.value || '').trim();
+  if (!bodyText) { toast('Write a reply first', 'error'); return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  const html = `<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a;font-size:14px;line-height:1.55;white-space:pre-wrap">${escHtml(bodyText)}</div>`;
+  try {
+    await _graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }]
+        },
+        saveToSentItems: true
+      })
+    });
+  } catch (e) {
+    console.error('[GK] Customer reply failed:', e);
+    const msg = String(e && e.message || e);
+    if (/401|403|InvalidAuthenticationToken|Forbidden/i.test(msg)) {
+      toast('Email failed — sign out and back in to refresh the Mail.Send permission', 'error');
+    } else {
+      toast('Email did NOT send — nothing was saved. ' + msg.slice(0,110), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Email'; }
+    return;
+  }
+
+  try {
+    const arr = getLeads();
+    const idx = arr.findIndex(l => l.id === leadId);
+    if (idx >= 0) {
+      if (!Array.isArray(arr[idx].jobNotes)) arr[idx].jobNotes = [];
+      arr[idx].jobNotes.push({
+        id: 'note-' + Date.now(),
+        text: `✉ Emailed ${to} — "${subject}"\n\n${bodyText}`,
+        author: S.user?.id || 'unknown',
+        authorName: S.user?.name || 'Unknown',
+        timestamp: new Date().toISOString(),
+        mentions: []
+      });
+      arr[idx].updatedAt = new Date().toISOString();
+      saveLeads(arr);
+    }
+  } catch (e) { console.warn('[GK] reply note logging failed:', e); }
+
+  if (bodyEl) bodyEl.value = '';
+  if (btn) { btn.disabled = false; btn.textContent = 'Send Email'; }
+  toggleCustomerReply(leadId);
+  toast('Email sent to ' + to, 'success');
+  // Repaint the notes list so the sent reply shows without a page reload.
+  try { if (typeof openLeadDetail === 'function') openLeadDetail(leadId); } catch(_){}
+}
+
 // ── NOTE @MENTION PROCESSING ──
 // For each mentioned teammate:
 //   1) Create an actionable task on their to-do list linked to this job + note.
@@ -14900,9 +14982,27 @@ function renderJobDetail(id) {
     <div class="jd-sb" style="padding:6px 14px 12px">${_crewSec}${_apptRows}${_apptAdd}</div>
   </div>`;
 
+  // ── Reply to customer (2026-08-11) ──
+  // Customers can answer us (reschedule note, decline reason) but the CRM had
+  // no way to answer back — the exchange ended up split between the CRM and
+  // Outlook. Only offered when we actually have an address on file.
+  const _replyCust  = (typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
+  const _replyEmail = (_replyCust && _replyCust.email || '').trim();
+  const replyBox = _replyEmail ? `
+      <div id="reply-wrap-${id}" style="display:none;border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg-elevated)">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Sends from your Outlook to <strong>${escHtml(_replyEmail)}</strong> — their reply comes straight back to you. A copy is saved to Job Notes.</div>
+        <input id="reply-subj-${id}" value="Re: Your GreenKey appointment" style="width:100%;box-sizing:border-box;padding:6px 8px;font-size:12.5px;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);margin-bottom:6px">
+        <textarea class="notes-ta" id="reply-body-${id}" placeholder="Write your reply to the customer…"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+          <button class="btn btn-g" style="padding:5px 12px;font-size:12.5px" onclick="toggleCustomerReply('${id}')">Cancel</button>
+          <button class="btn btn-p" id="reply-send-${id}" style="padding:5px 14px;font-size:12.5px" onclick="sendCustomerReply('${id}')">Send Email</button>
+        </div>
+      </div>` : '';
+
   const notesSec = `<div class="jd-sec">
-    <div class="jd-sh"><div class="jd-st">Job Notes</div></div>
+    <div class="jd-sh"><div class="jd-st">Job Notes</div>${_replyEmail?`<button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="toggleCustomerReply('${id}')" title="Email ${escHtml(_replyEmail)}">✉ Reply to customer</button>`:''}</div>
     <div class="jd-sb">
+      ${replyBox}
       <div class="notes-input-wrap">
         <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — tag a teammate with @Jonathan, @Sherri, or @Chase (or short versions like @Jon, @Sher) and they'll get a task + email…"></textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -16560,6 +16660,19 @@ function getPendingCustomerNotifs() {
   return getNotifications()
     .filter(n => isCustomerNotif(n) && n.status === 'pending' && !_notifAckedByMe(n) && _notifVisibleToMe(n))
     .sort((a,b)=>(b.at||b.createdAt||'').localeCompare(a.at||a.createdAt||''));
+}
+// ACKNOWLEDGED HISTORY (2026-08-11). Acknowledging was a one-way door: the
+// record stayed in localStorage (acknowledgeNotif only stamps `ackedBy`, it
+// never deletes) but nothing in the UI could reach it again. Jon acknowledged
+// Lindsey Vedder's reschedule and lost her message with it — the text was still
+// in D1 and in the failsafe email, just not anywhere he could get to it.
+// Backs the bell's "Acknowledged" toggle. Capped at 100 so the history view
+// can't grow unbounded in the dropdown.
+function getAckedCustomerNotifs() {
+  return getNotifications()
+    .filter(n => isCustomerNotif(n) && _notifVisibleToMe(n) && (_notifAckedByMe(n) || n.status === 'acknowledged'))
+    .sort((a,b)=>(b.at||b.createdAt||'').localeCompare(a.at||a.createdAt||''))
+    .slice(0, 100);
 }
 // Acknowledge a single notification. Customer notifications: per-user (see
 // above). Non-customer (Admin Queue) notifications keep the legacy shared
@@ -25780,6 +25893,7 @@ const BELL_RECENT_CAP       = 30;          // most we'll show in the dropdown
 let _bellPollTimer    = null;
 let _bellRecentCache  = [];                  // most-recent first
 let _bellOpen         = false;
+let _bellShowAcked    = false;   // bell dropdown showing the acknowledged-history view
 
 function _bellGetLastSeen() {
   // Default to "1 hour ago" on first run so we don't surface a backlog of
@@ -25942,6 +26056,47 @@ function _activityEventToNotif(ev) {
   return null;
 }
 
+// A customer's own words — a reschedule reason, a decline reason — used to live
+// ONLY in the bell notification's `description`. Acknowledging the notice put
+// the message out of reach even though the text was still sitting in D1
+// (scheduling_proposals.response_note + scheduling_actions.note) and in the
+// failsafe email. Now every customer note is ALSO written onto the lead as a
+// permanent job note, so it survives acknowledgement, shows in the job
+// timeline, and is there for whoever opens the job next (including Sherri).
+//
+// Idempotent: the note id is derived from the activity event id, and the poller
+// re-sees events on every pass, so we bail if this note is already on the lead.
+function _activityLogCustomerNote(ev) {
+  if (!ev || !ev.note) return;
+  let leadId = ev.leadId || '';
+  if (!leadId && ev.quoteId && typeof getQuote === 'function') {
+    leadId = (getQuote(ev.quoteId) || {}).leadId || '';
+  }
+  if (!leadId) return;
+  const noteId = 'custmsg-' + (ev.id || (leadId + '-' + ev.at));
+  try {
+    const arr = getLeads();
+    const idx = arr.findIndex(l => l.id === leadId);
+    if (idx < 0) return;                                   // lead not synced yet — next poll retries
+    if (!Array.isArray(arr[idx].jobNotes)) arr[idx].jobNotes = [];
+    if (arr[idx].jobNotes.some(n => n.id === noteId)) return;   // already logged
+    const who  = _activityCustName(ev, leadId) || 'Customer';
+    const what = ev.type === 'scheduling'
+      ? (ev.action === 'reschedule_requested' ? 'requested a reschedule' : 'confirmed the appointment')
+      : (ev.action === 'declined' ? 'declined the quote' : 'accepted the quote');
+    arr[idx].jobNotes.push({
+      id: noteId,
+      text: `📨 ${who} ${what} and wrote:\n\n"${ev.note}"`,
+      author: 'system',
+      authorName: who + ' (customer)',
+      timestamp: ev.at || new Date().toISOString(),
+      mentions: []
+    });
+    arr[idx].updatedAt = new Date().toISOString();
+    saveLeads(arr);
+  } catch (e) { console.warn('[GK] customer-note logging failed:', e); }
+}
+
 async function _activityPollOnce() {
   if (typeof _msal === 'undefined' || !_msal) return;
   if (typeof SMS_WORKER_URL === 'undefined' || !SMS_WORKER_URL) return;
@@ -25960,6 +26115,9 @@ async function _activityPollOnce() {
     const brandNew = [];
     events.forEach(ev => {
       if ((ev.at||'') > newest) newest = ev.at;
+      // Persist the customer's words onto the job BEFORE anything can be
+      // acknowledged — the note must outlive the notification.
+      try { _activityLogCustomerNote(ev); } catch(_){}
       const n = _activityEventToNotif(ev);
       if (!n) return;
       const existed = (typeof getNotification === 'function') ? getNotification(n.id) : null;
@@ -27820,9 +27978,48 @@ function _bellTypeMeta(type) {
     default:                      return { ico:'🔔', accent:'var(--text-muted)' };
   }
 }
+// Flip the dropdown between the live queue and the acknowledged history.
+function _bellToggleAcked() {
+  _bellShowAcked = !_bellShowAcked;
+  const tog = document.getElementById('bell-acked-tog');
+  if (tog) {
+    tog.textContent  = _bellShowAcked ? '← Back to new' : 'Acknowledged';
+    tog.style.color  = _bellShowAcked ? 'var(--green)' : 'var(--text-muted)';
+  }
+  const ackAll = document.getElementById('bell-ackall');
+  if (ackAll) ackAll.style.display = _bellShowAcked ? 'none' : '';
+  _bellRenderList();
+}
+
+// Read-only history: same rows, muted, no dismiss button, still click-through
+// to the job so an old message can be acted on again.
+function _bellRenderAckedList(list) {
+  const items = (typeof getAckedCustomerNotifs === 'function') ? getAckedCustomerNotifs() : [];
+  if (!items.length) {
+    list.innerHTML = `<div style="padding:24px 14px;text-align:center;color:var(--text-muted);font-size:12.5px">Nothing acknowledged yet.</div>`;
+    return;
+  }
+  list.innerHTML = items.map(n => {
+    const meta = _bellTypeMeta(n.type);
+    const when = _bellRelativeTime(n.at || n.createdAt);
+    const by = Object.values(n.ackedBy||{}).map(v => (v && v.name) || '').filter(Boolean).join(', ');
+    return `<div style="padding:10px 12px;border-bottom:1px solid var(--border);border-left:3px solid ${meta.accent};opacity:.72;cursor:${n.jobId?'pointer':'default'}" ${n.jobId?`onclick="_bellOpenLead('${n.jobId}')"`:''} title="${n.jobId?'Open the job':''}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="min-width:0">
+          <div style="font-size:12.5px;font-weight:600;color:var(--text-primary)">${meta.ico} ${escHtml(n.title||'')}</div>
+          <div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;line-height:1.4">${escHtml(n.description||'')}</div>
+          ${by?`<div style="font-size:10.5px;color:var(--green);margin-top:4px">✓ Acknowledged by ${escHtml(by)}</div>`:''}
+        </div>
+        <div style="font-size:10.5px;color:var(--text-muted);flex-shrink:0;white-space:nowrap">${when}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function _bellRenderList() {
   const list = document.getElementById('bell-list');
   if (!list) return;
+  if (_bellShowAcked) { _bellRenderAckedList(list); return; }
   const items = (typeof getPendingCustomerNotifs === 'function') ? getPendingCustomerNotifs() : [];
   if (!items.length) {
     list.innerHTML = `<div style="padding:24px 14px;text-align:center;color:var(--text-muted);font-size:12.5px">You're all caught up — no unacknowledged customer activity.</div>`;
@@ -27874,6 +28071,8 @@ function toggleSmsBell() {
   _bellOpen = !_bellOpen;
   dd.style.display = _bellOpen ? 'block' : 'none';
   if (_bellOpen) {
+    // Always open on the live queue, never on last session's history view.
+    if (_bellShowAcked) _bellToggleAcked();
     _bellRenderList();
     // Trigger a fresh poll on open so the list isn't stale.
     _bellPollOnce();
