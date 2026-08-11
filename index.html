@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-08h</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6179,8 +6179,22 @@ function renderQuoteBuilder(qid){
       <button class="btn btn-g" style="font-size:12px;padding:5px 10px" onclick="approveRevision('${q.id}',false)">Deny</button></div>`;
   }
 
-  const nextStatusLabel=q.status==='draft'?'Mark Delivered':q.status==='delivered'?'Mark Approved':'Mark Invoiced';
+  const nextStatusLabel=q.status==='draft'?'Mark Delivered':q.status==='delivered'?'✓ Accept this quote':'Mark Invoiced';
   const nextStatus=q.status==='draft'?'delivered':q.status==='delivered'?'approved':'invoiced';
+  // ⚠ 2026-08-10 — THE MIDDLE RUNG NOW RUNS THE REAL ACCEPT.
+  // Jonathan: "Why even have it. Sounds like it isn't doing anything
+  // productive." He was right. This is ONE button whose label follows the
+  // ladder draft → delivered → approved → invoiced. Delivered and Invoiced earn
+  // their keep; the middle rung duplicated the job screen's Accept button and
+  // did it WORSE — markQuoteStatus() set only the quote's status, leaving
+  // lead.acceptedQuoteId, Job Value and the quoteApproved milestone all unset.
+  // _leadPrimaryQuote() reads acceptedQuoteId FIRST, so without it the CRM falls
+  // back to "newest approved" — exactly the Brett Robertson fault (Option B
+  // accepted at $3,130, Option C created later at $200, scheduling text quoted
+  // $200). Two paths to one transition, one of them quietly wrong.
+  const nextStatusAction = (q.status==='delivered')
+    ? `acceptQuoteFromBuilder('${q.id}')`
+    : `markQuoteStatus('${q.id}','${nextStatus}')`;
 
   const bv=document.getElementById('quotes-builder-view');
   bv.innerHTML=`
@@ -6331,7 +6345,7 @@ function renderQuoteBuilder(qid){
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 6h6M5 9h4"/></svg>
             ${q.invoiceId?`Re-download Invoice PDF (${q.invoiceId})`:'Generate Invoice'}
           </button>`:'<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:4px">Platform job — invoiced through ${q.source}</div>'}
-          ${q.status!=='invoiced'?`<button class="btn btn-g btn-full" style="font-size:12px" onclick="markQuoteStatus('${q.id}','${nextStatus}')">${nextStatusLabel}</button>`:''}
+          ${q.status!=='invoiced'?`<button class="btn btn-g btn-full" style="font-size:12px" onclick="${nextStatusAction}">${nextStatusLabel}</button>`:''}
         </div>
       </div>
     </div>`;
@@ -9711,6 +9725,26 @@ function saveQuoteChanges(qid){
     toast('Quote saved','success');
   }
 }
+// Accept from inside the quote builder — the same full path the job screen's
+// Accept button takes: marks the winning quote, sets Job Value net of fees,
+// advances the pipeline stage, stamps the milestone and creates the pre-install
+// tasks. Then lands on the JOB, because that is where the work continues.
+function acceptQuoteFromBuilder(qid){
+  const q = getQuote(qid); if (!q) return;
+  if (!q.leadId) { markQuoteStatus(qid,'approved'); return; }   // orphan quote — old path
+  const lead = (typeof getLead === 'function') ? getLead(q.leadId) : null;
+  // ⚠ acceptJobQuote() is a TOGGLE — calling it on the already-accepted quote
+  // would UN-accept it. Cannot normally happen here (this button only shows at
+  // status 'delivered'), but guard anyway rather than rely on that.
+  if (!(lead && lead.acceptedQuoteId === qid)) {
+    try { acceptJobQuote(q.leadId, qid); } catch(e){ console.warn('[GK] accept from builder failed:', e); return; }
+  }
+  try {
+    navigate('jobs');
+    setTimeout(() => { try { openLeadDetail(q.leadId); } catch(_){} }, 60);
+  } catch(_){}
+}
+
 function markQuoteStatus(qid,s){
   const q=getQuote(qid);if(!q)return;
   // Margin floor gate — 'delivered' is the point of no return for pricing.
