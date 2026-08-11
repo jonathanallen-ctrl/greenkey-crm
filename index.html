@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12736,15 +12736,44 @@ function _chipEditorHTML(leadId, key){
     }
     case 'schedule': {
       const im=ms.installScheduled||{};
-      // Plain '&' — _chipEditorShell runs escHtml() on the title, so a
-      // pre-escaped '&amp;' was being escaped twice and rendered literally as
-      // "Install date &amp; time". (The note() line below is NOT escaped, so
-      // its '&amp;' is correct and must stay.)
+      // THE RESCHEDULE DESK (2026-08-11b). Everything needed to answer a
+      // reschedule lives here, because this is where you already are when you
+      // click the "Reschedule requested" chip: her message, the new date, and
+      // the reply — in that order, top to bottom, which is the order you act in.
+      // Jon's call, and he's right: a reply box under "Job Notes" is a reply box
+      // nobody remembers exists.
+      // Plain '&' in the title — _chipEditorShell runs escHtml(), so a
+      // pre-escaped '&amp;' was escaped twice and rendered literally. (The
+      // note() lines are NOT escaped, so their '&amp;' is correct and stays.)
+      const _sc = (lead.scheduling && lead.scheduling.confirmations) || {};
+      const _c  = _sc[im.date] || null;
+      const _cEmail = (((typeof getCustomer==='function' ? getCustomer(lead.customerId) : null) || {}).email || '').trim();
+
+      const _msgBlock = (_c && _c.note) ? `
+        <div style="border-left:3px solid var(--amber,#f59e0b);background:var(--bg-surface);border-radius:0 6px 6px 0;padding:9px 12px;margin-bottom:12px">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">${
+            _c.status==='reschedule_requested' ? 'They asked to reschedule' : 'They replied'
+          }${_c.respondedAt ? ' · ' + mdy(_c.respondedAt) : ''}</div>
+          <div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap">“${escHtml(_c.note)}”</div>
+        </div>` : '';
+
+      const _replyBlock = _cEmail ? `
+        <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Reply to <strong>${escHtml(_cEmail)}</strong> — sends from your Outlook, so their answer comes straight back to you.</div>
+          <input id="reply-subj-${leadId}" value="Re: Your GreenKey appointment" style="width:100%;box-sizing:border-box;padding:6px 8px;font-size:12.5px;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);margin-bottom:6px">
+          <textarea id="reply-body-${leadId}" placeholder="Write your reply…" style="width:100%;box-sizing:border-box;min-height:80px;padding:7px 9px;font-size:12.5px;font-family:inherit;line-height:1.5;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);resize:vertical"></textarea>
+          <div style="display:flex;justify-content:flex-end;margin-top:6px">
+            <button class="btn btn-p" id="reply-send-${leadId}" style="padding:5px 14px;font-size:12.5px" onclick="sendCustomerReply('${leadId}')">Send Email</button>
+          </div>
+        </div>` : '';
+
       return _chipEditorShell('Install date & time',
+        _msgBlock +
         row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
             `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
             (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
-        note('Set the day &amp; time here, or use the Outlook button to book it on the calendar.'));
+        note('Set the day &amp; time here, or use the Outlook button to book it on the calendar.')+
+        _replyBlock);
     }
     case 'inspection': {
       const fi=ms.finalInspPassed||{};
@@ -13690,14 +13719,6 @@ function addJobNote(leadId) {
 // Notes so the whole exchange lives on the job rather than half here and half
 // in Outlook. Note is written ONLY after the send succeeds — a note claiming we
 // emailed her when we didn't is worse than no note at all.
-function toggleCustomerReply(leadId) {
-  const w = document.getElementById('reply-wrap-' + leadId);
-  if (!w) return;
-  const showing = w.style.display !== 'none';
-  w.style.display = showing ? 'none' : 'block';
-  if (!showing) { const b = document.getElementById('reply-body-' + leadId); if (b) b.focus(); }
-}
-
 async function sendCustomerReply(leadId) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found', 'error'); return; }
@@ -13757,11 +13778,11 @@ async function sendCustomerReply(leadId) {
   } catch (e) { console.warn('[GK] reply note logging failed:', e); }
 
   if (bodyEl) bodyEl.value = '';
-  if (btn) { btn.disabled = false; btn.textContent = 'Send Email'; }
-  toggleCustomerReply(leadId);
+  if (btn) { btn.disabled = false; btn.textContent = 'Sent ✓'; setTimeout(()=>{ try{ btn.textContent='Send Email'; }catch(_){} }, 2500); }
   toast('Email sent to ' + to, 'success');
-  // Repaint the notes list so the sent reply shows without a page reload.
-  try { if (typeof openLeadDetail === 'function') openLeadDetail(leadId); } catch(_){}
+  // Deliberately NO re-render: this runs inside the open scheduling chip editor,
+  // and repainting the job would close the panel out from under you mid-task —
+  // right when the next thing you want to do is set the new date.
 }
 
 // ── NOTE @MENTION PROCESSING ──
@@ -14986,27 +15007,14 @@ function renderJobDetail(id) {
     <div class="jd-sb" style="padding:6px 14px 12px">${_crewSec}${_apptRows}${_apptAdd}</div>
   </div>`;
 
-  // ── Reply to customer (2026-08-11) ──
-  // Customers can answer us (reschedule note, decline reason) but the CRM had
-  // no way to answer back — the exchange ended up split between the CRM and
-  // Outlook. Only offered when we actually have an address on file.
-  const _replyCust  = (typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
-  const _replyEmail = (_replyCust && _replyCust.email || '').trim();
-  const replyBox = _replyEmail ? `
-      <div id="reply-wrap-${id}" style="display:none;border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;background:var(--bg-elevated)">
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Sends from your Outlook to <strong>${escHtml(_replyEmail)}</strong> — their reply comes straight back to you. A copy is saved to Job Notes.</div>
-        <input id="reply-subj-${id}" value="Re: Your GreenKey appointment" style="width:100%;box-sizing:border-box;padding:6px 8px;font-size:12.5px;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);margin-bottom:6px">
-        <textarea class="notes-ta" id="reply-body-${id}" placeholder="Write your reply to the customer…"></textarea>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
-          <button class="btn btn-g" style="padding:5px 12px;font-size:12.5px" onclick="toggleCustomerReply('${id}')">Cancel</button>
-          <button class="btn btn-p" id="reply-send-${id}" style="padding:5px 14px;font-size:12.5px" onclick="sendCustomerReply('${id}')">Send Email</button>
-        </div>
-      </div>` : '';
-
+  // Reply-to-customer deliberately does NOT live here (2026-08-11b). It sat in
+  // this header for one build and Jon's verdict was that nobody would ever
+  // remember to look under "Job Notes" to answer a reschedule. It now lives in
+  // the scheduling chip editor — where you already are when you click
+  // "Reschedule requested". See case 'schedule' in the chip editor.
   const notesSec = `<div class="jd-sec">
-    <div class="jd-sh"><div class="jd-st">Job Notes</div>${_replyEmail?`<button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="toggleCustomerReply('${id}')" title="Email ${escHtml(_replyEmail)}">✉ Reply to customer</button>`:''}</div>
+    <div class="jd-sh"><div class="jd-st">Job Notes</div></div>
     <div class="jd-sb">
-      ${replyBox}
       <div class="notes-input-wrap">
         <textarea class="notes-ta" id="note-input-${id}" placeholder="Add a note — tag a teammate with @Jonathan, @Sherri, or @Chase (or short versions like @Jon, @Sher) and they'll get a task + email…"></textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
