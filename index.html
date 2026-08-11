@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12559,13 +12559,13 @@ function _renderPreInstallStrip(lead) {
     const _conf = lead.scheduling?.confirmations?.[_schedDate];
     const _cs = _conf?.status;
     if (_cs === 'confirmed') {
-      states.push({ state:'done', icon:'✅', label:'Confirmed', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Customer confirmed this appointment date & time. Click to view or change.' });
+      states.push({ state:'done', icon:'✅', label:'Confirmed', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Customer confirmed this appointment date & time. Click to view or change.' });
     } else if (_cs === 'reschedule_requested') {
-      states.push({ state:'reschedule', icon:'📅', label:'Reschedule requested', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:(_conf.note?('Customer note: '+_conf.note+' — '):'Customer asked to reschedule — ')+'click to set a new date/time.' });
+      states.push({ state:'reschedule', icon:'📅', label:'Reschedule requested', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:(_conf.note?('Customer note: '+_conf.note+' — '):'Customer asked to reschedule — ')+'click to set a new date/time.' });
     } else if (_cs === 'pending') {
-      states.push({ state:'pending', icon:'⏳', label:'Awaiting confirm', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Confirmation request sent — waiting on the customer\'s reply.' });
+      states.push({ state:'pending', icon:'⏳', label:'Awaiting confirm', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Confirmation request sent — waiting on the customer\'s reply.' });
     } else {
-      states.push({ state:'done', icon:'📅', label:'Scheduled', meta:_schedDate+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
+      states.push({ state:'done', icon:'📅', label:'Scheduled', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
     }
   } else {
     states.push({ state:'pending', icon:'📅', label:'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip:'No install date set. Click to set the day & time.' });
@@ -12736,7 +12736,11 @@ function _chipEditorHTML(leadId, key){
     }
     case 'schedule': {
       const im=ms.installScheduled||{};
-      return _chipEditorShell('Install date &amp; time',
+      // Plain '&' — _chipEditorShell runs escHtml() on the title, so a
+      // pre-escaped '&amp;' was being escaped twice and rendered literally as
+      // "Install date &amp; time". (The note() line below is NOT escaped, so
+      // its '&amp;' is correct and must stay.)
+      return _chipEditorShell('Install date & time',
         row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
             `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
             (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
