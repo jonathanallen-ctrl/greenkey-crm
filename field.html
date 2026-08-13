@@ -68,6 +68,7 @@
   .lb{position:fixed;inset:0;z-index:50;background:rgba(4,6,10,.94);display:flex;align-items:center;justify-content:center;touch-action:none}
   .lb img{max-width:100vw;max-height:86vh;object-fit:contain;will-change:transform}
   .lb .lbx{position:absolute;top:calc(env(safe-area-inset-top) + 8px);right:12px;font-size:24px;color:#e8eaed;padding:10px;cursor:pointer}
+  .lb .lbdel{position:absolute;top:calc(env(safe-area-inset-top) + 8px);left:12px;font-size:19px;color:#ff9a9a;background:rgba(23,26,33,.62);border:1px solid #4a2a2a;border-radius:10px;padding:7px 12px;cursor:pointer}
   .lb .lbnav{position:absolute;top:50%;transform:translateY(-50%);font-size:32px;line-height:1;color:#e8eaed;padding:16px 12px;background:rgba(23,26,33,.55);border-radius:12px;cursor:pointer}
   .lb .lbcap{position:absolute;bottom:calc(env(safe-area-inset-bottom) + 12px);left:12px;right:12px;text-align:center;color:#aeb4bf;font-size:12px}
   .pay{background:linear-gradient(135deg,rgba(54,199,119,.16),rgba(54,199,119,.05));border:1px solid #2f6b46;border-radius:12px;padding:14px;margin-bottom:12px}
@@ -90,7 +91,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-08 field-18';
+const BUILD = '2026-08-13 field-19';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -288,6 +289,15 @@ async function syncFromSP(){
   // Read-only: overwrite the keys this tool needs.
   ['gk_leads','gk_customers','gk_quotes'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
 }
+// field-19 — WHICH PHOTOS A TECH MAY DELETE.
+// Only files the field app itself uploaded, which are named "<shot>__<epoch>_<name>"
+// (see uploadPhoto). That deliberately excludes the two other things living in
+// these same folders: pictures the CUSTOMER texted in (filed by the worker into
+// site/ as "Text photo <stamp>.jpg") and anything the office put there by hand.
+// A tech deleting his own blurry panel shot is the ask; a tech deleting the
+// customer's own evidence is not. ⚠ `site` is not a synonym for "our photos".
+function _fieldOwned(name){ return /^[A-Za-z0-9-]+__\d{10,}_/.test(String(name||'')); }
+
 // field-15: ask Graph for THUMBNAILS alongside the children. The grid shows the
 // small rendition (KB, not MB — the old grid pulled every full-size original
 // just to draw a 96px square); the lightbox uses the full downloadUrl.
@@ -300,7 +310,7 @@ async function loadJobPhotos(jobId){
     try{ const f=await graphFetch('/drives/'+_spDrive+'/items/'+cat.id+'/children?$expand=thumbnails');
       for(const it of (f.value||[])){ if(it.file && /^image\//.test(it.file.mimeType||'') && it['@microsoft.graph.downloadUrl']){
         const t=(it.thumbnails&&it.thumbnails[0])||{};
-        out.push({name:it.name, cat:cat.name,
+        out.push({id:it.id, job:jobId, name:it.name, cat:cat.name, own:_fieldOwned(it.name),
           thumb:(t.large&&t.large.url)||(t.medium&&t.medium.url)||it['@microsoft.graph.downloadUrl'],
           full:it['@microsoft.graph.downloadUrl'],
           // kept for anything still reading .url
@@ -309,6 +319,21 @@ async function loadJobPhotos(jobId){
     }catch(e){}
   }
   return out;
+}
+
+// One renderer for every screen that draws the grid (walkdown, job detail, and
+// both post-upload refreshes). Four hand-copies of this line existed before
+// field-19; the 2026-08-08 date bug was that exact shape — one fix applied to
+// three of four copies. Deleting a photo has to repaint all of them.
+function _photoGridHtml(ph){
+  if(!ph || !ph.length) return '<div class="muted" style="font-size:13px">No photos yet.</div>';
+  return '<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt=""></div>').join('')+'</div>';
+}
+async function _photoGridRefresh(jobId){
+  const el=document.getElementById('photos');
+  if(el) el.innerHTML='<div class="muted" style="font-size:13px">Refreshing\u2026</div>';
+  try{ const ph=await loadJobPhotos(jobId); _ph=ph; _applyShotStatus(ph); if(el) el.innerHTML=_photoGridHtml(ph); }
+  catch(e){ if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn\u2019t load photos.</div>'; }
 }
 
 // ---------- photo lightbox (field-15) ----------
@@ -325,6 +350,7 @@ function openLightbox(i){
   const d=document.createElement('div'); d.className='lb'; d.id='lb';
   d.innerHTML = '<img id="lb-img" alt="">'
     + '<div class="lbx" onclick="closeLightbox()">✕</div>'
+    + '<div class="lbdel" id="lb-del" style="display:none" onclick="event.stopPropagation();deletePhoto()">🗑 Delete</div>'
     + (_ph.length>1
         ? '<div class="lbnav" style="left:8px"  onclick="event.stopPropagation();stepLightbox(-1)">‹</div>'
         + '<div class="lbnav" style="right:8px" onclick="event.stopPropagation();stepLightbox(1)">›</div>'
@@ -360,12 +386,12 @@ function _lbGestures(d){
   const dist=t=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
   const rel=p=>{ const r=d.getBoundingClientRect(); return {x:p.x-(r.left+r.width/2), y:p.y-(r.top+r.height/2)}; };
   d.addEventListener('touchstart',function(e){
-    if(e.target.closest('.lbnav,.lbx')) return;      // buttons keep their own taps
+    if(e.target.closest('.lbnav,.lbx,.lbdel')) return;      // buttons keep their own taps
     if(e.touches.length===2){ prevD=dist(e.touches); prevMid=mid(e.touches); moved=true; clearTimeout(tapTimer); }
     else if(e.touches.length===1){ panFrom={x:e.touches[0].clientX,y:e.touches[0].clientY,tx:_lbTx,ty:_lbTy}; tFrom=panFrom; moved=false; }
   },{passive:false});
   d.addEventListener('touchmove',function(e){
-    if(e.target.closest('.lbnav,.lbx')) return;
+    if(e.target.closest('.lbnav,.lbx,.lbdel')) return;
     e.preventDefault();
     if(e.touches.length===2 && prevD){
       const dNow=dist(e.touches), mNow=mid(e.touches), m=rel(mNow);
@@ -379,7 +405,7 @@ function _lbGestures(d){
     }
   },{passive:false});
   d.addEventListener('touchend',function(e){
-    if(e.target.closest('.lbnav,.lbx')) return;
+    if(e.target.closest('.lbnav,.lbx,.lbdel')) return;
     if(e.touches.length>0){ prevD=0; prevMid=null; return; }   // one finger of a pinch lifted
     if(prevD){ prevD=0; prevMid=null; return; }                 // pinch just ended
     if(!tFrom) return;
@@ -408,7 +434,41 @@ function _lbShow(i){
   if(!img||!p) return;
   img.onerror=function(){ if(cap) cap.textContent='Could not load this photo — the link has gone stale. Close this and tap ↻ to refresh the job.'; };
   img.src=p.full||p.thumb||'';
+  // Only offered on the app's own uploads — see _fieldOwned().
+  const del=document.getElementById('lb-del');
+  if(del){ del.style.display = p.own ? 'block' : 'none'; del.textContent='🗑 Delete'; }
   if(cap) cap.textContent=(_ph.length>1?(_lbIdx+1)+' / '+_ph.length+' · ':'')+(p.cat?p.cat+' · ':'')+(p.name||'');
+}
+// field-19 (Jon, 2026-08-13: "technicians need to be able to delete pics that
+// they add in error"). Deletes the photo you are LOOKING AT — a bad shot is only
+// obvious full-screen, and picking the wrong 96px thumbnail is exactly the
+// mistake this is meant to undo. Graph DELETE on a driveItem sends it to the
+// SITE RECYCLE BIN (93 days), so a wrong tap is recoverable by the office; it is
+// not a shredder. 404 counts as success — the file is gone either way, and a
+// double-tap must not raise an error at someone standing on a roof.
+async function deletePhoto(){
+  const p=_ph[_lbIdx];
+  if(!p) return;
+  if(!p.id || !_spDrive){ alert('This photo can\u2019t be deleted from the app \u2014 ask the office.'); return; }
+  if(!p.own){ alert('This one wasn\u2019t taken in the field app \u2014 it may be a photo the customer texted in. Ask the office to remove it.'); return; }
+  if(!confirm('Delete this photo?\n\n'+(p.name||'')+'\n\nIt comes off the job. The office can still recover it from the SharePoint recycle bin.')) return;
+  const btn=document.getElementById('lb-del');
+  if(btn) btn.textContent='Deleting\u2026';
+  try{
+    try{ await getTokenSilent(); }catch(e){}
+    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/items/'+p.id,
+      { method:'DELETE', headers:{ Authorization:'Bearer '+_gToken } });
+    if(!r.ok && r.status!==404) throw new Error('DELETE '+r.status);
+  }catch(e){
+    console.warn('[field] delete', e);
+    if(btn) btn.textContent='🗑 Delete';
+    alert('Could not delete that photo: '+((e&&e.message)||e));
+    return;
+  }
+  const jobId=p.job;
+  closeLightbox();
+  const st=document.getElementById('ph-status'); if(st) st.textContent='Photo deleted.';
+  if(jobId) await _photoGridRefresh(jobId);   // repaints the grid AND re-ticks the shot checklist
 }
 function stepLightbox(d){ _lbResetZoom(); _lbShow(_lbIdx+d); }
 function closeLightbox(){ const d=document.getElementById('lb'); if(d) d.remove(); _lbS=1;_lbTx=0;_lbTy=0; }
@@ -584,7 +644,7 @@ function renderWalkdown(id){
     + '</div>'
     + '</div>';
   loadJobPhotos(l.id).then(ph=>{ _ph=ph; const el=document.getElementById('photos'); if(!el) return;
-    el.innerHTML = ph.length? '<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt=""></div>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>';
+    el.innerHTML = _photoGridHtml(ph);
   }).catch(()=>{});
   window.scrollTo(0,0);
 }
@@ -752,8 +812,7 @@ function renderDetail(id){
     _ph=ph;
     _applyShotStatus(ph);
     const el=document.getElementById('photos'); if(!el) return;
-    if(!ph.length){ el.innerHTML='<div class="muted" style="font-size:13px">No photos on this job yet.</div>'; return; }
-    el.innerHTML='<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt=""></div>').join('')+'</div>';
+    el.innerHTML=_photoGridHtml(ph);
   }).catch(()=>{ const el=document.getElementById('photos'); if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn’t load photos.</div>'; });
   window.scrollTo(0,0);
 }
@@ -824,9 +883,7 @@ async function onPhotoPick(input, jobId){
   let ok=0,fail=0;
   for(let i=0;i<files.length;i++){ if(st) st.textContent='Uploading '+(i+1)+' of '+files.length+'…'; try{ await uploadPhoto(jobId,files[i],cat); ok++; }catch(e){ console.warn('[field] photo',e); fail++; } }
   if(st) st.textContent = ok+' uploaded'+(fail?(' · '+fail+' failed'):'');
-  const el=document.getElementById('photos'); if(el){ el.innerHTML='<div class="muted" style="font-size:13px">Refreshing…</div>';
-    try{ const ph=await loadJobPhotos(jobId); _ph=ph; _applyShotStatus(ph); el.innerHTML = ph.length? '<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt=""></div>').join('')+'</div>' : '<div class="muted" style="font-size:13px">No photos yet.</div>'; }catch(e){}
-  }
+  await _photoGridRefresh(jobId);
 }
 // Required closeout shots (needed for direct AND platform closeouts — Qmerit/Treehouse/etc.).
 const INSTALL_SHOTS = [
