@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-11c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-14b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -3785,6 +3785,32 @@ function custFullName(c) { return c ? `${c.firstName||''} ${c.lastName||''}`.tri
 // normalization in findDuplicateCustomers so the search bars find anyone the
 // duplicate-check flags (root cause of "shows up when entering, not in search").
 function _nameKey(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+
+// The name to SHOW for a job. 784 of 945 leads carry an empty `customerName`
+// (imports and website leads write customerFirstName/customerLastName and rely
+// on the linked customer record instead), so `l.customerName || l.id` silently
+// degrades to a job number on ~83% of jobs. Jon, 2026-08-14: "we aren't really
+// using the payments page very often because it's hard to tell who the job is
+// for when it uses the job number instead of name."
+// Order: linked customer record → the lead's own first/last → legacy
+// customerName → business name → '' (callers decide the last-resort fallback).
+function leadDisplayName(l){
+  if(!l) return '';
+  try{
+    const c = l.customerId && typeof getCustomer==='function' ? getCustomer(l.customerId) : null;
+    if(c){
+      const biz = (c.propertyType==='commercial' && c.businessName) ? c.businessName : '';
+      const person = (typeof custFullName==='function') ? custFullName(c) : '';
+      const nm = biz || (person && person!=='Unnamed' && person!=='Unknown' ? person : '');
+      if(nm) return nm;
+    }
+  }catch(_){}
+  const own = [l.customerFirstName, l.customerLastName].filter(Boolean).join(' ').trim();
+  if(own) return own;
+  if((l.customerName||'').trim()) return l.customerName.trim();
+  if((l.businessName||'').trim()) return l.businessName.trim();
+  return '';
+}
 
 // ── PIPELINE ──
 function setPipeMode(mode) {
@@ -13586,7 +13612,7 @@ function punchReturnJob(leadId) {
   if (open && !confirm(open + ' punch item' + (open === 1 ? ' is' : 's are') + ' still open.\n\nSend the job back anyway?')) return;
   const back = lead.punchReturnStage || 'post-install-docs';
   updateJobStage(leadId, back);
-  toast('Back to ' + ((STAGE_MAP && STAGE_MAP[back]) || back), 'success');
+  toast('Back to ' + ((STAGE_MAP && STAGE_MAP[back] && STAGE_MAP[back].label) || back), 'success');
 }
 // Mark the inspection failed: the job goes to Punch List with the reason as its
 // first item and Awaiting Inspection stamped as where it returns to. Before this
@@ -14659,7 +14685,7 @@ function renderJobDetail(id) {
         return `<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(243,156,18,.35);border-radius:8px;background:rgba(243,156,18,.06)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:12.5px;font-weight:600;color:#f39c12">🔧 Punch List${_open?` — ${_open} open`:(_pi.length?' — all done':'')}</div>
-            ${_back ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="punchReturnJob('${lead.id}')">↩ Back to ${escHtml((typeof STAGE_MAP!=='undefined' && STAGE_MAP[_back]) || _back)}</button>` : ''}
+            ${_back ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="punchReturnJob('${lead.id}')">↩ Back to ${escHtml((typeof STAGE_MAP!=='undefined' && STAGE_MAP[_back] && STAGE_MAP[_back].label) || _back)}</button>` : ''}
           </div>
           ${_rows}
           <div style="display:flex;gap:6px;margin-top:8px">
@@ -22956,8 +22982,19 @@ function exportReportPDF() {
 }
 
 // ── UTILITY ──
+// ⚠ 2026-08-14 — WHY THE COERCION. This read `(s||'').replace(...)`, so ANY
+// truthy non-string (an object, an array) threw "s.replace is not a function".
+// One such call — escHtml(STAGE_MAP[stage]) in the punch-list block, where
+// STAGE_MAP maps id -> the stage OBJECT, not its label — took down the whole of
+// renderJobDetail(). Because openJobDetail() had already switched the detail
+// view to visible, the page kept showing the PREVIOUSLY rendered job, so
+// clicking a punch-list card silently opened whatever job you looked at last.
+// It looked like broken links; it was one uncaught TypeError.
+// Falsy inputs still return '' exactly as before — only truthy non-strings
+// change, and they used to throw, so nothing that worked can regress.
 function escHtml(s) {
-  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const t = s ? (typeof s === 'string' ? s : String(s)) : '';
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 
@@ -27576,7 +27613,7 @@ function renderPaymentsPage(){
   const expRows = expected.map(l => {
     const e = l.paymentExpected;
     return `<tr>
-      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(l.customerName||l.id)}</a><div style="font-size:11px;color:var(--text-muted)">${l.id}</div></td>
+      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(leadDisplayName(l)||l.id)}</a><div style="font-size:11px;color:var(--text-muted)">${l.id}</div></td>
       <td style="font-weight:700">${_pcFmt$(e.amount)}</td>
       <td>${(e.methods||[]).join(' / ')}</td>
       <td>${srcLabel[e.source]||e.source||''}</td>
@@ -27591,7 +27628,7 @@ function renderPaymentsPage(){
   // 2) Unmatched parking lot — job picker sorted with same-amount expecteds first.
   const ups = getUnmatchedPayments().filter(u => u.status === 'open')
     .sort((a,b) => new Date(b.seenAt||0) - new Date(a.seenAt||0));
-  const candidates = active.slice().sort((a,b) => String(a.customerName||'').localeCompare(String(b.customerName||'')));
+  const candidates = active.slice().sort((a,b) => leadDisplayName(a).localeCompare(leadDisplayName(b)));
   const unRows = ups.map(u => {
     // Rank candidates: exact amount match first, then time proximity between
     // the deposit and each job's ask timestamp (Jonathan 2026-07-21 — an
@@ -27615,7 +27652,7 @@ function renderPaymentsPage(){
         const mins = Math.round(s[1] / 60000);
         hint += (hint ? ',' : ' ←') + ' asked ' + (mins < 60 ? mins + ' min' : Math.round(mins/60) + ' h') + ' apart';
       }
-      return `<option value="${l.id}">${escHtml(l.customerName||l.id)} · ${l.id}${hint}</option>`;
+      return `<option value="${l.id}">${escHtml(leadDisplayName(l)||l.id)} · ${l.id}${hint}</option>`;
     }).join('');
     return `<tr>
       <td style="font-weight:700">${_pcFmt$(u.amount)}</td>
@@ -27633,7 +27670,7 @@ function renderPaymentsPage(){
   const recent = leads.filter(l => l.payment && l.payment.collectedAt)
     .sort((a,b) => new Date(b.payment.collectedAt) - new Date(a.payment.collectedAt)).slice(0, 12);
   const recRows = recent.map(l => `<tr>
-      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(l.customerName||l.id)}</a></td>
+      <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(leadDisplayName(l)||l.id)}</a><div style="font-size:11px;color:var(--text-muted)">${l.id}</div></td>
       <td style="font-weight:700">${_pcFmt$(l.payment.amount)}</td>
       <td>${l.payment.method||''}</td>
       <td>${new Date(l.payment.collectedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</td>

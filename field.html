@@ -91,7 +91,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-13 field-19';
+const BUILD = '2026-08-14 field-20';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -237,11 +237,40 @@ function _installSpecRows(l){
 
 // Amount to actually COLLECT. If the tech made an on-site adjustment, that single
 // figure is what we charge on every method; otherwise fall back to the quote.
+// ── Deposits / money already paid (field-20) ─────────────────────────────
+// Jon, 2026-08-14, morning of the Cohler install: "He paid a $500 deposit
+// towards his $2495 total but the field app still shows him owning the full
+// amount." The CRM had no notion of money already collected. calcDepositSchedule()
+// only PRINTS a schedule on the quote and drives the QuickBooks invoice; the job's
+// `payment` is a single overwritable slot, not a ledger. So the tech was one tap
+// away from asking a customer for $500 he had already paid.
+//
+// SELECTABLE BY DESIGN — Jon: "not everyone pays the up front fee." This reads
+// `lead.priorPayments`, which exists ONLY when someone records a credit. A job
+// with no deposit has no array, priorPaid() returns 0, and every amount in this
+// app is identical to field-19. Nothing is inferred from the deposit TIERS,
+// because a scheduled deposit and a paid one are not the same thing.
+function priorPayments(l){ return (l && Array.isArray(l.priorPayments)) ? l.priorPayments : []; }
+function priorPaid(l){
+  return priorPayments(l).reduce(function(sum,p){
+    const a = p && Number(p.amount);
+    return sum + ((isFinite(a) && a>0) ? Math.round(a) : 0);
+  },0);
+}
+// Everything that quotes a number to a customer or charges a card goes through
+// here — the amount card, the Collect Payment buttons, Tap to Pay and the texted
+// pay link — so netting the deposit out HERE fixes all of them at once and none
+// can drift. A deposit is a flat dollar credit, so it comes off the card and the
+// cash/Zelle figure equally, which leaves the card buffer intact on the balance.
 function jobPayAmounts(l){
+  let base;
   if(l && l.priceOverride && typeof l.priceOverride.amount==='number' && isFinite(l.priceOverride.amount)){
-    const a=Math.round(l.priceOverride.amount); return {net:a, card:a, overridden:true};
-  }
-  return quoteAmounts(l);
+    const a=Math.round(l.priceOverride.amount); base={net:a, card:a, overridden:true};
+  } else { base=quoteAmounts(l); }
+  const paid=priorPaid(l);
+  if(!paid) return {net:base.net, card:base.card, overridden:!!base.overridden, base:base, paid:0};
+  const cut=v=>(v==null?null:Math.max(0, v-paid));
+  return {net:cut(base.net), card:cut(base.card), overridden:!!base.overridden, base:base, paid:paid};
 }
 
 // ---------- auth ----------
@@ -698,6 +727,7 @@ function renderDetail(id){
   } else {
     const c=pay.card, n=pay.net; const hasAmt=(c!=null||n!=null);
     payCard = '<div class="pay"><div class="lab" style="color:#7fe0a6">Collect Payment</div>'
+      + ((pay.paid||0) ? '<div style="font-size:12.5px;color:#7fe0a6;margin-bottom:6px;font-weight:600">Balance after '+fmt$(pay.paid)+' already paid</div>' : '')
       + (hasAmt ? '<div style="font-size:14px;margin-bottom:10px">'+(c!=null?'Card <b>'+fmt$(c)+'</b>':'')+((c!=null&&n!=null&&n!==c)?' &nbsp;·&nbsp; Zelle/cash <b>'+fmt$(n)+'</b>':'')+'</div>'
                  : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
       + '<button class="btn green" onclick="tapToPay(\''+esc(l.id)+'\')">💳 Tap to Pay'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
@@ -716,7 +746,7 @@ function renderDetail(id){
       +   '<div style="color:#1e6e38;font-weight:700;font-size:14px;margin-top:10px;word-break:break-all">'+esc(ZELLE_EMAIL)+'</div>'
       +   '<div style="color:#111;font-weight:800;font-size:16px;margin-top:8px">Payment note code: '+payMemoCode(l.id)+'</div>'
       +   '<div style="color:#555;font-size:12px;margin-top:2px;line-height:1.45">Ask the customer to add this code to the Zelle note so the office can match the payment instantly.</div>'
-      +   '<div style="color:#555;font-size:12px;margin-top:4px;line-height:1.45">Scan with your banking app’s Zelle, or search the email. Send the exact quote amount.</div>'
+      +   '<div style="color:#555;font-size:12px;margin-top:4px;line-height:1.45">Scan with your banking app’s Zelle, or search the email. Send the exact amount shown above.</div>'
       + '</div>'
       + '<div class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">Card: open the <b>Stripe</b> app and charge the card amount with Tap to Pay (tap the customer’s card or phone), then tap “Card paid”. Zelle to '+esc(ZELLE_EMAIL)+'.</div>'
       + '</div>';
@@ -743,12 +773,23 @@ function renderDetail(id){
   statusCard += '</div>';
   // Amount to collect (direct jobs) — quote price or the tech's on-site adjustment.
   const _amt = jobPayAmounts(l); const _qa = quoteAmounts(l); const _ov = l.priceOverride;
+  const _pp = priorPayments(l); const _prior = _amt.paid||0;
   const _collect = (_amt.net!=null?_amt.net:_amt.card);
+  const _gross = _amt.base ? (_amt.base.net!=null?_amt.base.net:_amt.base.card) : null;
   let amountCard = '<div class="card"><div class="lab">Amount to collect</div>'
     + (_collect!=null ? '<div style="font-size:22px;font-weight:700;color:#e8eaed">'+fmt$(_collect)+'</div>' : '<div class="muted" style="font-size:14px">No quote amount on file</div>')
     + ((_amt.card!=null&&_amt.net!=null&&_amt.card!==_amt.net) ? '<div class="muted" style="font-size:12.5px;margin-top:2px">Card '+fmt$(_amt.card)+' · Cash/Zelle '+fmt$(_amt.net)+'</div>' : '')
-    + (_ov ? '<div style="font-size:12.5px;color:#ffc861;margin-top:6px">✎ Adjusted on site'+(_qa.net!=null?(' · quoted '+fmt$(_qa.net)):'')+(_ov.note?('<br>'+esc(_ov.note)):'')+'</div>' : '')
-    + '<button class="btn ghost" style="margin-top:10px" onclick="adjustAmount(\''+esc(l.id)+'\')">✎ Adjust amount</button>'
+    + (_prior ? '<div style="font-size:12.5px;color:#7fe0a6;margin-top:6px;font-weight:600">'+(_gross!=null?('Job '+fmt$(_gross)+' \u00b7 '):'')+'less '+fmt$(_prior)+' already paid</div>'
+        + _pp.map(p=>'<div class="muted" style="font-size:12px;display:flex;justify-content:space-between;gap:10px;padding:3px 0">'
+            + '<span>'+fmt$(p.amount)+' \u00b7 '+esc(p.method||'deposit')+(p.at?(' \u00b7 '+esc(mdy(p.at))):'')+(p.note?('<br>'+esc(p.note)):'')+'</span>'
+            + '<span style="color:#ff9a9a;cursor:pointer;flex:0 0 auto" onclick="removePriorPayment(\''+esc(l.id)+'\',\''+esc(p.id||'')+'\')">remove</span>'
+          + '</div>').join('')
+      : '')
+    + (_ov ? '<div style="font-size:12.5px;color:#ffc861;margin-top:6px">✎ Price adjusted on site'+(_qa.net!=null?(' · quoted '+fmt$(_qa.net)):'')+(_ov.note?('<br>'+esc(_ov.note)):'')+'</div>' : '')
+    + '<div class="row2" style="margin-top:10px">'
+    +   '<button class="btn ghost" onclick="adjustAmount(\''+esc(l.id)+'\')">✎ Adjust price</button>'
+    +   '<button class="btn ghost" onclick="addPriorPayment(\''+esc(l.id)+'\')">＋ Deposit paid</button>'
+    + '</div>'
     + (_ov ? '<div style="height:8px"></div><button class="btn ghost" onclick="clearAdjust(\''+esc(l.id)+'\')">Undo adjustment</button>' : '')
     + '</div>';
   // Install Spec table (read-only) — ASSEMBLED from data the office already
@@ -1176,7 +1217,10 @@ async function clearPayment(jobId){
 async function adjustAmount(jobId){
   const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
   const cur=(l.priceOverride&&typeof l.priceOverride.amount==='number')?l.priceOverride.amount:(quoteAmounts(l).net||'');
-  const v=prompt('Adjusted amount to collect ($):', cur===''?'':String(cur)); if(v===null) return;
+  // Wording matters: this is the JOB PRICE, not the balance. If someone types a
+  // deposit-reduced figure here AND the deposit is recorded as a prior payment,
+  // it comes off twice. Deposits belong on "＋ Deposit paid".
+  const v=prompt('Adjusted JOB PRICE ($) — the full price, before any deposit:', cur===''?'':String(cur)); if(v===null) return;
   const amt=Math.round(parseFloat(v)||0); if(!amt||amt<=0){ alert('Enter a valid amount.'); return; }
   const note=prompt('Reason for the change (required — the office will see this):',''); if(note===null) return;
   if(!note.trim()){ alert('A reason is required so the office knows why it changed.'); return; }
@@ -1259,6 +1303,50 @@ async function doPayment(jobId, method, amount){
   if(!confirm('Record '+fmt$(amount)+' '+label+' payment collected for this job?')) return;
   loading('Recording payment…');
   try{ await recordPayment(jobId, method, amount); }catch(e){ alert('Could not record: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+// Recording money that came in BEFORE today — a QuickBooks deposit invoice, a
+// Zelle that landed last week. Deliberately NOT the same store as lead.payment,
+// which is the single on-site collection slot the office reconciles; writing
+// deposits there would overwrite it and lose one of the two figures.
+async function addPriorPayment(jobId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
+  const v=prompt('Amount the customer has ALREADY paid ($):',''); if(v===null) return;
+  const amt=Math.round(parseFloat(v)||0);
+  if(!amt||amt<=0){ alert('Enter a valid amount.'); return; }
+  const q=quoteAmounts(l); const gross=(q.card!=null?q.card:q.net);
+  if(gross!=null && amt>gross && !confirm('That is more than the quoted '+fmt$(gross)+'. Record it anyway?')) return;
+  const m=prompt('How was it paid? (deposit / zelle / card / cash / check)','deposit'); if(m===null) return;
+  const note=prompt('Note (optional) \u2014 e.g. "QuickBooks deposit invoice, paid 8/10":','');
+  loading('Recording\u2026');
+  try{ await _savePriorPayment(jobId, amt, String(m||'deposit').trim().toLowerCase(), String(note||'').trim()); }
+  catch(e){ alert('Could not save: '+(e.message||e)); }
+  renderDetail(jobId);
+}
+async function _savePriorPayment(jobId, amount, method, note){
+  try{ await syncFromSP(); }catch(e){}
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
+  const acct=_msal&&_msal.getAllAccounts()[0]; const who=(acct&&(acct.name||acct.username))||'';
+  if(!Array.isArray(arr[i].priorPayments)) arr[i].priorPayments=[];
+  arr[i].priorPayments.push({ id:'pp_'+Date.now()+'_'+Math.round(Math.random()*1000000),
+    amount:amount, method:method||'deposit', note:note||'', by:who, at:new Date().toISOString() });
+  arr[i].updatedAt=new Date().toISOString();
+  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  await pushLeads();
+}
+async function removePriorPayment(jobId, ppId){
+  const l=getLeads().find(x=>x.id===jobId); if(!l) return;
+  const p=priorPayments(l).find(x=>String(x.id)===String(ppId)); if(!p) return;
+  if(!confirm('Remove the '+fmt$(p.amount)+' credit?\n\nThe amount to collect goes back UP by '+fmt$(p.amount)+'.')) return;
+  loading('Updating\u2026');
+  try{
+    try{ await syncFromSP(); }catch(e){}
+    const arr=getLeads(); const i=arr.findIndex(x=>x.id===jobId); if(i<0) throw new Error('job not found');
+    arr[i].priorPayments=priorPayments(arr[i]).filter(x=>String(x.id)!==String(ppId));
+    arr[i].updatedAt=new Date().toISOString();
+    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    await pushLeads();
+  }catch(e){ alert('Could not update: '+(e.message||e)); }
   renderDetail(jobId);
 }
 async function doClearPayment(jobId){
