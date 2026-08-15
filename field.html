@@ -61,8 +61,14 @@
   .lab{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#8b93a1;margin-bottom:6px}
   .scope{font-size:15px;line-height:1.55;white-space:pre-wrap;color:#dfe3e9}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
-  .pcell{aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid #262b36;background:#11141a;content-visibility:auto;contain-intrinsic-size:96px 96px;cursor:pointer}
+  .pcell{aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid #262b36;background:#11141a;content-visibility:auto;contain-intrinsic-size:96px 96px;cursor:pointer;position:relative}
   .pcell img{width:100%;height:100%;object-fit:cover;display:block}
+  /* field-21: a queued (on-phone, not-yet-uploaded) photo is marked on its tile */
+  .pcell.q{border-color:#8a6d2f}
+  .pcell .pq{position:absolute;right:3px;bottom:3px;font-size:11px;line-height:1;background:rgba(0,0,0,.6);border-radius:6px;padding:2px 4px}
+  .pqbar{background:#2b2415;border:1px solid #8a6d2f;border-radius:10px;padding:9px 11px;font-size:13px;line-height:1.35;color:#f0d9a5;margin:8px 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .pqbar .chip{margin-left:auto;flex:0 0 auto}
+  .pqok{color:#36c777;font-size:12.5px;margin:6px 0 2px}
   /* Photo lightbox (field-15) — photos open IN the app. target=_blank to the
      SharePoint download link gave iOS standalone a dead white overlay. */
   .lb{position:fixed;inset:0;z-index:50;background:rgba(4,6,10,.94);display:flex;align-items:center;justify-content:center;touch-action:none}
@@ -91,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-14 field-20';
+const BUILD = '2026-08-15 field-22';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -320,7 +326,7 @@ async function syncFromSP(){
 }
 // field-19 — WHICH PHOTOS A TECH MAY DELETE.
 // Only files the field app itself uploaded, which are named "<shot>__<epoch>_<name>"
-// (see uploadPhoto). That deliberately excludes the two other things living in
+// (see _photoPrep). That deliberately excludes the two other things living in
 // these same folders: pictures the CUSTOMER texted in (filed by the worker into
 // site/ as "Text photo <stamp>.jpg") and anything the office put there by hand.
 // A tech deleting his own blurry panel shot is the ask; a tech deleting the
@@ -356,12 +362,12 @@ async function loadJobPhotos(jobId){
 // three of four copies. Deleting a photo has to repaint all of them.
 function _photoGridHtml(ph){
   if(!ph || !ph.length) return '<div class="muted" style="font-size:13px">No photos yet.</div>';
-  return '<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt=""></div>').join('')+'</div>';
+  return '<div class="pgrid">'+ph.map((p,i)=>'<div class="pcell'+(p.queued?' q':'')+'" onclick="openLightbox('+i+')"><img src="'+esc(p.thumb||p.full)+'" loading="lazy" decoding="async" alt="">'+(p.queued?'<span class="pq">\ud83d\udcf1</span>':'')+'</div>').join('')+'</div>';
 }
 async function _photoGridRefresh(jobId){
   const el=document.getElementById('photos');
   if(el) el.innerHTML='<div class="muted" style="font-size:13px">Refreshing\u2026</div>';
-  try{ const ph=await loadJobPhotos(jobId); _ph=ph; _applyShotStatus(ph); if(el) el.innerHTML=_photoGridHtml(ph); }
+  try{ const ph=await loadJobPhotos(jobId); _ph=_photosPlusQueue(ph,jobId); _applyShotStatus(_ph); if(el) el.innerHTML=_photoGridHtml(_ph); _pqPaint(jobId); }
   catch(e){ if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn\u2019t load photos.</div>'; }
 }
 
@@ -463,10 +469,12 @@ function _lbShow(i){
   if(!img||!p) return;
   img.onerror=function(){ if(cap) cap.textContent='Could not load this photo — the link has gone stale. Close this and tap ↻ to refresh the job.'; };
   img.src=p.full||p.thumb||'';
-  // Only offered on the app's own uploads — see _fieldOwned().
+  // Delete: only on the app's own uploads (see _fieldOwned()). A QUEUED photo
+  // (field-21, still on the phone) gets "Remove" instead — off the queue, and
+  // gone for good since it never reached SharePoint.
   const del=document.getElementById('lb-del');
-  if(del){ del.style.display = p.own ? 'block' : 'none'; del.textContent='🗑 Delete'; }
-  if(cap) cap.textContent=(_ph.length>1?(_lbIdx+1)+' / '+_ph.length+' · ':'')+(p.cat?p.cat+' · ':'')+(p.name||'');
+  if(del){ del.style.display = (p.own||p.queued) ? 'block' : 'none'; del.textContent = p.queued ? '🗑 Remove' : '🗑 Delete'; }
+  if(cap) cap.textContent=(_ph.length>1?(_lbIdx+1)+' / '+_ph.length+' · ':'')+(p.cat?p.cat+' · ':'')+(p.name||'')+(p.queued?' · 📱 on this phone, not uploaded yet':'');
 }
 // field-19 (Jon, 2026-08-13: "technicians need to be able to delete pics that
 // they add in error"). Deletes the photo you are LOOKING AT — a bad shot is only
@@ -478,6 +486,17 @@ function _lbShow(i){
 async function deletePhoto(){
   const p=_ph[_lbIdx];
   if(!p) return;
+  if(p.queued){
+    // field-21: still on the phone, never uploaded. Removing it means it is
+    // gone for good \u2014 there is no recycle bin for a photo that never left.
+    if(!confirm('Remove this photo?\n\nIt has NOT been uploaded yet \u2014 removing it means it\u2019s gone for good.')) return;
+    await _pqRemove(p.qid);
+    _ph.splice(_lbIdx,1);
+    closeLightbox();
+    const el=document.getElementById('photos'); if(el) el.innerHTML=_photoGridHtml(_ph);
+    _applyShotStatus(_ph); _pqPaint(p.job);
+    return;
+  }
   if(!p.id || !_spDrive){ alert('This photo can\u2019t be deleted from the app \u2014 ask the office.'); return; }
   if(!p.own){ alert('This one wasn\u2019t taken in the field app \u2014 it may be a photo the customer texted in. Ask the office to remove it.'); return; }
   if(!confirm('Delete this photo?\n\n'+(p.name||'')+'\n\nIt comes off the job. The office can still recover it from the SharePoint recycle bin.')) return;
@@ -501,6 +520,141 @@ async function deletePhoto(){
 }
 function stepLightbox(d){ _lbResetZoom(); _lbShow(_lbIdx+d); }
 function closeLightbox(){ const d=document.getElementById('lb'); if(d) d.remove(); _lbS=1;_lbTx=0;_lbTy=0; }
+
+// ---------- field-21: OFFLINE PHOTO QUEUE ----------
+// Cohler + Silva installs, 2026-08-14: two dead-zone jobs. Photos went
+// camera → memory → upload, and a failed upload THREW THE PICTURE AWAY (the
+// only trace was a 12px "1 failed" status line). Silva's install photos ended
+// the day existing nowhere. So: every photo is now written to the app's own
+// on-phone store (IndexedDB — private to this app; NEVER the camera roll,
+// which is the point: job photos stay off the techs' personal phones) the
+// moment it is taken, and it only leaves the phone after SharePoint confirms
+// the upload. The shot checklist counts CAPTURED photos (📱 on phone /
+// ✓ uploaded), so a tech can verify he has everything BEFORE driving out of a
+// dead zone; the queue drains itself when signal returns (the 'online' event,
+// foregrounding the app, a 45-second timer, and after every new capture).
+const PQ_DB='gk_field_photoq';
+let _pqDb=null, _pqCache=[], _pqUrls={}, _pqBusy=false, _pqTimer=null;
+function _pqOpen(){
+  if(_pqDb) return Promise.resolve(_pqDb);
+  if(typeof indexedDB==='undefined') return Promise.reject(new Error('no idb'));
+  return new Promise(function(res,rej){
+    const r=indexedDB.open(PQ_DB,1);
+    r.onupgradeneeded=function(){ try{ r.result.createObjectStore('photos',{keyPath:'qid'}); }catch(e){} };
+    r.onsuccess=function(){ _pqDb=r.result; res(_pqDb); };
+    r.onerror=function(){ rej(r.error||new Error('idb open failed')); };
+  });
+}
+function _pqTx(mode,fn){
+  return _pqOpen().then(function(db){ return new Promise(function(res,rej){
+    const tx=db.transaction('photos',mode), req=fn(tx.objectStore('photos'));
+    tx.oncomplete=function(){ res(req?req.result:undefined); };
+    tx.onerror=function(){ rej(tx.error||new Error('idb tx')); };
+    tx.onabort =function(){ rej(tx.error||new Error('idb abort')); };
+  }); });
+}
+async function _pqLoad(){
+  try{ const rows=await _pqTx('readonly',function(st){ return st.getAll(); });
+    _pqCache=(rows||[]).sort(function(a,b){ return String(a.at).localeCompare(String(b.at)); });
+  }catch(e){ console.warn('[field] queue load',e); }
+}
+async function _pqAdd(rec){ await _pqTx('readwrite',function(st){ return st.put(rec); }); _pqCache.push(rec); }
+async function _pqStamp(rec){ try{ await _pqTx('readwrite',function(st){ return st.put(rec); }); }catch(e){} }
+async function _pqRemove(qid){
+  try{ await _pqTx('readwrite',function(st){ return st.delete(qid); }); }catch(e){}
+  _pqCache=_pqCache.filter(function(r){ return r.qid!==qid; });
+  if(_pqUrls[qid]){ try{ URL.revokeObjectURL(_pqUrls[qid]); }catch(e){} delete _pqUrls[qid]; }
+}
+function _pqForJob(job){ return _pqCache.filter(function(r){ return r.job===job; }); }
+function _pqUrl(rec){
+  if(!_pqUrls[rec.qid]){ try{ _pqUrls[rec.qid]=URL.createObjectURL(rec.blob); }catch(e){ return ''; } }
+  return _pqUrls[rec.qid];
+}
+// A queue record dressed as a photo, so the grid / lightbox / shot checklist
+// treat it exactly like an uploaded one. own:false — no SharePoint delete to
+// offer; the lightbox offers "Remove" (off the queue) instead via p.queued.
+function _pqEntry(rec){ const u=_pqUrl(rec); return {queued:1, qid:rec.qid, job:rec.job, name:rec.fname, cat:rec.folder, own:false, thumb:u, full:u, url:u}; }
+function _photosPlusQueue(ph, job){ return (ph||[]).concat(_pqForJob(job).map(_pqEntry)); }
+function _pqOpenJob(){ const m=/#job=([^&]+)/.exec(location.hash); return m?decodeURIComponent(m[1]):''; }
+// The Graph PUT, from a stored record. 90s abort: a dead-zone fetch can hang
+// for many minutes holding the whole queue; better to cut it and let the
+// retry timer have another go.
+async function _pqUpload(rec){
+  if(!_spDrive) throw new Error('no drive');
+  const path=SP_PHOTO_LIB+'/'+rec.job+'/'+rec.folder+'/'+rec.fname;
+  const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+  const tm=ctl?setTimeout(function(){ try{ ctl.abort(); }catch(e){} },90000):null;
+  try{
+    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/root:/'+encodeURI(path)+':/content',
+      { method:'PUT', headers:{ Authorization:'Bearer '+_gToken, 'Content-Type':rec.type||'image/jpeg' }, body:rec.blob, signal:ctl?ctl.signal:undefined });
+    if(!r.ok) throw new Error('upload '+r.status);
+  } finally { if(tm) clearTimeout(tm); }
+}
+// Flip an on-screen tile from "queued" to "uploaded" without a Graph round
+// trip — the object URL keeps rendering; own stays false until a real refresh
+// hydrates the driveItem id (delete needs that id anyway).
+function _pqMarkUploaded(rec){ for(const p of _ph){ if(p && p.qid===rec.qid) p.queued=0; } }
+async function _pqDrain(){
+  if(_pqBusy || !_pqCache.length) return;
+  _pqBusy=true;
+  const uploadedJobs={};
+  try{
+    // Signed in but the boot sync never ran (offline boot) — get the drive now.
+    if(!_spDrive){ try{ await spInit(); }catch(e){} }
+    if(!_spDrive && _spSite){ try{ const dr=await graphFetch('/sites/'+_spSite+'/drive'); _spDrive=dr.id; }catch(e){} }
+    let spins=0;
+    while(_pqCache.length && spins<_pqCache.length+8){
+      spins++;
+      const rec=_pqCache[0];
+      try{ await getTokenSilent(); }catch(e){}
+      try{
+        await _pqUpload(rec);
+        await _pqRemove(rec.qid);
+        uploadedJobs[rec.job]=1;
+        if(rec.job===_pqOpenJob()){ _pqMarkUploaded(rec); _applyShotStatus(_ph); }
+      }catch(e){
+        rec.tries=(rec.tries||0)+1; rec.lastErr=String((e&&e.message)||e);
+        await _pqStamp(rec);
+        // An HTTP 4xx means THIS file was refused, not that the network is
+        // down — rotate it to the back so one poisoned photo can't dam the
+        // queue. Anything else is signal-shaped: stop and let the timer retry.
+        if(/^upload 4/.test(rec.lastErr) && _pqCache.length>1){ _pqCache.push(_pqCache.shift()); continue; }
+        break;
+      }
+    }
+  } finally {
+    _pqBusy=false;
+    _pqSchedule();
+    const open=_pqOpenJob();
+    _pqPaint(open);
+    // Queue for the open job just emptied → one real refresh so tiles gain
+    // their driveItem ids (and the delete button).
+    if(open && uploadedJobs[open] && !_pqForJob(open).length){ try{ _photoGridRefresh(open); }catch(e){} }
+  }
+}
+function _pqSchedule(){ clearTimeout(_pqTimer); if(_pqCache.length) _pqTimer=setTimeout(function(){ _pqDrain(); },45000); }
+window.addEventListener('online', function(){ _pqDrain(); });
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) _pqDrain(); });
+// The amber bar under the photo buttons: how many shots are safe on the phone
+// and still waiting. Flips to a green "all uploaded" line the moment it empties
+// so the tech gets a positive signal, not just a bar that vanished.
+function _pqPaint(job){
+  const bar=document.getElementById('pq-bar');
+  if(!bar) return;
+  const n=job?_pqForJob(job).length:0;
+  if(n){
+    bar.dataset.had='1';
+    bar.innerHTML='<div class="pqbar">📱 '+n+' photo'+(n>1?'s':'')+' safe on this phone — will upload when signal returns.'
+      +'<button class="chip" onclick="_pqDrain()">Try now</button></div>';
+  } else {
+    bar.innerHTML = bar.dataset.had==='1' ? '<div class="pqok">All photos uploaded ✓</div>' : '';
+  }
+}
+// One line on the My Jobs list so a queue is never invisible from the home screen.
+function _pqListNote(){
+  const n=_pqCache.length;
+  return n?'<div class="pqbar">📱 '+n+' photo'+(n>1?'s':'')+' waiting to upload — keep the app open where there’s signal and they’ll go on their own.</div>':'';
+}
 
 // ---------- views ----------
 function loading(msg){ $app().innerHTML = '<div class="center"><div class="spin"></div><div class="muted">'+esc(msg||'Loading…')+'</div></div>'; }
@@ -554,6 +708,7 @@ function renderJobs(){
   $app().innerHTML = header('My Jobs')
     + '<div class="wrap">'
     + '<input class="srch" placeholder="Search name, address, phone…" value="'+esc(_search)+'" oninput="_search=this.value;renderJobs()" '+(_search?'autofocus':'')+'>'
+    + _pqListNote()
     + body + '</div>';
   if(_search){ const i=$app().querySelector('.srch'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
 }
@@ -669,12 +824,15 @@ function renderWalkdown(id){
     +   '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
     +   '<input type="file" id="ph-input-lib" accept="image/*" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
     +   '<div id="ph-status" class="muted" style="font-size:12.5px;margin:6px 0 2px"></div>'
+    +   '<div id="pq-bar"></div>'
     +   '<div id="photos"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
     + '</div>'
     + '</div>';
-  loadJobPhotos(l.id).then(ph=>{ _ph=ph; const el=document.getElementById('photos'); if(!el) return;
-    el.innerHTML = _photoGridHtml(ph);
+  loadJobPhotos(l.id).then(ph=>{ _ph=_photosPlusQueue(ph,l.id); const el=document.getElementById('photos'); if(!el) return;
+    el.innerHTML = _photoGridHtml(_ph);
+    _pqPaint(l.id);
   }).catch(()=>{});
+  _pqPaint(l.id);
   window.scrollTo(0,0);
 }
 // Show the free-text box only when "Other" is chosen.
@@ -842,6 +1000,7 @@ function renderDetail(id){
       + '<input type="file" id="ph-input" accept="image/*" capture="environment" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
       + '<input type="file" id="ph-input-lib" accept="image/*" multiple style="display:none" onchange="onPhotoPick(this,\''+esc(l.id)+'\')">'
       + '<div id="ph-status" class="muted" style="font-size:12.5px;margin:8px 0 2px"></div>'
+      + '<div id="pq-bar"></div>'
       + '<div class="row2" style="margin:6px 0 0">'
         + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\')">📸 Take other photos</button>'
         + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\',1)">🖼️ From Photos</button>'
@@ -850,11 +1009,13 @@ function renderDetail(id){
     + '</div>'
     + '</div>';
   loadJobPhotos(l.id).then(ph=>{
-    _ph=ph;
-    _applyShotStatus(ph);
+    _ph=_photosPlusQueue(ph,l.id);
+    _applyShotStatus(_ph);
     const el=document.getElementById('photos'); if(!el) return;
-    el.innerHTML=_photoGridHtml(ph);
+    el.innerHTML=_photoGridHtml(_ph);
+    _pqPaint(l.id);
   }).catch(()=>{ const el=document.getElementById('photos'); if(el) el.innerHTML='<div class="muted" style="font-size:13px">Couldn’t load photos.</div>'; });
+  _pqPaint(l.id);
   window.scrollTo(0,0);
 }
 function goJobs(){ _stopFldSms(); closeLightbox(); location.hash=''; renderJobs(); }
@@ -881,11 +1042,14 @@ async function graphPatch(path, bodyObj){
   const r=await fetch('https://graph.microsoft.com/v1.0'+path,{method:'PATCH',headers:{Authorization:'Bearer '+_gToken,'Content-Type':'application/json'},body:JSON.stringify(bodyObj)});
   if(!r.ok) throw new Error('PATCH '+r.status); return r.json().catch(()=>null);
 }
-// All photos land in the job's install/ folder (which the CRM already auto-pulls);
-// the shot TYPE is tagged as a "<key>__" filename prefix so the checklist can tell
-// which required shots are done without needing extra SharePoint folders.
-async function uploadPhoto(jobId, file, catKey){
-  if(!_spDrive) throw new Error('no drive');
+// All non-walkdown photos land in the job's install/ folder (which the CRM
+// already auto-pulls); the shot TYPE is tagged as a "<key>__" filename prefix
+// so the checklist can tell which required shots are done without needing
+// extra SharePoint folders.
+// field-21: this PREPS the queue record (resize + name + folder). The actual
+// Graph PUT lives in _pqUpload(), fed from the on-phone queue — see the
+// OFFLINE PHOTO QUEUE block above.
+async function _photoPrep(jobId, file, catKey){
   const conv = await resizeImage(file, 2048, 0.88);
   const tag = (catKey||'other').replace(/[^a-z0-9-]/gi,'');
   const fname = tag+'__'+Date.now()+'_'+(conv.name||'photo.jpg').replace(/[^A-Za-z0-9._-]/g,'_');
@@ -897,12 +1061,9 @@ async function uploadPhoto(jobId, file, catKey){
   // installed. The office also has an Operations mirror that copies install/
   // into "Completion pics" — so left alone, pre-quote walkdown pictures would
   // eventually be filed as completion evidence.
-  const folder = (tag === 'walkdown') ? 'site' : 'install';
-  const path = SP_PHOTO_LIB+'/'+jobId+'/'+folder+'/'+fname;    // CRM auto-pulls both folders
-  const r = await fetch('https://graph.microsoft.com/v1.0/drives/'+_spDrive+'/root:/'+encodeURI(path)+':/content',
-    { method:'PUT', headers:{ Authorization:'Bearer '+_gToken, 'Content-Type':conv.type||'image/jpeg' }, body:conv.blob });
-  if(!r.ok) throw new Error('upload '+r.status);
-  return true;
+  const folder = (tag === 'walkdown') ? 'site' : 'install';    // CRM auto-pulls both folders
+  return { qid:'q'+Date.now()+'_'+Math.random().toString(36).slice(2,8), job:jobId, folder:folder,
+           fname:fname, type:conv.type||'image/jpeg', blob:conv.blob, at:new Date().toISOString(), tries:0 };
 }
 let _photoCat='other';
 // Two hidden file inputs per screen, and the ONLY difference is the `capture`
@@ -917,14 +1078,38 @@ function shotPick(jobId, catKey, fromLibrary){
   const inp=document.getElementById(fromLibrary?'ph-input-lib':'ph-input');
   if(inp) inp.click();
 }
+// field-21: a picked photo is SAVED TO THE PHONE FIRST (IndexedDB), then the
+// queue drains in the background. Before this, the photo lived only in memory
+// between the camera and the Graph PUT — on the 2026-08-14 dead-zone jobs a
+// failed upload silently destroyed the picture. Saving is local and instant,
+// so this loop can't strand a tech; the upload happens whenever signal allows.
 async function onPhotoPick(input, jobId){
   const files=[...(input.files||[])]; input.value=''; const cat=_photoCat; _photoCat='other'; if(!files.length) return;
   const st=document.getElementById('ph-status');
-  try{ await getTokenSilent(); }catch(e){}
-  let ok=0,fail=0;
-  for(let i=0;i<files.length;i++){ if(st) st.textContent='Uploading '+(i+1)+' of '+files.length+'…'; try{ await uploadPhoto(jobId,files[i],cat); ok++; }catch(e){ console.warn('[field] photo',e); fail++; } }
-  if(st) st.textContent = ok+' uploaded'+(fail?(' · '+fail+' failed'):'');
-  await _photoGridRefresh(jobId);
+  let saved=0, direct=0, lost=0;
+  for(let i=0;i<files.length;i++){
+    if(st) st.textContent='Saving '+(i+1)+' of '+files.length+'…';
+    let rec=null;
+    try{ rec=await _photoPrep(jobId,files[i],cat); }
+    catch(e){ console.warn('[field] photo prep',e); lost++; continue; }
+    try{ await _pqAdd(rec); saved++; }
+    catch(e){
+      // No IndexedDB (shouldn't happen in a home-screen app) — fall back to a
+      // direct upload so the photo still has a chance right now.
+      console.warn('[field] queue add',e);
+      try{ try{ await getTokenSilent(); }catch(_e){} await _pqUpload(rec); direct++; }
+      catch(e2){ console.warn('[field] photo',e2); lost++; }
+    }
+  }
+  if(st) st.textContent = (saved+direct)+' saved'+(lost?(' · '+lost+' FAILED'):'');
+  if(lost) alert(lost+' photo'+(lost>1?'s':'')+' could not be saved OR uploaded. Take '+(lost>1?'them':'it')+' again — with the phone camera if this keeps happening — so nothing is lost.');
+  // Repaint from what we have locally — works with zero bars of signal.
+  _ph=_ph.filter(function(p){ return !p.queued; }).concat(_pqForJob(jobId).map(_pqEntry));
+  const el=document.getElementById('photos'); if(el) el.innerHTML=_photoGridHtml(_ph);
+  _applyShotStatus(_ph);
+  _pqPaint(jobId);
+  if(direct){ try{ await _photoGridRefresh(jobId); }catch(e){} }
+  _pqDrain();
 }
 // Required closeout shots (needed for direct AND platform closeouts — Qmerit/Treehouse/etc.).
 const INSTALL_SHOTS = [
@@ -937,10 +1122,18 @@ const INSTALL_SHOTS = [
   {key:'commissioning',  label:'Proof of commissioning'}
 ];
 function _shotDone(photos, key){ return (photos||[]).some(p=>p && typeof p.name==='string' && p.name.indexOf(key+'__')===0); }
+// field-21: three states per shot — ✓ uploaded (green), 📱 captured but still
+// on the phone (amber), ○ not taken. Both of the first two count toward
+// "N of 7": the checklist answers "do I HAVE the shot?", which is what the
+// tech needs to know before leaving a dead-zone job. The amber tells him the
+// upload part isn't finished yet.
 function _applyShotStatus(photos){
   let done=0;
-  INSTALL_SHOTS.forEach(s=>{ const el=document.getElementById('shot-'+s.key); const ok=_shotDone(photos,s.key); if(ok) done++;
-    if(el){ el.textContent=ok?'✓':'○'; el.style.color=ok?'#36c777':'#5d6675'; } });
+  INSTALL_SHOTS.forEach(s=>{ const el=document.getElementById('shot-'+s.key);
+    const up=(photos||[]).some(p=>p && !p.queued && typeof p.name==='string' && p.name.indexOf(s.key+'__')===0);
+    const q =(photos||[]).some(p=>p && p.queued && typeof p.name==='string' && p.name.indexOf(s.key+'__')===0);
+    if(up||q) done++;
+    if(el){ el.textContent=up?'✓':(q?'📱':'○'); el.style.color=up?'#36c777':(q?'#e8b34a':'#5d6675'); } });
   const c=document.getElementById('shot-count'); if(c) c.textContent=done+' of '+INSTALL_SHOTS.length;
 }
 // Safe single-lead write: re-pull fresh, modify, merge by id+updatedAt, PATCH the list item.
@@ -1193,22 +1386,55 @@ function _stampPaymentMilestone(lead, amount, isoNow){
     lead.milestones.paymentReceived = { done:true, date:isoNow.slice(0,10), amount:amount||0 };
   }
 }
+// field-22 (2026-08-15): payments are a LEDGER now. `lead.payments[]` gets an
+// APPEND on every collection; `lead.payment` stays maintained as a copy of the
+// latest entry so the office's legacy readers (job banner, paid-invoice email)
+// keep working. Before this, collecting a final payment OVERWROTE any earlier
+// recorded payment on the job. Mirrors the CRM's `_pcLedgerAppend` exactly.
+function _payLedgerAppend(leadObj, pay){
+  if(!Array.isArray(leadObj.payments) || !leadObj.payments.length){
+    leadObj.payments = (leadObj.payment && leadObj.payment.collectedAt) ? [Object.assign({},leadObj.payment)] : [];
+  }
+  leadObj.payments.push(pay);
+  leadObj.payment = Object.assign({},pay);
+}
+function _payLedgerTotal(l){
+  const led=((l&&Array.isArray(l.payments)&&l.payments.length)?l.payments:((l&&l.payment&&l.payment.collectedAt)?[l.payment]:[]))
+    .reduce(function(s,p){ const a=p&&Number(p.amount); return s+((isFinite(a)&&a>0)?Math.round(a):0); },0);
+  return led + priorPaid(l);
+}
 async function recordPayment(jobId, method, amount){
   try{ await syncFromSP(); }catch(e){}
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
   const now=new Date().toISOString();
-  arr[i].payment = { method:method, amount:amount||0, collectedAt:now };
-  _stampPaymentMilestone(arr[i], amount, now);
+  _payLedgerAppend(arr[i], { id:'pay_'+Date.now()+'_'+Math.round(Math.random()*1000000),
+    method:method, amount:amount||0, collectedAt:now });
+  // Milestone amount = TOTAL collected (ledger + deposits), matching the CRM.
+  _stampPaymentMilestone(arr[i], _payLedgerTotal(arr[i]), now);
   arr[i].updatedAt = now;
   localStorage.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
+// Undo = remove the LAST ledger entry only (field-22). Earlier payments and
+// deposits survive — clearing a mis-tap must not erase real money history.
 async function clearPayment(jobId){
   try{ await syncFromSP(); }catch(e){}
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) return;
-  delete arr[i].payment;
-  if(arr[i].milestones && arr[i].milestones.paymentReceived) delete arr[i].milestones.paymentReceived;
-  arr[i].updatedAt=new Date().toISOString();
+  const l=arr[i];
+  if(Array.isArray(l.payments) && l.payments.length){
+    l.payments.pop();
+    if(l.payments.length){
+      l.payment = Object.assign({}, l.payments[l.payments.length-1]);
+      _stampPaymentMilestone(l, _payLedgerTotal(l), new Date().toISOString());
+    } else {
+      delete l.payments; delete l.payment;
+      if(l.milestones && l.milestones.paymentReceived) delete l.milestones.paymentReceived;
+    }
+  } else {
+    delete l.payment;
+    if(l.milestones && l.milestones.paymentReceived) delete l.milestones.paymentReceived;
+  }
+  l.updatedAt=new Date().toISOString();
   localStorage.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
@@ -1350,7 +1576,7 @@ async function removePriorPayment(jobId, ppId){
   renderDetail(jobId);
 }
 async function doClearPayment(jobId){
-  if(!confirm('Undo the recorded payment?')) return;
+  if(!confirm('Undo the LAST recorded payment? Earlier payments and deposits on this job are kept.')) return;
   loading('Updating…');
   try{ await clearPayment(jobId); }catch(e){ alert(e.message||e); }
   renderDetail(jobId);
@@ -1464,6 +1690,12 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) c
     // hashchange fires — then route() lands on the list. refresh() still keeps
     // you on the job you're looking at; only a cold open comes home.
     if(location.hash){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){ location.hash=''; } }
+    // field-21: rehydrate the offline photo queue and start draining anything
+    // left over from a dead-zone job. Also ask the browser to treat our
+    // storage as persistent so iOS doesn't evict queued photos under pressure.
+    try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function(){}); }catch(e){}
+    try{ await _pqLoad(); }catch(e){}
+    if(_pqCache.length) _pqDrain();
     route();
   }catch(e){
     console.error('[field] boot', e);
