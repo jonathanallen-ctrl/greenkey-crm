@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-15a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-15b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2842,13 +2842,7 @@ function showPage(page) {
   else if (page==='files') { renderFilesPage(); }
   else if (page==='permitting') renderPermittingPage();
   else if (page==='scheduler') renderSchedulerPage();
-  else if (page==='payments') {
-    // Sidebar visits start clean; only openPaymentsFromJob() (the 💰 button on
-    // a job) sets the keep-flag, so the "Back to job" bar never shows stale.
-    if (!S._payReturnKeep) S.payReturnLeadId = null;
-    S._payReturnKeep = false;
-    renderPaymentsPage();
-  }
+  else if (page==='payments') renderPaymentsPage();   // return target is sticky (2026-08-15b)
   else if (page==='reports') renderReportsPage();
   else if (page==='tech') renderTechPage(S.techLeadId);
 }
@@ -12420,6 +12414,22 @@ function commitMaterialImport(){
 // ══════════════════════════════════════════════════════
 
 function openJobDetail(id) {
+  // ⚠ 2026-08-15b — ACTIVATE THE JOBS PAGE FIRST. This function only ever
+  // toggled the two views INSIDE page-jobs; called from any other page (the
+  // Payments page's job links, its ↩ Back-to-job button) it rendered the job
+  // into a hidden div and visibly did NOTHING — Jon: "The back button isn't
+  // working." Deliberately NOT showPage('jobs'): that branch resets to the
+  // pipeline view and would wipe the detail we're about to show. This is the
+  // page-switch plumbing only, done by hand.
+  if (S.page !== 'jobs') {
+    try { if (typeof stopSMSPolling === 'function') stopSMSPolling(); } catch (_) {}
+    S.page = 'jobs';
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const _pg = document.getElementById('page-jobs'); if (_pg) _pg.classList.add('active');
+    const _pt = document.getElementById('ptitle'); if (_pt) _pt.textContent = (typeof TITLES !== 'undefined' && TITLES.jobs) || 'Jobs';
+    const _lb = document.getElementById('topbarbtn-lbl'); if (_lb) _lb.textContent = 'New Job';
+    document.querySelectorAll('.ni').forEach(n => n.classList.toggle('active', n.dataset.page === 'jobs'));
+  }
   // Remember where the pipeline was scrolled so "back" returns to the same
   // spot (capture only works while the pipe view is still visible).
   try { const s = _pipeCaptureScroll(); if (s) _pipeSavedScroll = s; } catch(_){}
@@ -27686,15 +27696,17 @@ function _pcDismissUnmatched(upId){
 // Job ⇄ Payments navigation (2026-08-15, Jon: prepayments deliberately do NOT
 // live on the job — so the job links OUT to the Payments page, and the page
 // carries a "Back to <job>" button so the round trip is one tap each way.
+// 2026-08-15b: the return target is STICKY (Jon: "it should still let me go
+// back to the job that I came here from" even after touching other jobs).
+// It persists across sidebar visits and across using the button, and is only
+// ever REPLACED — by the next 💰 press on some job. The button is labeled
+// with the customer's name, so an older target reads as what it is.
 function openPaymentsFromJob(leadId){
   S.payReturnLeadId = leadId;
-  S._payReturnKeep = true;        // survives exactly one showPage('payments')
   navigate('payments');
 }
 function _pcReturnToJob(){
-  const id = S.payReturnLeadId;
-  S.payReturnLeadId = null;
-  if (id) openJobDetail(id);
+  if (S.payReturnLeadId) openJobDetail(S.payReturnLeadId);
 }
 
 function renderPaymentsPage(){
@@ -27798,8 +27810,8 @@ function renderPaymentsPage(){
   const th = 'text-align:left;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;padding:6px 10px;border-bottom:1px solid var(--border)';
   const card = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:18px';
   // ↩ Return-to-job (2026-08-15, Jon's ask): set by the 💰 Payments button on a
-  // job. Cleared when Payments is opened from the sidebar instead (showPage
-  // handles that), so the bar only appears when there is somewhere to go back to.
+  // job, STICKY for the session (2026-08-15b) — it survives sidebar visits and
+  // touching other jobs, and is only replaced by the next 💰 press.
   const _retLead = S.payReturnLeadId ? getLead(S.payReturnLeadId) : null;
   const returnBar = _retLead ? `<div style="margin-bottom:14px">
       <button class="btn btn-g" style="padding:6px 14px;font-size:13px" onclick="_pcReturnToJob()">↩ Back to ${escHtml(leadDisplayName(_retLead)||_retLead.id)}</button>
