@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -16734,7 +16734,8 @@ const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
   'cust-quote-accepted', 'cust-quote-declined',
   'web-lead',
-  'insp-sms'          // inspector replied to a permitting text (2026-07-20)
+  'insp-sms',         // inspector replied to a permitting text (2026-07-20)
+  'ops-folder-ambiguous' // same-surname folder collision — photos paused until a rename (2026-08-18c). Not customer activity, but the bell is the one surface someone actually watches.
 ]);
 function isCustomerNotif(n) { return !!(n && CUST_NOTIF_TYPES.has(n.type)); }
 // PER-USER ACKNOWLEDGMENT (2026-07-11). Customer notifications are shared
@@ -24035,11 +24036,42 @@ function _spFolderPrefixForSource(source) {
   if (s === 'treehouse') return 'Treehouse';
   return 'Website';
 }
+// Active leads belonging to a DIFFERENT customer with the same surname and
+// the same source prefix — the reason folder names ever need a first name
+// (Smith vs Smith, 2026-08-18). A second job for the SAME customer is not a
+// collision; they share a folder on purpose (Tim Dean, Sim Alli).
+function _sameSurnameSiblings(lead, cust){
+  const last = String((cust && (cust.lastName || cust.businessName)) || '').trim().toLowerCase();
+  if (!last) return [];
+  const prefix = _spFolderPrefixForSource(lead && lead.source);
+  const out = [];
+  try {
+    for (const l of getLeads()){
+      if (!l || l.id === (lead && lead.id) || l.deleted || l.stage === 'archived' || l.stage === 'not-won') continue;
+      if (_spFolderPrefixForSource(l.source) !== prefix) continue;
+      const c = (l.customerId && typeof getCustomer === 'function') ? getCustomer(l.customerId) : null;
+      if (c && cust && c.id === cust.id) continue;
+      const ln = String((c && (c.lastName || c.businessName)) || l.customerLastName || '').trim().toLowerCase();
+      if (ln && ln === last) out.push({ leadId: l.id, first: String((c && c.firstName) || l.customerFirstName || '').trim() });
+    }
+  } catch(_){}
+  return out;
+}
 function _buildSPLeadFolderName(lead, customer) {
   if (!customer) return null;
   const last = (customer.lastName || customer.businessName || '').trim();
   if (!last) return null;
   const prefix = _spFolderPrefixForSource(lead && lead.source);
+  // 2026-08-18c — Smith vs Smith: the moment a DIFFERENT customer with the
+  // same surname (same prefix) also has an active job, the name the CRM
+  // creates and expects carries the first name, matching Sherri's own
+  // disambiguation ("Qmerit - Smith, Jennifer Project"). Unique surnames keep
+  // the short form, so nothing changes for the normal case. Lookups on jobs
+  // whose folder predates the collision fall back to the short form (see
+  // _hydrateJobFolderFromSP) until it is renamed — the bell notice says
+  // exactly what to rename it to.
+  const first = (customer.firstName || '').trim();
+  if (first && _sameSurnameSiblings(lead, customer).length) return `${prefix} - ${last}, ${first} Project`;
   return `${prefix} - ${last} Project`;
 }
 function _shouldCopyTemplates(source) {
@@ -24946,7 +24978,10 @@ async function _hydrateOpsFolderFromSP(jobId, force){
       }
       if (matches.length) break;   // found the job's folder — stop looking
     }
-    if (!matches.length) return { added: 0 };   // job not filed in Operations yet — do NOTHING
+    if (!matches.length) {
+      _opsAmbiguousWarn(jobId, _fctx);          // says so out loud if the cause is a same-surname collision
+      return { added: 0, ambiguous: _fctx.ambiguous || null };   // not filed yet — or ambiguous — do NOTHING
+    }
     // Walk matched folders; flag files inside a "Completion pics" subfolder.
     // $expand=thumbnails (2026-08-18): Graph renders a JPEG thumbnail even for
     // HEIC files, which Chrome/Edge cannot display natively — Chase's phone
@@ -25115,17 +25150,8 @@ function _opsFolderCtx(lead, cust){
   if (!last) return null;
   const first = String((cust && cust.firstName) || '').trim();
   const prefix = _spFolderPrefixForSource(lead && lead.source);
-  let sibs = false;
-  try {
-    sibs = getLeads().some(l => {
-      if (!l || l.id === lead.id || l.deleted || l.stage === 'archived' || l.stage === 'not-won') return false;
-      if (_spFolderPrefixForSource(l.source) !== prefix) return false;
-      const c = l.customerId && (typeof getCustomer === 'function') ? getCustomer(l.customerId) : null;
-      const ln = String((c && (c.lastName || c.businessName)) || l.customerLastName || '').trim();
-      return !!ln && ln.toLowerCase() === last.toLowerCase() && (!c || c.id !== (cust && cust.id));
-    });
-  } catch(_){}
-  return { last, first, prefix, sibs };
+  const sibList = (typeof _sameSurnameSiblings === 'function') ? _sameSurnameSiblings(lead, cust) : [];
+  return { last, first, prefix, sibs: sibList.length > 0, sibList };
 }
 function _opsNameMatch(folderName, ctx){
   if (!ctx || !ctx.last) return false;
@@ -25143,7 +25169,55 @@ function _opsNameMatch(folderName, ctx){
   if (!(parts[0] === L || parts[0].endsWith(' ' + L))) return false;   // "smith", or full-name "darius johnson"
   const marker = parts[1] || '';
   if (marker) return !!F && (marker === F || F.startsWith(marker) || marker.startsWith(F));
-  return !ctx.sibs;   // unmarked folder is fine only while this surname+prefix is unique
+  // Unmarked folder is fine only while this surname+prefix is unique. When it
+  // isn't, remember WHY we refused so the callers can say so out loud instead
+  // of silently filing nothing (2026-08-18b, Jon: "how will the same name
+  // issue resolve going forward if we forget to apply a first name?").
+  if (ctx.sibs) { ctx.ambiguous = String(folderName || '').trim(); return false; }
+  return true;
+}
+// Surfaced once per job per session — from the mirror sweep, the ops pull on
+// job open, and the manual Pull-install-pics button. The failure mode is
+// deliberately fail-SAFE (nothing files, nothing mixes); this makes sure it
+// is never fail-SILENT.
+const _opsAmbiguousWarned = {};
+function _opsAmbiguousWarn(jobId, ctx){
+  if (!ctx || !ctx.ambiguous) return;
+  if (!_opsAmbiguousWarned[jobId]) {
+    _opsAmbiguousWarned[jobId] = 1;
+    try { toast('⚠ Two active "' + ctx.last + '" jobs — the Operations folder "' + ctx.ambiguous
+      + '" has no first name, so photos are NOT being filed or pulled for it. Rename it "'
+      + ctx.last + ', First… Project" (like "Smith, Jennifer Project") and they\'ll flow again on their own.', 'warning', 12000); } catch(_){}
+    console.warn('[GK] Ops folder ambiguous — refused to guess:', jobId, ctx.ambiguous);
+  }
+  // Persistent, team-visible bell notice (2026-08-18c, Jon: "somewhere we can
+  // do something about it if it happens when no one is actively in that file").
+  // It lives in the synced gk_notifications store, so it reaches every
+  // machine's bell, survives reloads, and needs a human ack to leave. One
+  // live notice per surname+prefix: quiet while an unacked one exists, quiet
+  // for 7 days after an ack, then re-raises if the folder is STILL unmarked.
+  try {
+    const gkey = ('ops-ambig|' + ctx.prefix + '|' + ctx.last).toLowerCase();
+    const now = Date.now();
+    const live = getNotifications().some(n => n && n.type === 'ops-folder-ambiguous' && n.groupKey === gkey &&
+      (!Object.keys(n.ackedBy || {}).length || (now - new Date(n.at || n.createdAt || 0).getTime()) < 7 * 86400000));
+    if (live) return;
+    const lead = (typeof getLead === 'function') ? getLead(jobId) : null;
+    const mine = ((typeof leadDisplayName === 'function' && lead && leadDisplayName(lead)) || jobId) + ' (' + jobId + ')';
+    const others = (ctx.sibList || []).map(s => ((s.first ? s.first + ' ' : '') + ctx.last + ' (' + s.leadId + ')')).join(', ');
+    const target = ctx.prefix + ' - ' + ctx.last + ', ' + (ctx.first || 'First') + ' Project';
+    upsertNotification({
+      id: 'ops-ambig-' + now,
+      type: 'ops-folder-ambiguous',
+      groupKey: gkey,
+      title: '📁 "' + ctx.last + '" folder needs a first name — photos paused',
+      description: 'Two active "' + ctx.last + '" jobs: ' + mine + (others ? ' and ' + others : '') + '. '
+        + 'The SharePoint folder "' + ctx.ambiguous + '" has no first name, so the CRM won\'t file or pull photos for it. '
+        + 'Rename each ' + ctx.last + ' folder (Operations, and Active Leads if it exists there) with its owner\'s first name — '
+        + 'this job\'s should be "' + target + '". Photos resume on their own after the rename.',
+      jobId: jobId
+    });
+  } catch(_){}
 }
 async function _opsPhotoMirrorSweep() {
   if (_opsMirrorBusy) return;
@@ -25231,7 +25305,7 @@ async function _opsPhotoMirrorSweep() {
           jobFolder = (ch.value || []).find(it => it.folder && it.name !== 'Archive' && _opsNameMatch(it.name || '', _fctx)) || null;
         } catch(_){}
       }
-      if (!jobFolder) continue;             // Sherri hasn't made it yet — photos wait
+      if (!jobFolder) { _opsAmbiguousWarn(lead.id, _fctx); continue; }   // not made yet — or ambiguous (warned) — photos wait
       // 3. Find (or create ONLY) the "Completion pics" subfolder.
       let cp = null;
       try {
@@ -25294,6 +25368,10 @@ async function pullInstallPicsNow(jobId) {
       return;
     }
     if (r && r.error) { toast('Pull failed: ' + r.error, 'error'); return; }
+    if (r && r.ambiguous) {
+      toast('⚠ Can\'t tell whose folder "' + r.ambiguous + '" is — two active jobs share this last name and the folder has no first name. Rename it like "Smith, Jennifer Project" in SharePoint, then pull again.', 'warning', 12000);
+      return;
+    }
     const n = (r && r.added) || 0;
     toast(n
       ? n + ' new file' + (n > 1 ? 's' : '') + ' pulled from the inspection folder'
@@ -25321,10 +25399,26 @@ async function _hydrateJobFolderFromSP(jobId, force){
     const cust = lead.customerId ? getCustomer(lead.customerId) : null;
     const folderName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
     if (!folderName) return { added: 0 };                     // no last name yet → no folder
-    const rootPath = `${SP_ACTIVE_LEADS_PATH}/${folderName}`;
-    const folderResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(rootPath)}`, {
-      headers: { 'Authorization': `Bearer ${_gToken}` }
-    });
+    // 2026-08-18c: on a surname collision the builder returns the marked name
+    // ("… - Smith, Jennifer Project"). A job whose folder predates the
+    // collision still has the SHORT name on disk — fall back to it so the
+    // pull keeps working until the rename the bell notice asks for happens.
+    const _names = [folderName];
+    const _plain = folderName.replace(/,\s*[^,]+\s+Project$/i, ' Project');
+    if (_plain !== folderName) _names.push(_plain);
+    // …and the reverse: if the collision has since ENDED (other job archived),
+    // the builder is back to the short name but the folder on disk may still
+    // carry the ", First" mark from the rename. Try that form too.
+    const _first0 = String((cust && cust.firstName) || '').trim();
+    const _marked = _first0 ? _plain.replace(/\s+Project$/i, ', ' + _first0 + ' Project') : '';
+    if (_marked && !_names.includes(_marked)) _names.push(_marked);
+    let folderResp = null;
+    for (const _nm of _names) {
+      folderResp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(SP_ACTIVE_LEADS_PATH + '/' + _nm)}`, {
+        headers: { 'Authorization': `Bearer ${_gToken}` }
+      });
+      if (folderResp.status !== 404) break;
+    }
     if (folderResp.status === 404) return { added: 0 };       // folder not created yet
     if (!folderResp.ok) throw new Error('Folder lookup failed: ' + folderResp.status);
     const folder = await folderResp.json();
@@ -25870,6 +25964,17 @@ const SMS_TEMPLATES_DEFAULT = {
   intro: {
     label: 'Intro',
     body:  "Hey {firstName}! 👋 This is {repName} over at GreenKey — we're the local electrical team{sourceSuffix}. Just wanted to reach out personally and let you know we received your info and we're already working on your quote. Feel free to reply here with any questions — talk soon! 😊"
+  },
+  // 2026-08-18 (Jon): "Very frequently I have to text people that call us
+  // requesting information and it's usually the same thing." Wording is JON'S
+  // OWN, taken verbatim from the message he sent Joe on 8/18 (job-specific
+  // dryer/splitter paragraph left out — that part gets typed per customer).
+  // The 😊 is deliberate (Jon: "I like the smiling face emoji") — it flips the
+  // encoding to UCS-2, so this runs ~6 segments instead of 3; his call.
+  // Editable like every template in Settings → Text Templates.
+  siteInfo: {
+    label: 'Request site info (quote prep)',
+    body:  "Hi {firstName}, this is {repName} with GreenKey. Thank you for reaching out for a quote. Here is the information that I will need from you in order to complete it:\n\n1. Full name\n2. Email\n3. Street address\n4. Pic of your electrical panel with the door open so that the breakers and load list are clearly visible\n5. Pic of the location where you'd like the outlet to be installed\n6. Short video starting at your electrical panel and walking to the location where you want the outlet\n\nAs soon as I have this information and pics, I'll get the quote right over to you.\n\nWe look forward to hearing from you! 😊"
   },
   permitFollowup: {
     label: 'Post-permit follow-up',
@@ -26509,6 +26614,23 @@ async function loadCallThread(key) {
   }
 }
 
+// Prefill the site-info request into a Calls-page thread box (2026-08-18).
+// The value keeps its line breaks — a single-line input displays them cramped
+// but SENDS them intact, so the customer receives the numbered list formatted.
+// Greeting is generic ("Hi, it's Jon…") because an unrouted caller usually has
+// no name on file yet; it's a normal editable value — fix it up before Send.
+function _callsInsertSiteInfo(key){
+  const inp = document.getElementById('callreply-' + key);
+  if (!inp) return;
+  const tpl = (getSMSTemplates().siteInfo || {}).body || '';
+  const body = substituteTemplate(tpl, {
+    firstName: 'there',
+    repName: (S.user?.name || 'Jonathan').split(' ')[0],
+    source: '', techName: '', etaMinutes: '', jobAddress: ''
+  }).replace(/^Hi there, /, 'Hi, ');
+  inp.value = body;
+  inp.focus();
+}
 async function sendCallReply(key, digits) {
   const inp = document.getElementById('callreply-' + key);
   const msg = (inp?.value || '').trim();
@@ -27125,6 +27247,7 @@ function renderCallsPage() {
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
           <input id="callreply-${escHtml(openKey)}" class="jd-fi" style="flex:1;font-size:12.5px;padding:6px 9px" placeholder="Reply as GreenKey…" onkeydown="if(event.key==='Enter'){event.preventDefault();sendCallReply('${escHtml(openKey)}','${escHtml(digits)}');}">
+          <button class="btn btn-g" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="_callsInsertSiteInfo('${escHtml(openKey)}')" title="Prefill the site-info request (name, address, email, panel photo, charger-spot photo, walk video) — edit before sending">📋 Site info</button>
           <button class="btn btn-p" style="padding:6px 14px;font-size:12px;white-space:nowrap" onclick="sendCallReply('${escHtml(openKey)}','${escHtml(digits)}')">Send</button>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Goes out from the GreenKey number. Once you create a job for them, this whole conversation moves onto it.</div>
@@ -28308,6 +28431,7 @@ function _bellTypeMeta(type) {
     case 'cust-quote-declined':   return { ico:'❌', accent:'var(--red,#dc2626)' };
     case 'cust-sms':              return { ico:'💬', accent:'var(--blue,#3498db)' };
     case 'web-lead':              return { ico:'🌐', accent:'var(--green,#22c55e)' };
+    case 'ops-folder-ambiguous':  return { ico:'📁', accent:'var(--amber,#f59e0b)' };
     default:                      return { ico:'🔔', accent:'var(--text-muted)' };
   }
 }
