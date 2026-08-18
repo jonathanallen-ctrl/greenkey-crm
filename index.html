@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18h</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12438,7 +12438,23 @@ function openJobDetail(id) {
   const dv = document.getElementById('jobs-detail-view');
   if (pv) pv.style.display = 'none';
   if (dv) dv.style.display = 'block';
-  renderJobDetail(id);
+  // ⚠ A render that throws mid-template is INVISIBLE — the view is already
+  // switched on, so the user sees the LAST job's page (punch-list bug,
+  // 2026-08-14; the rail's `acceptedId` regression, 2026-08-18). Never again:
+  // if the render dies, say so ON the page, with the error, instead of lying
+  // with a stale one.
+  try {
+    renderJobDetail(id);
+  } catch (e) {
+    console.error('[GK] renderJobDetail threw:', id, e);
+    if (dv) dv.innerHTML = `<div style="padding:28px;max-width:560px">
+      <div style="font-size:16px;font-weight:700;color:var(--red,#dc2626);margin-bottom:8px">⚠ This job's page failed to render</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px">Job <strong>${escHtml(id)}</strong> hit an error while drawing — the data is fine, the page code tripped. Screenshot this and tell Jon/Claude:</div>
+      <div style="font-family:var(--mono);font-size:12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:10px 12px;white-space:pre-wrap;margin-bottom:14px">${escHtml(String(e && (e.stack || e.message) || e).slice(0, 600))}</div>
+      <button class="btn btn-g" onclick="closeJobDetail()">← Back to pipeline</button>
+    </div>`;
+    return;
+  }
   // Begin auto-refresh of SMS thread + consent state for this lead.
   try { if (typeof startSMSPolling === 'function') startSMSPolling(id); } catch (_) {}
   // Fire-and-forget poll for any pending install-confirmation response (Outlook-button flow).
@@ -12829,8 +12845,22 @@ function _chipEditorHTML(leadId, key){
           </div>
         </div>` : '';
 
+      // Confirmation status + the MANUAL confirm (2026-08-18i, Sherri): a
+      // customer who texts/calls "we're good" instead of clicking the email
+      // link gets confirmed right here — same record flip, same Outlook
+      // tentative→busy patch as the link click. Offered while pending AND on
+      // a reschedule request (they sometimes ask, then say the date works
+      // after all).
+      const _confLine = _c ? row(
+        `<span style="font-size:12px;color:var(--text-muted)">Confirmation: <strong style="color:${_c.status==='confirmed'?'var(--green)':'var(--text-primary)'}">${
+          _c.status==='confirmed' ? '✓ confirmed' + (_c.manual?' (recorded manually)':'') + (_c.respondedAt?' · '+mdy(_c.respondedAt):'') :
+          _c.status==='reschedule_requested' ? 'asked to reschedule' :
+          'request sent' + (_c.sentAt?' '+mdy(_c.sentAt):'') + ' — awaiting reply'}</strong></span>`
+        + (_c.status!=='confirmed' ? btnP('✓ Mark confirmed — they replied another way', `_manualConfirmSched('${leadId}','${im.date}')`) : '')
+      ) : '';
       return _chipEditorShell('Install date & time',
         _msgBlock +
+        _confLine +
         row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
             `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
             (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
@@ -13130,7 +13160,7 @@ function _renderJobRail(lead){
     // With multi-option emails, make accepted-vs-open readable at a glance:
     // the label leads the row, and once ANY quote on the job is accepted,
     // sibling options still out with the customer say so.
-    const jobHasAccepted = quotes.some(x => (acceptedId===x.id) || x.status==='approved' || x.status==='contingent-approved');
+    const jobHasAccepted = quotes.some(x => _accSet.has(x.id) || x.status==='approved' || x.status==='contingent-approved');
     const openHint = (!isAcc && jobHasAccepted && (q.status==='delivered'||q.status==='draft'))
       ? ` · <span style="color:var(--amber,#f59e0b)">option still open</span>` : '';
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)${isAcc?';border-left:3px solid var(--green);padding-left:7px':''}">
@@ -32124,6 +32154,35 @@ async function _pollJobSchedConfirm(leadId) {
     if (dirty) saveLeads(arr);
     if (changed) { try { if (typeof renderJobDetail === 'function' && S.jobDetailId === leadId) renderJobDetail(leadId); } catch(_){} }
   } catch (e) { console.warn('[GK] job confirmation poll failed:', e); }
+}
+
+// Manual confirmation (2026-08-18i — Sherri: customer says "we're good" by
+// text or phone instead of clicking the email link). Does EXACTLY what the
+// link-click path does: flips the confirmation record to 'confirmed' and
+// patches the Outlook event tentative (hashed bars) → busy (solid), plus a
+// job note recording how it came in. The worker-side token stays live and is
+// simply ignored from here on (the poller only watches 'pending' records);
+// a late link-click by the customer is harmless.
+async function _manualConfirmSched(leadId, dateKey){
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
+  const conf = arr[i].scheduling && arr[i].scheduling.confirmations && arr[i].scheduling.confirmations[dateKey];
+  if (!conf) { toast('No confirmation request exists for that date — the Outlook button sends one.', 'warning'); return; }
+  const how = prompt('Confirmed how? (optional — e.g. "texted back yes", "confirmed on the phone")', '');
+  if (how === null) return;
+  conf.status = 'confirmed';
+  conf.respondedAt = new Date().toISOString();
+  conf.manual = true;
+  conf.confirmedBy = (S.user && S.user.name) || '';
+  if (String(how).trim()) conf.manualNote = String(how).trim();
+  arr[i].jobNotes = (arr[i].jobNotes || []).concat([{ id: 'note-conf-' + Date.now().toString(36),
+    text: 'Install ' + mdy(dateKey) + ' confirmed by the customer' + (String(how).trim() ? ' — ' + String(how).trim() : '') + ' (recorded manually, not via the email link).',
+    authorName: (S.user && S.user.name) || 'CRM', timestamp: new Date().toISOString() }]);
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  if (conf.outlookEventId) { try { await _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId); } catch(_){} }
+  toast('Confirmed ✓ — the calendar block is now solid.', 'success');
+  try { if (S.jobDetailId === leadId && typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
+  try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch(_){}
 }
 
 // Flip a created Outlook event tentative → busy once the customer confirms.
