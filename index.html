@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18l</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12645,10 +12645,24 @@ function _renderPreInstallStrip(lead) {
     states.push({ state:'pending', icon:'📅', label:'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip:'No install date set. Click to set the day & time.' });
   }
 
-  // Final Inspection — manual upload-or-toggle.
-  states.push(ms.finalInspPassed?.done
-    ? { state: 'done',    icon: '✓', label: 'Inspection',  meta: mdy((ms.finalInspPassed.date||'')), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
-    : { state: 'pending', icon: '·', label: 'Inspection',  meta: '', click: `clickInspectionChip('${lead.id}')`, tip: 'Click to upload pass cert or mark passed without doc.' });
+  // Final Inspection — manual upload-or-toggle. 2026-08-18k (Jon): the chip
+  // now says WHERE the inspection stands without opening it — "request sent",
+  // the scheduled/picked day, "call them", "link expired". Passed stays the
+  // green ✓ it always was; everything pre-pass stays amber, only the meta talks.
+  if (ms.finalInspPassed?.done) {
+    states.push({ state: 'done', icon: '✓', label: 'Inspection', meta: mdy((ms.finalInspPassed.date||'')), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' });
+  } else {
+    const _ins = lead.inspection || null;
+    let _insMeta = '', _insTip = 'Click to upload pass cert or mark passed without doc.';
+    if (_ins) {
+      if (_ins.status === 'scheduled')      { _insMeta = '📅 ' + (_ins.pickedDate||''); _insTip = 'Inspection scheduled for ' + (_ins.pickedDate||'') + (_ins.manual ? ' (recorded manually)' : '') + '. Click for options.'; }
+      else if (_ins.status === 'picked')    { _insMeta = 'picked ' + (_ins.pickedDate||''); _insTip = 'Customer picked ' + (_ins.pickedDate||'') + ' — book it with the county, then it counts as scheduled. Click for options.'; }
+      else if (_ins.status === 'call_me')   { _insMeta = 'call them'; _insTip = 'Customer asked for a call to schedule the inspection. Click for options.'; }
+      else if (_ins.status === 'expired')   { _insMeta = 'link expired'; _insTip = 'The scheduling link expired without a pick — call them or send a fresh link. Click for options.'; }
+      else                                  { _insMeta = 'request sent' + (_ins.sentAt ? ' ' + mdy(String(_ins.sentAt)) : ''); _insTip = 'Scheduling email sent — waiting on the customer to pick a day. Click for options.'; }
+    }
+    states.push({ state: 'pending', icon: '·', label: 'Inspection', meta: _insMeta, click: `clickInspectionChip('${lead.id}')`, tip: _insTip });
+  }
 
   // Platform closeout — only for platform-pay sources (Qmerit/Electrum/Treehouse).
   // This is what clears the "Awaiting Closeout" dashboard widget, so it must stay
@@ -12666,9 +12680,27 @@ function _renderPreInstallStrip(lead) {
   // Storage key stays `lead.invoiced` so reports/history are untouched.
   const _invDone = isJobInvoiced(lead);
   const _invAmt  = getJobValueAmount(lead);
-  states.push(_invDone
-    ? { state: 'done',    icon: '💰', label: 'Paid', meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: (lead.invoiced && lead.invoiced.auto ? 'Marked automatically when payments covered the total. ' : '') + 'Revenue counted — click to view or undo.' }
-    : { state: 'pending', icon: '·',  label: 'Paid',  meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Marks itself when recorded payments cover the job total — or click to mark paid and count the revenue now.' });
+  // 2026-08-18k (Jon): the chip goes GREEN as soon as the money is IN — not
+  // only after the revenue flag lands. Money-in = recorded payments cover the
+  // customer total (or the Job Value, when no direct total is computable).
+  // The auto-Paid sweep sets the flag moments later anyway; the chip just
+  // stops lagging it. A partial payment shows "$X of $Y" so it's never
+  // mistaken for paid-in-full.
+  const _paidTot = (typeof _pcPaidTotal === 'function') ? _pcPaidTotal(lead) : 0;
+  const _balP    = (typeof _pcBalance === 'function') ? _pcBalance(lead) : null;
+  const _moneyIn = _paidTot > 0 && (_balP === 0 || (_balP === null && _invAmt > 0 && _paidTot >= _invAmt));
+  if (_invDone || _moneyIn) {
+    states.push({ state: 'done', icon: '💰', label: 'Paid', meta: (_invAmt || _paidTot) ? ('$' + Math.round(_invAmt || _paidTot).toLocaleString()) : '', click: `openChipEditor('${lead.id}','invoiced')`,
+      tip: _invDone
+        ? (lead.invoiced && lead.invoiced.auto ? 'Marked automatically when payments covered the total. ' : '') + 'Revenue counted — click to view or undo.'
+        : 'Payment received — recorded payments cover the total. The revenue flag marks itself on the next sweep; click to view.' });
+  } else if (_paidTot > 0) {
+    const _totP = (typeof _pcJobTotal === 'function') ? _pcJobTotal(lead) : null;
+    states.push({ state: 'pending', icon: '💰', label: 'Paid', meta: '$' + Math.round(_paidTot).toLocaleString() + (_totP ? ' of $' + Math.round(_totP).toLocaleString() : ''), click: `openChipEditor('${lead.id}','invoiced')`,
+      tip: 'Partial — $' + Math.round(_paidTot).toLocaleString() + ' collected' + (_balP != null ? ', $' + Math.round(_balP).toLocaleString() + ' to go' : '') + '. Click for details.' });
+  } else {
+    states.push({ state: 'pending', icon: '·', label: 'Paid', meta: _invAmt ? ('$' + _invAmt.toLocaleString()) : '', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Marks itself when recorded payments cover the job total — or click to mark paid and count the revenue now.' });
+  }
 
   const chipColor = (s) => ({
     done:       'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
@@ -12858,13 +12890,26 @@ function _chipEditorHTML(leadId, key){
           'request sent' + (_c.sentAt?' '+mdy(_c.sentAt):'') + ' — awaiting reply'}</strong></span>`
         + (_c.status!=='confirmed' ? btnP('✓ Mark confirmed — they replied another way', `_manualConfirmSched('${leadId}','${im.date}')`) : '')
       ) : '';
+      // 2026-08-18l (Jon, live on a real reschedule): the desk had the date/
+      // time boxes but NOT the action that actually moves the calendar — he
+      // set 2:00 PM here and the Outlook event stayed at 1:00. The boxes only
+      // write the CRM milestone (say so, plainly); the RESCHEDULE button runs
+      // the real machinery — scheduleInOutlook() prefilled with this
+      // appointment, which replaces the old Outlook event (move, not
+      // duplicate) and sends a fresh Confirm/Reschedule email.
+      const _schedAppts = (typeof getAppts === 'function') ? getAppts(lead) : [];
+      const _instAppt = _schedAppts.find(a => a && a.type === 'installation' && !a.done && a.outlookEventId)
+                     || _schedAppts.find(a => a && a.type === 'installation' && !a.done) || null;
       return _chipEditorShell('Install date & time',
         _msgBlock +
         _confLine +
+        row(btnP('📅 Reschedule — move the calendar event &amp; re-send confirmation',
+                 `scheduleInOutlook('${leadId}'${_instAppt ? `,'${_instAppt.id}'` : ''})`)) +
+        note('Opens the booking window prefilled — creating it REPLACES the old Outlook event and emails the customer a fresh Confirm/Reschedule request.') +
         row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
             `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
             (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
-        note('Set the day &amp; time here, or use the Outlook button to book it on the calendar.')+
+        note('⚠ These two boxes update the CRM record ONLY — they do not move the Outlook event and the customer is not notified. Use the Reschedule button above for the real move.')+
         _replyBlock);
     }
     case 'inspection': {
