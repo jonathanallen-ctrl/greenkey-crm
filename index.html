@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18n</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18o</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -9372,18 +9372,27 @@ function calcQuoteTotals(q){
   // reconciles to the subtotal line); for quick quotes it's the pre-engineered
   // value. Round either way.
   const _partsSum = rMat + rAllow + rLabor + rRental;
-  const rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.ceil(q.laborAndMaterials||0);
+  let rLM = (q.type==='detailed' && _partsSum>0) ? _partsSum : Math.ceil(q.laborAndMaterials||0);
   // 2026-08-05: discounts subtract from the whole, not from L&M — the shown
   // lines are L&M, Qmerit, permit, then the discounts as their own negatives.
+  // ── $5 ROUND-UP (2026-08-18o, Jon: "round totals up to the nearest $5 —
+  // cleaner and easier to deal with"). The bump is folded INTO the L&M line so
+  // the printed lines still add up to the printed TOTAL exactly. Each payment
+  // tier is then lifted to its own $5 mark, so every number a customer can pay
+  // ends in 0 or 5. Discounts still round DOWN (never give money away by
+  // rounding). Display/aggregate only, same as the whole-dollar rule it
+  // extends — stored quote fields and margin math untouched.
+  const _ceil5 = (x) => Math.ceil(x / 5) * 5;
+  let preProcessingTotal = rLM + rQmerit + rPermit - rVet - rMan;  // reconciles with the shown lines
+  const _pad5 = _ceil5(preProcessingTotal) - preProcessingTotal;
+  if (_pad5 > 0) { rLM += _pad5; preProcessingTotal += _pad5; }
   const lmAfterDiscount = rLM - rVet;                    // legacy compat only
-  const preProcessingTotal = rLM + rQmerit + rPermit - rVet - rMan;  // reconciles with the shown lines
   const _round2 = (x) => Math.round(x * 100) / 100;
-  // Per-tier processing fees — each computed independently from the base, so
-  // the math is exact (avoids the "discount-off-discounted-price" rounding
-  // weirdness of the old non-card-discount model).
-  const ccFee   = Math.ceil(preProcessingTotal * ccBufferPct  / 100);
-  const achFee  = Math.ceil(preProcessingTotal * achBufferPct / 100);
-  const cashFee = Math.ceil(preProcessingTotal * cashBufferPct/ 100);
+  // Per-tier totals land on their own $5 marks; the fee is whatever lifts the
+  // base there (base is already a multiple of 5, so fees are too).
+  const ccFee   = ccBufferPct   ? (_ceil5(preProcessingTotal * (1 + ccBufferPct  / 100)) - preProcessingTotal) : 0;
+  const achFee  = achBufferPct  ? (_ceil5(preProcessingTotal * (1 + achBufferPct / 100)) - preProcessingTotal) : 0;
+  const cashFee = cashBufferPct ? (_ceil5(preProcessingTotal * (1 + cashBufferPct/ 100)) - preProcessingTotal) : 0;
   const ccTotal   = preProcessingTotal + ccFee;
   const achTotal  = preProcessingTotal + achFee;
   const cashTotal = preProcessingTotal + cashFee;
@@ -12918,6 +12927,21 @@ function _chipEditorHTML(leadId, key){
           }${_c.respondedAt ? ' · ' + mdy(_c.respondedAt) : ''}</div>
           <div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap">“${escHtml(_c.note)}”</div>
         </div>` : '';
+      // Scheduling correspondence, IN the desk (2026-08-18o, Jon: replies sent
+      // from here "aren't captured anywhere for anyone to see" — they ARE in
+      // Job Notes, but nobody working the schedule reads Job Notes). Pull the
+      // exchange — the customer's inbound notes and our ✉ Emailed replies —
+      // out of jobNotes and show the last few right where the office works.
+      const _corrNotes = (lead.jobNotes || []).filter(n => n && typeof n.text === 'string'
+        && (n.text.indexOf('✉ Emailed') === 0 || /\(customer\)\s*$/.test(String(n.authorName || ''))));
+      const _corrBlock = _corrNotes.length ? `
+        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;padding:8px 11px;margin-bottom:12px">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px">Correspondence on this job (${_corrNotes.length})</div>
+          ${_corrNotes.slice(-3).map(n => `<div style="font-size:12px;line-height:1.45;padding:4px 0;border-top:1px solid var(--border)">
+            <span style="color:var(--text-muted)">${escHtml((n.authorName || '').replace(/\s*\(customer\)\s*$/,''))}${/\(customer\)\s*$/.test(String(n.authorName||'')) ? ' (customer)' : ''} · ${mdy(String(n.timestamp || ''))}:</span>
+            <span style="color:var(--text-primary);white-space:pre-wrap">${escHtml(String(n.text).replace(/^✉ Emailed [^\n]*\n\n?/, '✉ ').slice(0, 320))}${String(n.text).length > 340 ? '…' : ''}</span>
+          </div>`).join('')}
+        </div>` : '';
 
       const _replyBlock = _cEmail ? `
         <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
@@ -12954,6 +12978,7 @@ function _chipEditorHTML(leadId, key){
                      || _schedAppts.find(a => a && a.type === 'installation' && !a.done) || null;
       return _chipEditorShell('Install date & time',
         _msgBlock +
+        _corrBlock +
         _confLine +
         row(btnP('📅 Reschedule — move the calendar event &amp; re-send confirmation',
                  `scheduleInOutlook('${leadId}'${_instAppt ? `,'${_instAppt.id}'` : ''})`)) +
@@ -32135,6 +32160,38 @@ async function openSchedInOutlook(_specOk) {
         console.warn('[GK] Could not delete the old Outlook event (leaving it on the calendar):', e);
         toast('New event created, but the OLD Outlook event could not be removed — delete it from the calendar by hand.', 'warning');
       }
+    }
+    // ── A rebooking RESOLVES the old confirmation state (2026-08-18o, Matt
+    // Dean): the red "Reschedule requested" chip used to survive the
+    // reschedule itself — the stale record sat on the old state forever.
+    // Stale pending/reschedule records for OTHER dates are removed (they
+    // describe the replaced event). If no fresh confirmation email is being
+    // sent, ask whether the customer already agreed (Jon's flow: agreed by
+    // email/text) — OK writes a manual 'confirmed' record so the chip goes
+    // straight to ✅ Confirmed; Cancel leaves a clean 📅 Scheduled.
+    if (_isInstall) {
+      try {
+        const _arr2 = getLeads(); const _i2 = _arr2.findIndex(l => l.id === lead.id);
+        if (_i2 >= 0) {
+          if (!_arr2[_i2].scheduling) _arr2[_i2].scheduling = {};
+          if (!_arr2[_i2].scheduling.confirmations) _arr2[_i2].scheduling.confirmations = {};
+          const _confs = _arr2[_i2].scheduling.confirmations;
+          for (const _d of Object.keys(_confs)) {
+            const _c = _confs[_d];
+            if (_c && _c.status !== 'confirmed' && (_d !== date || !_wantConfirm)) delete _confs[_d];
+          }
+          if (!_wantConfirm) {
+            const _who = _cust ? custFullName(_cust) : (lead.customerName || 'the customer');
+            if (confirm(`Has ${_who} already AGREED to ${date} ${start} (by email, text, or phone)?\n\nOK — mark it CONFIRMED: solid calendar block, green chip.\nCancel — leave it scheduled but unconfirmed.`)) {
+              _confs[date] = { status: 'confirmed', manual: true, sentAt: new Date().toISOString(),
+                respondedAt: new Date().toISOString(), confirmedBy: (S.user && S.user.name) || '',
+                outlookEventId: eventId || '', outlookCalId: (tgt && tgt.id) || '' };
+            }
+          }
+          _arr2[_i2].updatedAt = new Date().toISOString();
+          saveLeads(_arr2);
+        }
+      } catch (e) { console.warn('[GK] confirmation-state resolve failed (non-fatal):', e); }
     }
     toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''} — it will sync to your Outlook app.`, 'success');
     closeSchedModal();
