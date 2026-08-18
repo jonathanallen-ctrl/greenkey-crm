@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18h</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -9763,7 +9763,7 @@ function acceptQuoteFromBuilder(qid){
   // ⚠ acceptJobQuote() is a TOGGLE — calling it on the already-accepted quote
   // would UN-accept it. Cannot normally happen here (this button only shows at
   // status 'delivered'), but guard anyway rather than rely on that.
-  if (!(lead && lead.acceptedQuoteId === qid)) {
+  if (!(lead && getAcceptedQuoteIds(lead).includes(qid))) {
     try { acceptJobQuote(q.leadId, qid); } catch(e){ console.warn('[GK] accept from builder failed:', e); return; }
   }
   try {
@@ -12725,9 +12725,9 @@ function _chipEditorHTML(leadId, key){
       if(quotes.length){
         // Job HAS quotes (CRM-built or recorded outside). Approve = Accept the
         // specific winning quote — that's how it knows WHICH one with multiples.
-        const accId=lead.acceptedQuoteId;
+        const accSet=new Set(getAcceptedQuoteIds(lead));   // multi-scope accepts (2026-08-18g)
         const qrows=quotes.map(q=>{
-          const isAcc=(accId===q.id)||q.status==='approved'||q.status==='contingent-approved';
+          const isAcc=accSet.has(q.id)||q.status==='approved'||q.status==='contingent-approved';
           const qd=q.createdAt?new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
           const lbl=`<span style="flex:1;min-width:0;font-size:12.5px"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qd?' · '+qd:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')}</span>`:''} — <strong>$${_quoteNet(q).toLocaleString()}</strong> <span style="color:var(--text-muted)">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</span></span>`;
           return row(lbl + (isAcc
@@ -12845,14 +12845,17 @@ function _chipEditorHTML(leadId, key){
       // "inspection" already clicks.
       const _insp = lead.inspection || null;
       const _inspLine = _insp
-        ? row(`<span style="font-size:12px;color:var(--text-muted)">Customer scheduling: <strong style="color:var(--text-primary)">${
+        ? row(`<span style="font-size:12px;color:var(--text-muted)">${_insp.status==='scheduled'?'Inspection':'Customer scheduling'}: <strong style="color:var(--text-primary)">${
+            _insp.status==='scheduled' ? '✓ scheduled ' + (_insp.pickedDate||'') + (_insp.manual?' (recorded manually)':'') :
             _insp.status==='picked' ? '✓ picked ' + (_insp.pickedDate||'') :
             _insp.status==='call_me' ? 'asked for a call' :
             _insp.status==='expired' ? 'link expired — call them' :
             'email sent ' + mdy(String(_insp.sentAt||'')) + ', awaiting pick'}</strong></span>`
+            + btn('📅 Set / change date', `_inspRecordManual('${leadId}')`)
             + btn('📧 Send a fresh link', `resendInspectionScheduling('${leadId}')`))
         : row(btnP('📧 Send inspection scheduling email',`openInspReviewModal('${leadId}')`)
-            + note('Emails the customer their install photos + the pick-a-day calendar, and texts them to check their inbox. Opens the photo review first — nothing sends until you click Send there.'));
+            + btn('📅 Record date — booked outside the email flow', `_inspRecordManual('${leadId}')`)
+            + note('Emails the customer their install photos + the pick-a-day calendar, and texts them to check their inbox. Opens the photo review first — nothing sends until you click Send there. Already booked it by phone or on the AHJ portal? Record the date instead.'));
       return _chipEditorShell('Final Inspection', _inspLine
         + row(fi.done
         ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${mdy((fi.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
@@ -12929,6 +12932,53 @@ function _quoteJobNet(q){
   const fee = (typeof q.qmeritFee === 'number' && isFinite(q.qmeritFee) && q.qmeritFee > 0) ? q.qmeritFee : 0;
   return fee ? Math.max(0, Math.round(n - fee)) : n;
 }
+// ── MULTI-SCOPE ACCEPTS (2026-08-18g, Isaac Scott) ─────────────────────────
+// One job can carry TWO scopes of work: his panel swap was DIRECT ($2,550,
+// customer pays us) and his EV install ran through QMERIT ($1,300 to GreenKey,
+// the platform pays us). Accepting used to be a single slot that overwrote the
+// Job Value. Now `lead.acceptedQuoteIds[]` holds every accepted scope, and the
+// legacy `lead.acceptedQuoteId` is maintained as the most recent DIRECT accept
+// (platform only when no direct exists) — so the field app collects the
+// customer-owed scope and every legacy reader keeps working. The money stays
+// honest by source: REVENUE (Job Value) is additive across all scopes;
+// the CUSTOMER BALANCE counts direct scopes only — the customer never owed the
+// platform's share. QuickBooks owns platform collections (Jon 8/18): a
+// platform scope is "satisfied" when the Closeout chip is marked, not when
+// money the CRM can't see arrives.
+function getAcceptedQuoteIds(lead){
+  if (lead && Array.isArray(lead.acceptedQuoteIds) && lead.acceptedQuoteIds.length) return lead.acceptedQuoteIds.slice();
+  return (lead && lead.acceptedQuoteId) ? [lead.acceptedQuoteId] : [];
+}
+function getAcceptedQuotes(lead){
+  return getAcceptedQuoteIds(lead).map(id => (typeof getQuote === 'function') ? getQuote(id) : null).filter(Boolean);
+}
+function _quoteIsPlatform(q){
+  const plats = (typeof PLATFORM_PAY_SOURCES !== 'undefined') ? PLATFORM_PAY_SOURCES : ['Qmerit','Electrum','Treehouse'];
+  return !!(q && plats.includes(q.source));
+}
+// direct  = customer-facing net of direct scopes (what the CUSTOMER owes us)
+// revenue = sum of job-nets across ALL scopes (what counts as booked revenue)
+function _acceptedScopeTotals(lead){
+  let direct = 0, revenue = 0, nDirect = 0, nPlatform = 0;
+  for (const q of getAcceptedQuotes(lead)){
+    revenue += _quoteJobNet(q);
+    if (_quoteIsPlatform(q)) nPlatform++;
+    else { direct += _quoteNet(q); nDirect++; }
+  }
+  return { direct, revenue, nDirect, nPlatform };
+}
+// Keep the legacy single slot pointing at the scope whose money the CUSTOMER
+// owes — most recent direct accept, else most recent accept of any kind.
+function _syncAcceptedPointer(leadObj){
+  const ids = Array.isArray(leadObj.acceptedQuoteIds) ? leadObj.acceptedQuoteIds : [];
+  if (!ids.length){ delete leadObj.acceptedQuoteIds; delete leadObj.acceptedQuoteId; return; }
+  const qs = ids.map(id => (typeof getQuote === 'function') ? getQuote(id) : null).filter(Boolean);
+  const direct = qs.filter(q => !_quoteIsPlatform(q));
+  const pick = direct.length ? direct[direct.length - 1] : qs[qs.length - 1];
+  if (pick) leadObj.acceptedQuoteId = pick.id;
+  if (ids.length === 1) delete leadObj.acceptedQuoteIds;   // collapse back to the legacy single slot
+}
+
 function getJobValue(lead){
   return (lead && lead.jobValue && typeof lead.jobValue === 'object') ? lead.jobValue : null;
 }
@@ -13034,7 +13084,9 @@ function _renderJobRail(lead){
   const srcTag = jv
     ? (jv.source==='quote' && jv.quoteId
         ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">from quote ${escHtml(jv.quoteId)}${jv.backfilled?' (prior)':''}</div>`
-        : (jv.source==='manual' ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">manually entered</div>` : ''))
+        : (jv.source==='quote-sum'
+        ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">sum of ${getAcceptedQuoteIds(lead).length} accepted scopes</div>`
+        : (jv.source==='manual' ? `<div style="font-size:10.5px;color:var(--text-muted);margin-top:4px">manually entered</div>` : '')))
     : '';
   const valueSec = `<div class="jd-sec"><div class="jd-sb" style="padding:14px 16px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:2px">Job Value</div>
@@ -13061,9 +13113,9 @@ function _renderJobRail(lead){
     ${addr?'':'<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Add a site address to enable map views.</div>'}
   </div></div>`;
   const quotes=getQuotes().filter(q=>q.leadId===id).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
-  const acceptedId=lead.acceptedQuoteId;
+  const _accSet=new Set(getAcceptedQuoteIds(lead));    // multi-scope accepts (2026-08-18g)
   const qRows = quotes.length ? quotes.map(q=>{
-    const isAcc = (acceptedId===q.id) || q.status==='approved' || q.status==='contingent-approved';
+    const isAcc = _accSet.has(q.id) || q.status==='approved' || q.status==='contingent-approved';
     // An invoiced quote is finished business: it should not still be offering
     // "Accept" (Clifford Noe looked unfinished for exactly this reason), and it
     // must not be deletable — deleting it would orphan a real invoice number.
@@ -13180,13 +13232,37 @@ async function _loadJobRailMap(leadId){
 // and fire the pre-install tasks (811/materials) like the normal approval path.
 function acceptJobQuote(leadId, quoteId){
   const lead=getLead(leadId); const q=getQuotes().find(x=>x.id===quoteId); if(!lead||!q) return;
-  if(lead.acceptedQuoteId===quoteId){
-    // Undo: un-mark the winner. Also revert the quote's status to 'delivered'
-    // IF we set it to approved on accept (don't touch a customer-driven accept).
+  const _accIds=getAcceptedQuoteIds(lead);
+  if(_accIds.includes(quoteId)){
+    // Undo: un-mark THIS scope (others stay accepted — 2026-08-18g). Revert the
+    // quote's status to 'delivered' IF we set it to approved on accept (don't
+    // touch a customer-driven accept). With scopes remaining, Job Value re-sums.
     const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
-    if(i>=0){ delete arr[i].acceptedQuoteId; arr[i].updatedAt=new Date().toISOString(); saveLeads(arr); }
+    if(i>=0){
+      arr[i].acceptedQuoteIds=_accIds.filter(x=>x!==quoteId);
+      _syncAcceptedPointer(arr[i]);
+      arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
+    }
     try{ if(q.status==='approved' && !q.customerActionAt && !q.external){ upsertQuote({...getQuote(quoteId), status:'delivered', updatedAt:new Date().toISOString()}); } }catch(_){}
+    const _rest=getAcceptedQuotes(getLead(leadId));
+    if(_rest.length===1) setJobValueFromQuote(leadId, _quoteJobNet(_rest[0]), _rest[0].id);
+    else if(_rest.length>1) setJobValue(leadId, _rest.reduce((s,x)=>s+_quoteJobNet(x),0), {source:'quote-sum'});
     renderJobDetail(leadId); return;
+  }
+  // Another scope already accepted → Add (additive scopes, Isaac Scott) or
+  // Replace (a re-quote of the same work). confirm() can't offer three ways,
+  // so: OK = ADD, Cancel = asked again whether to REPLACE.
+  if(_accIds.length){
+    const _tots=_acceptedScopeTotals(lead);
+    const _sum=_tots.revenue+_quoteJobNet(q);
+    if(confirm(`This job already has ${_accIds.length===1?'an accepted quote':_accIds.length+' accepted quotes'}.\n\nADD this one as an ADDITIONAL scope of work?\nJob Value becomes $${_sum.toLocaleString()} (all accepted scopes added together).\n\nOK = add as additional scope.\nCancel = other options.`)){
+      _applyAcceptedScopes(leadId, quoteId, _accIds.concat([quoteId]), _sum);
+      return;
+    }
+    if(confirm(`REPLACE instead? This quote becomes the ONLY accepted one (Job Value $${_quoteJobNet(q).toLocaleString()}) — use for a re-quote of the same work.\n\nOK = replace. Cancel = do nothing.`)){
+      _applyAcceptedScopes(leadId, quoteId, [quoteId], _quoteJobNet(q));
+    }
+    return;
   }
   const cur=getJobValueAmount(lead);
   const _net=_quoteJobNet(q);
@@ -13225,6 +13301,28 @@ function acceptJobQuote(leadId, quoteId){
   renderJobDetail(leadId);
   // The card has moved columns — repaint the board so it doesn't sit in its old
   // one until the next navigation.
+  try{ if(S.page==='jobs' && !S.jobDetailId && typeof renderPipeline==='function') renderPipeline(); }catch(_){}
+}
+// Add/Replace tail of the multi-scope accept (2026-08-18g). Same steps as a
+// plain accept — stage advance from early stages, quoteApproved milestone,
+// quote → approved, pre-install tasks — but the accepted SET and the summed
+// Job Value are written explicitly. Single lead write + one setJobValue write,
+// same debounce discipline as the original.
+function _applyAcceptedScopes(leadId, quoteId, ids, jobValueAmt){
+  const q=getQuote(quoteId); if(!q) return;
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId); if(i<0) return;
+  arr[i].acceptedQuoteIds=ids.slice();
+  _syncAcceptedPointer(arr[i]);
+  const _early=['lead-received','info-gathering','estimating','quote-delivered'];
+  if(_early.includes(arr[i].stage)){ arr[i].stage='quote-approved'; arr[i].stageAt=new Date().toISOString(); }
+  arr[i].updatedAt=new Date().toISOString();
+  saveLeads(arr);
+  if(ids.length>1) setJobValue(leadId, jobValueAmt, {source:'quote-sum'});
+  else setJobValueFromQuote(leadId, jobValueAmt, quoteId);
+  _setMilestone(leadId,'quoteApproved',true);
+  try{ if(q.status!=='approved' && q.status!=='contingent-approved'){ upsertQuote({...getQuote(quoteId), status:'approved', updatedAt:new Date().toISOString()}); } }catch(_){}
+  try{ if(typeof _autoCreatePreInstallTasks==='function') _autoCreatePreInstallTasks(q); }catch(_){}
+  renderJobDetail(leadId);
   try{ if(S.page==='jobs' && !S.jobDetailId && typeof renderPipeline==='function') renderPipeline(); }catch(_){}
 }
 
@@ -13292,7 +13390,14 @@ function saveExternalQuote(leadId, quoteId){
     const _lead=getLead(leadId);
     if (isPending && ex.status!=='invoiced') {
       // No longer the accepted quote — un-mark it (Job Value left as-is).
-      if (_lead?.acceptedQuoteId===quoteId) { try{ upsertLead({..._lead, acceptedQuoteId:null}); }catch(_){} }
+      if (_lead && getAcceptedQuoteIds(_lead).includes(quoteId)) {
+        try{
+          const _u={..._lead, acceptedQuoteIds:getAcceptedQuoteIds(_lead).filter(x=>x!==quoteId)};
+          if(!_u.acceptedQuoteIds.length){ _u.acceptedQuoteIds=undefined; _u.acceptedQuoteId=null; }
+          else _syncAcceptedPointer(_u);
+          upsertLead(_u);
+        }catch(_){}
+      }
       // ALSO clear the derived "Quote Approved" status chip. The pre-install
       // strip reads `latestApproved || ms.quoteApproved?.done`, and accepting
       // stamps that milestone — so without this the chip stayed green after
@@ -26748,6 +26853,34 @@ function _inspModalDone() {
 // by sendInspectionScheduling() only once a new email has actually gone out;
 // backing out at the modal leaves the job exactly as it was.
 let _inspResendPrev = null;
+// Record an inspection scheduled OUTSIDE the email flow (2026-08-18h, Jon:
+// "we need the ability to schedule an inspection manually if it is done
+// outside of the email process") — booked by phone with the county, on the
+// AHJ portal, or agreed with the customer directly. Writes the same
+// `lead.inspection` record the customer-pick flow uses (status 'scheduled',
+// flagged manual) so the Final Inspection panel tells one coherent story,
+// plus a job note for the trail. It does NOT create the "book with county"
+// task — a manually recorded date is already booked by definition.
+function _inspRecordManual(leadId){
+  const cur = (getLead(leadId) || {}).inspection || {};
+  const d = prompt('Inspection date (MM/DD/YYYY) — as already booked with the county/customer:', cur.pickedDate || '');
+  if (d === null) return;
+  const m = String(d).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) { toast('Enter the date as MM/DD/YYYY', 'warning'); return; }
+  const yyyy = m[3].length === 2 ? '20' + m[3] : m[3];
+  const disp = String(m[1]).padStart(2,'0') + '/' + String(m[2]).padStart(2,'0') + '/' + yyyy;
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
+  arr[i].inspection = { ...(arr[i].inspection || {}), status: 'scheduled', pickedDate: disp,
+    manual: true, recordedBy: (S.user && S.user.name) || '', recordedAt: new Date().toISOString() };
+  arr[i].jobNotes = (arr[i].jobNotes || []).concat([{ id: 'note-insp-' + Date.now().toString(36),
+    text: 'Electrical inspection scheduled for ' + disp + ' — recorded manually (booked outside the email flow).',
+    authorName: (S.user && S.user.name) || 'CRM', timestamp: new Date().toISOString() }]);
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  toast('Inspection date recorded — ' + disp, 'success');
+  renderJobDetail(leadId);
+}
+
 function resendInspectionScheduling(leadId) {
   const lead = (typeof getLead === 'function') ? getLead(leadId) : null;
   const prev = (lead && lead.inspection) || {};
@@ -26924,6 +27057,25 @@ async function _inspFetchB64(url) {
   const blob = await r.blob();
   return await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
 }
+// Authorized Graph fetch of a photo's JPEG rendition by item id (2026-08-18h).
+// The 'large' thumbnail content endpoint returns real JPEG bytes for ANY
+// format SharePoint can render — including HEIC the browser cannot decode —
+// with a Bearer header instead of a pre-signed URL, so it can never be stale.
+async function _inspB64ViaGraphThumb(f) {
+  if (!f || !f.spDriveItemId || !_spDrive) throw new Error('no SharePoint item id');
+  try {
+    if (typeof _msal !== 'undefined' && _msal) {
+      const accts = _msal.getAllAccounts();
+      if (accts && accts.length) { const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES }); if (tr && tr.accessToken) _gToken = tr.accessToken; }
+    }
+  } catch (_) {}
+  if (!_gToken) throw new Error('no Graph token');
+  const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${f.spDriveItemId}/thumbnails/0/large/content`,
+    { headers: { Authorization: 'Bearer ' + _gToken } });
+  if (!r.ok) throw new Error('thumbnail ' + r.status);
+  const blob = await r.blob();
+  return await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
+}
 // Shrink a photo for email attachment (~1280px, q0.8 → 150–300 KB) so seven
 // shots stay comfortably inside Graph's message-size ceiling.
 async function _inspShrinkB64(url) {
@@ -27021,8 +27173,19 @@ async function sendInspectionScheduling(leadId) {
         const b64 = await _inspShrinkB64(_inspImgSrc(files[i]));
         atts.push({ '@odata.type': '#microsoft.graph.fileAttachment', name: 'installation-photo-' + (i + 1) + '.jpg', contentType: 'image/jpeg', contentBytes: b64 });
       } catch (e) {
-        console.warn('[GK] inspection photo failed:', files[i].name, e);
-        failed.push(files[i].name || 'unnamed photo');
+        // 2026-08-18h — LAST-RESORT PATH, and the reliable one for HEIC: fetch
+        // the JPEG rendition straight from Graph, authorized, by item id. No
+        // dependence on stored/expiring thumbnail URLs, no browser HEIC
+        // decode. Brian Solomon's April .heic survived 18f because its record
+        // never got a usable thumbUrl — this path doesn't need one.
+        try {
+          const b64 = await _inspB64ViaGraphThumb(files[i]);
+          atts.push({ '@odata.type': '#microsoft.graph.fileAttachment', name: 'installation-photo-' + (i + 1) + '.jpg', contentType: 'image/jpeg', contentBytes: b64 });
+          console.warn('[GK] inspection photo attached via Graph rendition:', files[i].name);
+        } catch (e2) {
+          console.warn('[GK] inspection photo failed:', files[i].name, e, e2);
+          failed.push(files[i].name || 'unnamed photo');
+        }
       }
     }
     // ⚠ 2026-08-05 — DO NOT put the silent skip back. This used to be
@@ -27588,7 +27751,8 @@ function _applyStripePayment(row) {
   const at  = row.paidAt || now;
   _pcLedgerAppend(lead, { id: 'pay_' + Date.now() + '_' + Math.round(Math.random()*1e6),
     method: 'card-link', amount: amt, collectedAt: at, stripeSessionId: row.sessionId || '' });
-  if (!['Qmerit','Electrum','Treehouse'].includes(lead.source)) {
+  if (!['Qmerit','Electrum','Treehouse'].includes(lead.source)
+      || ((typeof _acceptedScopeTotals === 'function') && _acceptedScopeTotals(lead).nDirect > 0)) {
     if (!lead.milestones) lead.milestones = {};
     lead.milestones.paymentReceived = { done: true, date: String(at).slice(0,10), amount: _pcPaidTotal(lead) };
   }
@@ -27842,15 +28006,17 @@ function _pcPaidTotal(l){
   }, 0);
   return led + _pcFieldDeposits(l);
 }
-// The customer-facing job total: on-site override wins, else the ACCEPTED
-// quote's no-fee (net) figure. null when neither exists — a balance can then
-// honestly not be computed, and callers must show "—", never $0.
+// The CUSTOMER-facing job total: on-site override wins, else the sum of the
+// accepted DIRECT scopes' no-fee (net) figures — a platform scope's money
+// comes from Qmerit/Electrum/Treehouse, never the customer, so it must NOT
+// appear in what we expect the customer to pay (2026-08-18g, Isaac Scott:
+// $2,550 panel direct + $1,300 via Qmerit — he owes $2,550, not $3,850).
+// null when nothing is computable — callers show "—", never a fake $0.
 function _pcJobTotal(l){
   if (l && l.priceOverride && typeof l.priceOverride.amount === 'number' && isFinite(l.priceOverride.amount)) return Math.round(l.priceOverride.amount);
-  const q = (l && l.acceptedQuoteId && typeof getQuote === 'function') ? getQuote(l.acceptedQuoteId) : null;
-  if (!q) return null;
-  const n = (typeof _quoteNet === 'function') ? _quoteNet(q) : (q.quoteTotal || 0);
-  return isFinite(Number(n)) ? Math.round(Number(n)) : null;
+  const t = (typeof _acceptedScopeTotals === 'function') ? _acceptedScopeTotals(l) : { nDirect: 0 };
+  if (!t.nDirect) return null;                 // platform-only or nothing accepted → customer owes us nothing computable
+  return Math.round(t.direct);
 }
 function _pcBalance(l){
   const t = _pcJobTotal(l);
@@ -27874,18 +28040,47 @@ function _pcBalance(l){
 // history all read it; only the UI wording changed to "Paid".
 function _autoMarkPaid(l){
   if (!l || (l.invoiced && l.invoiced.done)) return false;
-  if (typeof PLATFORM_PAY_SOURCES !== 'undefined' && PLATFORM_PAY_SOURCES.includes(l.source)) return false;
+  // Per-scope satisfaction (2026-08-18g, Jon's rule): a DIRECT scope is
+  // satisfied when recorded payments cover the direct total; a PLATFORM scope
+  // is satisfied when the Closeout chip is done — QuickBooks owns the
+  // platform's actual payment and "we never revisit the CRM for it".
+  const t = _acceptedScopeTotals(l);
+  const ms = l.milestones || {};
+  const closeoutDone = !!(ms.platformCloseout && ms.platformCloseout.done);
   const paid = _pcPaidTotal(l);
-  if (paid <= 0 || _pcBalance(l) !== 0) return false;
+  const platLead = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(l.source);
+  let ready = false, revenue = 0;
+  if (t.nDirect || t.nPlatform) {
+    const directOK   = !t.nDirect   || (paid > 0 && _pcBalance(l) === 0);
+    const platformOK = !t.nPlatform || closeoutDone;
+    ready = directOK && platformOK;
+    revenue = t.revenue;
+  } else if (platLead) {
+    // Platform job with no recorded quote: closeout done + a Job Value entered
+    // by hand = paid. Never count a $0.
+    ready = closeoutDone && getJobValueAmount(l) > 0;
+    revenue = getJobValueAmount(l);
+  } else {
+    // Direct job with no accepted quote (priceOverride-only): old rule.
+    ready = (paid > 0 && _pcBalance(l) === 0);
+    revenue = _pcJobTotal(l) || 0;
+  }
+  if (!ready) return false;
+  // Undo is respected: after a manual un-mark, only MORE customer money
+  // re-triggers. (For closeout-triggered fires, paid never exceeds the stored
+  // opt-out, so an Undo simply sticks until someone marks paid by hand.)
   if (typeof l.revenueOptOut === 'number' && paid <= l.revenueOptOut) return false;
   const now = new Date().toISOString();
-  if (!getJobValueAmount(l)) {
-    l.jobValue = { amount: _pcJobTotal(l), source: 'quote', quoteId: l.acceptedQuoteId || null, setAt: now, setBy: 'auto-paid' };
+  if (!getJobValueAmount(l) && revenue > 0) {
+    l.jobValue = (t.nDirect + t.nPlatform) > 1
+      ? { amount: Math.round(revenue), source: 'quote-sum', setAt: now, setBy: 'auto-paid' }
+      : { amount: Math.round(revenue), source: 'quote', quoteId: l.acceptedQuoteId || null, setAt: now, setBy: 'auto-paid' };
   }
+  if (!getJobValueAmount(l)) return false;     // still nothing honest to count
   l.invoiced = { done: true, at: now, auto: true };
   delete l.revenueOptOut;
   l.updatedAt = now;
-  try { toast('💰 ' + ((typeof leadDisplayName === 'function' && leadDisplayName(l)) || l.id) + ' paid in full — counted as revenue', 'success'); } catch(_){}
+  try { toast('💰 ' + ((typeof leadDisplayName === 'function' && leadDisplayName(l)) || l.id) + ' — all scopes satisfied, counted as revenue', 'success'); } catch(_){}
   return true;
 }
 
@@ -27896,7 +28091,10 @@ function _pcStampPayment(leadId, method, amount){
   _pcLedgerAppend(arr[i], { id: 'pay_' + Date.now() + '_' + Math.round(Math.random()*1e6),
     method: method, amount: Math.round(Number(amount)||0), collectedAt: now });
   const plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(arr[i].source);
-  if (!plat) {
+  // 2026-08-18g: a platform-SOURCE lead can still carry a DIRECT scope (Isaac
+  // Scott's panel) — customer money recorded on it deserves the milestone.
+  const hasDirect = (typeof _acceptedScopeTotals === 'function') && _acceptedScopeTotals(arr[i]).nDirect > 0;
+  if (!plat || hasDirect) {
     if (!arr[i].milestones) arr[i].milestones = {};
     // amount = TOTAL collected so far (ledger + field deposits), not just this
     // recording — the milestone reads "Payment received — Amount $" and the
@@ -29448,8 +29646,20 @@ async function hydrateQuoteStatusFromServer(qid) {
         const earlyStages = ['lead-received','info-gathering','estimating','quote-delivered'];
         const upd = { ...lead }; let dirty = false;
         if (earlyStages.includes(lead.stage)) { upd.stage = 'quote-approved'; upd.stageAt = new Date().toISOString(); dirty = true; }
-        if (lead.acceptedQuoteId !== qid) { upd.acceptedQuoteId = qid; dirty = true; }
-        if (!(lead.jobValue && typeof lead.jobValue.amount === 'number') && typeof _quoteNet === 'function') {
+        // Multi-scope (2026-08-18g): a customer email-accepting a SECOND quote
+        // ADDS a scope — it never silently replaces the one already accepted.
+        const _ids = getAcceptedQuoteIds(lead);
+        if (!_ids.includes(qid)) {
+          _ids.push(qid);
+          if (_ids.length > 1) upd.acceptedQuoteIds = _ids;
+          _syncAcceptedPointer(upd.acceptedQuoteIds ? upd : Object.assign(upd, { acceptedQuoteId: qid }));
+          if (_ids.length > 1) {
+            const _sum = _ids.map(x => getQuote(x)).filter(Boolean).reduce((s,x) => s + _quoteJobNet(x), 0);
+            upd.jobValue = { amount: Math.round(_sum), source: 'quote-sum', setAt: new Date().toISOString(), setBy: 'customer-accept' };
+          }
+          dirty = true;
+        }
+        if (!(upd.jobValue && typeof upd.jobValue.amount === 'number') && typeof _quoteNet === 'function') {
           upd.jobValue = { amount: _quoteJobNet(q), source: 'quote', quoteId: qid, setAt: new Date().toISOString(), setBy: 'customer-accept' };
           dirty = true;
         }
