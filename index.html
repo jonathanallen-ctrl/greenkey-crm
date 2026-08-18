@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18l</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18m</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12655,8 +12655,8 @@ function _renderPreInstallStrip(lead) {
     const _ins = lead.inspection || null;
     let _insMeta = '', _insTip = 'Click to upload pass cert or mark passed without doc.';
     if (_ins) {
-      if (_ins.status === 'scheduled')      { _insMeta = '📅 ' + (_ins.pickedDate||''); _insTip = 'Inspection scheduled for ' + (_ins.pickedDate||'') + (_ins.manual ? ' (recorded manually)' : '') + '. Click for options.'; }
-      else if (_ins.status === 'picked')    { _insMeta = 'picked ' + (_ins.pickedDate||''); _insTip = 'Customer picked ' + (_ins.pickedDate||'') + ' — book it with the county, then it counts as scheduled. Click for options.'; }
+      if (_ins.status === 'scheduled')      { _insMeta = '📅 ' + mdy(String(_ins.pickedDate||'')); _insTip = 'Inspection scheduled for ' + mdy(String(_ins.pickedDate||'')) + (_ins.manual ? ' (recorded manually)' : '') + '. Click for options.'; }
+      else if (_ins.status === 'picked')    { _insMeta = 'picked ' + mdy(String(_ins.pickedDate||'')); _insTip = 'Customer picked ' + mdy(String(_ins.pickedDate||'')) + ' — book it with the county, then it counts as scheduled. Click for options.'; }
       else if (_ins.status === 'call_me')   { _insMeta = 'call them'; _insTip = 'Customer asked for a call to schedule the inspection. Click for options.'; }
       else if (_ins.status === 'expired')   { _insMeta = 'link expired'; _insTip = 'The scheduling link expired without a pick — call them or send a fresh link. Click for options.'; }
       else                                  { _insMeta = 'request sent' + (_ins.sentAt ? ' ' + mdy(String(_ins.sentAt)) : ''); _insTip = 'Scheduling email sent — waiting on the customer to pick a day. Click for options.'; }
@@ -12919,18 +12919,21 @@ function _chipEditorHTML(leadId, key){
       // this is where it lives afterwards — right where anyone thinking
       // "inspection" already clicks.
       const _insp = lead.inspection || null;
+      // 2026-08-18m: date entry is a NATIVE calendar input + Save (the typed
+      // prompt refused format mismatches silently). All dates display mdy().
+      const _mdInput = `<input type="date" class="jd-fi" id="insp-md-${leadId}" style="width:150px" value="${_inspDateISO(_insp)}" title="Pick the inspection day, then Save">`
+        + btnP('💾 Save date', `_inspRecordManual('${leadId}')`);
       const _inspLine = _insp
         ? row(`<span style="font-size:12px;color:var(--text-muted)">${_insp.status==='scheduled'?'Inspection':'Customer scheduling'}: <strong style="color:var(--text-primary)">${
-            _insp.status==='scheduled' ? '✓ scheduled ' + (_insp.pickedDate||'') + (_insp.manual?' (recorded manually)':'') :
-            _insp.status==='picked' ? '✓ picked ' + (_insp.pickedDate||'') :
+            _insp.status==='scheduled' ? '✓ scheduled ' + mdy(String(_insp.pickedDate||'')) + (_insp.manual?' (recorded manually)':'') :
+            _insp.status==='picked' ? '✓ picked ' + mdy(String(_insp.pickedDate||'')) + ' — set the booked date once the county confirms' :
             _insp.status==='call_me' ? 'asked for a call' :
             _insp.status==='expired' ? 'link expired — call them' :
-            'email sent ' + mdy(String(_insp.sentAt||'')) + ', awaiting pick'}</strong></span>`
-            + btn('📅 Set / change date', `_inspRecordManual('${leadId}')`)
-            + btn('📧 Send a fresh link', `resendInspectionScheduling('${leadId}')`))
-        : row(btnP('📧 Send inspection scheduling email',`openInspReviewModal('${leadId}')`)
-            + btn('📅 Record date — booked outside the email flow', `_inspRecordManual('${leadId}')`)
-            + note('Emails the customer their install photos + the pick-a-day calendar, and texts them to check their inbox. Opens the photo review first — nothing sends until you click Send there. Already booked it by phone or on the AHJ portal? Record the date instead.'));
+            'email sent ' + mdy(String(_insp.sentAt||'')) + ', awaiting pick'}</strong></span>`)
+          + row(_mdInput + btn('📧 Send a fresh link', `resendInspectionScheduling('${leadId}')`))
+        : row(btnP('📧 Send inspection scheduling email',`openInspReviewModal('${leadId}')`))
+          + row(_mdInput
+            + note('Emails the customer their install photos + the pick-a-day calendar. Already booked it by phone or on the AHJ portal? Pick the day in the calendar box and Save instead.'));
       return _chipEditorShell('Final Inspection', _inspLine
         + row(fi.done
         ? `<span style="font-size:12px;color:var(--green)">✓ Passed ${mdy((fi.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','finalInspPassed',false);renderJobDetail('${leadId}')`)
@@ -26936,24 +26939,34 @@ let _inspResendPrev = null;
 // flagged manual) so the Final Inspection panel tells one coherent story,
 // plus a job note for the trail. It does NOT create the "book with county"
 // task — a manually recorded date is already booked by definition.
+// 2026-08-18m (Jon): the first cut was a typed prompt() — a format mismatch
+// just refused quietly, which read as "I hit OK and nothing happened." Now the
+// panel carries a NATIVE date input (calendar picker) and this reads from it.
+// pickedDate is stored ISO (same as the customer-pick flow) and every display
+// runs through mdy(), so the chip reads 08/19/2026, never 2026-08-19.
 function _inspRecordManual(leadId){
-  const cur = (getLead(leadId) || {}).inspection || {};
-  const d = prompt('Inspection date (MM/DD/YYYY) — as already booked with the county/customer:', cur.pickedDate || '');
-  if (d === null) return;
-  const m = String(d).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (!m) { toast('Enter the date as MM/DD/YYYY', 'warning'); return; }
-  const yyyy = m[3].length === 2 ? '20' + m[3] : m[3];
-  const disp = String(m[1]).padStart(2,'0') + '/' + String(m[2]).padStart(2,'0') + '/' + yyyy;
+  const inp = document.getElementById('insp-md-' + leadId);
+  const iso = (inp && inp.value) || '';                       // yyyy-mm-dd from the calendar box
+  if (!iso) { toast('Pick the date in the calendar box first, then Save.', 'warning'); return; }
+  const disp = mdy(iso);
   const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
-  arr[i].inspection = { ...(arr[i].inspection || {}), status: 'scheduled', pickedDate: disp,
+  arr[i].inspection = { ...(arr[i].inspection || {}), status: 'scheduled', pickedDate: iso,
     manual: true, recordedBy: (S.user && S.user.name) || '', recordedAt: new Date().toISOString() };
   arr[i].jobNotes = (arr[i].jobNotes || []).concat([{ id: 'note-insp-' + Date.now().toString(36),
     text: 'Electrical inspection scheduled for ' + disp + ' — recorded manually (booked outside the email flow).',
     authorName: (S.user && S.user.name) || 'CRM', timestamp: new Date().toISOString() }]);
   arr[i].updatedAt = new Date().toISOString();
   saveLeads(arr);
-  toast('Inspection date recorded — ' + disp, 'success');
+  toast('Inspection scheduled — ' + disp, 'success');
   renderJobDetail(leadId);
+}
+// Current pickedDate as yyyy-mm-dd for the date input, whatever format it was
+// stored in (worker flow = ISO; the 18h manual cut wrote MM/DD/YYYY).
+function _inspDateISO(insp){
+  const p = String((insp && insp.pickedDate) || '');
+  if (/^\d{4}-\d{2}-\d{2}/.test(p)) return p.slice(0, 10);
+  const m = p.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? m[3] + '-' + String(m[1]).padStart(2,'0') + '-' + String(m[2]).padStart(2,'0') : '';
 }
 
 function resendInspectionScheduling(leadId) {
