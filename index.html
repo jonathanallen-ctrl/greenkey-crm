@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -24723,12 +24723,17 @@ async function _hydratePhotosFromSP(jobId) {
       if (item._gkFetchedDownloadUrl) return item._gkFetchedDownloadUrl;
       if (!item.id) return '';
       try {
-        const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${item.id}`, {
+        // $expand=thumbnails (2026-08-18f): the Graph JPEG rendition is the
+        // only displayable/attachable form of a .heic — Brian Solomon's
+        // inspection email failed on two April HEICs the browser can't decode.
+        const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${item.id}?$expand=thumbnails`, {
           headers: { 'Authorization': 'Bearer ' + _gToken }
         });
         if (!r.ok) return '';
         const full = await r.json();
         const url = full['@microsoft.graph.downloadUrl'] || '';
+        const _th = (full.thumbnails && full.thumbnails[0]) || null;
+        item._gkThumbUrl = (_th && ((_th.large&&_th.large.url)||(_th.medium&&_th.medium.url)||(_th.small&&_th.small.url))) || '';
         item._gkFetchedDownloadUrl = url;  // cache on the item
         return url;
       } catch (e) {
@@ -24807,6 +24812,7 @@ async function _hydratePhotosFromSP(jobId) {
           wroteAnything = true;
           refreshed++;
         }
+        if (!existing.thumbUrl && item._gkThumbUrl) { existing.thumbUrl = item._gkThumbUrl; wroteAnything = true; }
         if (wroteAnything) {
           try { await _idbPut(existing); } catch(_) {}
         } else {
@@ -24827,6 +24833,7 @@ async function _hydratePhotosFromSP(jobId) {
         spDriveItemId: item.id,
         spUrl: item.webUrl || '',
         downloadUrl: freshDownloadUrl,                              // signed direct link
+        thumbUrl: item._gkThumbUrl || null,                         // Graph JPEG rendition (HEIC display/attach)
         downloadUrlFetchedAt: Date.now(),
         dataUrl: null
       };
@@ -24882,9 +24889,15 @@ async function _refreshUrlsByItemId(jobId, force) {
   const _l = (typeof getLead === 'function') ? getLead(jobId) : null;
   if (!force && _l && (_l.stage === 'archived' || _l.stage === 'not-won')) return { refreshed: 0, missing: 0, skipped: 'archived' };
   const URL_FRESH_MS = 50 * 60 * 1000;
+  // A record can have a perfectly FRESH downloadUrl and still be undisplayable
+  // (a .heic with no thumbUrl yet — 2026-08-18f, Brian Solomon's inspection
+  // email). Include any image missing its thumbnail so a refresh backfills it;
+  // one extra GET per such record, once, then the stored thumbUrl ends it.
+  const _isImg = f => /^image\//i.test(String(f.mimeType||'')) || /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(String(f.name||''));
   const targets = (_filesCache || []).filter(f =>
     f.jobId === jobId && f.spDriveItemId &&
-    (!f.downloadUrl || (Date.now() - (f.downloadUrlFetchedAt || 0)) > URL_FRESH_MS));
+    ((!f.downloadUrl || (Date.now() - (f.downloadUrlFetchedAt || 0)) > URL_FRESH_MS)
+      || (_isImg(f) && !f.thumbUrl)));
   let refreshed = 0, missing = 0;
   for (const f of targets) {
     try {
@@ -26842,6 +26855,11 @@ async function _inspRefreshPhotos(leadId) {
   const st = document.getElementById('insp-modal-status');
   if (st) st.textContent = 'Refreshing photo links from SharePoint…';
   try {
+    // By-item-ID first (2026-08-18f): re-signs links wherever the files moved
+    // AND backfills missing HEIC thumbnails — the folder-walking hydrate alone
+    // skips records whose links are still fresh, which is exactly the state
+    // right after a Sync (Brian Solomon's two April HEICs).
+    if (typeof _refreshUrlsByItemId === 'function') await _refreshUrlsByItemId(leadId, true);
     if (typeof _hydratePhotosFromSP === 'function') await _hydratePhotosFromSP(leadId);
     openInspReviewModal(leadId);
     const st2 = document.getElementById('insp-modal-status');
@@ -27016,7 +27034,7 @@ async function sendInspectionScheduling(leadId) {
     // exactly which ones — the throw lands in the catch below, which re-enables
     // the button and records nothing.
     if (failed.length) {
-      throw new Error(`${failed.length} of ${files.length} checked photo${files.length === 1 ? '' : 's'} could not be loaded (${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ', …' : ''}). Their SharePoint links have most likely expired — click 🔄 Refresh photos and send again, or uncheck them.`);
+      throw new Error(`${failed.length} of ${files.length} checked photo${files.length === 1 ? '' : 's'} could not be loaded (${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ', …' : ''}). ${failed.some(n => /\.hei[cf]/i.test(String(n))) ? 'The .heic ones are iPhone-format — 🔄 Refresh photos fetches a JPEG preview from SharePoint that CAN be sent, then try again. ' : ''}Otherwise their SharePoint links have expired — click 🔄 Refresh photos and send again, or uncheck them.`);
     }
     // 4. Inline logo (CID) so it renders even where remote images are blocked.
     try {
