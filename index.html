@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-15b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12462,6 +12462,22 @@ function openJobDetail(id) {
   // "Cannot display" cross-device gap.
   setTimeout(() => {
     try {
+      // 2026-08-15d — refresh expired photo links BY ITEM ID on job open.
+      // Signed download URLs die after ~1 h, and until now only the manual
+      // ↻ Sync button ran this. The folder-walking hydrates below can't heal
+      // a record whose SharePoint folder Sherri has since moved somewhere
+      // they don't look (Sim Alli's 19 Completion-pics tiles all read
+      // "Cannot display" on open — the links had simply expired). Item-ID
+      // lookups work wherever the file lives. Not forced → archived jobs
+      // stay untouched (2026-08-08 rule), and only stale records (>50 min)
+      // cost a request, so reopening a job is self-throttling.
+      if (typeof _refreshUrlsByItemId === 'function') {
+        _refreshUrlsByItemId(id).then(r => {
+          if (r && (r.refreshed > 0 || r.missing > 0) && S.jobDetailId === id) {
+            try { renderJobDetail(id); } catch(_){}
+          }
+        }).catch(()=>{});
+      }
       if (typeof _hydratePhotosFromSP === 'function') {
         _hydratePhotosFromSP(id).then(r => {
           if (r && (r.added > 0 || r.refreshed > 0) && S.jobDetailId === id) {
@@ -12627,12 +12643,16 @@ function _renderPreInstallStrip(lead) {
       : { state:'pending', icon:'·', label:'Closeout', meta:'', click:`openChipEditor('${lead.id}','closeout')`, tip:`Mark the ${lead.source} platform closeout done — clears the Awaiting Closeout list.` });
   }
 
-  // Invoiced — the revenue trigger. Turns green when the job's value is counted.
+  // Paid — the revenue trigger. Turns green when the job's value is counted.
+  // Relabeled from "Invoiced" 2026-08-15c (Jon: "by the time that we invoice a
+  // person, we really don't visit them again in the CRM"), and it now marks
+  // ITSELF when recorded payments cover the job total — see _autoMarkPaid().
+  // Storage key stays `lead.invoiced` so reports/history are untouched.
   const _invDone = isJobInvoiced(lead);
   const _invAmt  = getJobValueAmount(lead);
   states.push(_invDone
-    ? { state: 'done',    icon: '💰', label: 'Invoiced', meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Revenue counted — click to view or undo.' }
-    : { state: 'pending', icon: '·',  label: 'Invoice',  meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Mark invoiced to count this job value as revenue.' });
+    ? { state: 'done',    icon: '💰', label: 'Paid', meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: (lead.invoiced && lead.invoiced.auto ? 'Marked automatically when payments covered the total. ' : '') + 'Revenue counted — click to view or undo.' }
+    : { state: 'pending', icon: '·',  label: 'Paid',  meta: _invAmt?('$'+_invAmt.toLocaleString()):'', click: `openChipEditor('${lead.id}','invoiced')`, tip: 'Marks itself when recorded payments cover the job total — or click to mark paid and count the revenue now.' });
 
   const chipColor = (s) => ({
     done:       'background:rgba(46,204,113,0.12);color:#27ae60;border-color:#2ecc71',
@@ -12842,12 +12862,13 @@ function _chipEditorHTML(leadId, key){
     }
     case 'invoiced': {
       const amt=getJobValueAmount(lead), inv=isJobInvoiced(lead);
-      return _chipEditorShell('Invoiced (revenue)',
+      const _auto = inv && lead.invoiced && lead.invoiced.auto;
+      return _chipEditorShell('Paid (revenue)',
         row(`<span style="font-size:12px;width:96px">Job Value</span><input class="jd-fi" type="number" step="0.01" style="width:140px" value="${amt||''}" placeholder="0" onchange="_editJobValue('${leadId}',this.value)">`)+
         row(inv
-          ? `<span style="font-size:12px;color:var(--green)">✓ Counted as revenue</span>`+btn('Undo invoiced',`markJobInvoiced('${leadId}',false);renderJobDetail('${leadId}')`)
-          : btnP('Mark invoiced — count as revenue',`if(markJobInvoiced('${leadId}',true))renderJobDetail('${leadId}')`))+
-        note('Marking invoiced counts the job value in revenue reports. QuickBooks handles collecting it.'));
+          ? `<span style="font-size:12px;color:var(--green)">✓ Paid — counted as revenue${_auto?' (marked automatically)':''}</span>`+btn('Undo paid',`markJobInvoiced('${leadId}',false);renderJobDetail('${leadId}')`)
+          : btnP('Mark paid — count as revenue',`if(markJobInvoiced('${leadId}',true))renderJobDetail('${leadId}')`))+
+        note('Marks itself the moment recorded payments (deposit + final, field or office) cover the job total. The button is for jobs paid outside the CRM. QuickBooks handles collections.'));
     }
     case 'charger': {
       const ci=lead.chargerInfo||{}; const desc=[ci.make,ci.model].filter(Boolean).join(' ');
@@ -12948,8 +12969,12 @@ function markJobInvoiced(leadId, on){
       return false;
     }
     arr[i].invoiced = { done: true, at: new Date().toISOString(), by: (S.user && S.user.id) || '' };
+    delete arr[i].revenueOptOut;
   } else {
     delete arr[i].invoiced;
+    // Remember how much was paid at Undo time so the auto-paid sweep
+    // (2026-08-15c) doesn't immediately re-mark it — only MORE money re-triggers.
+    try { if (typeof _pcPaidTotal === 'function') arr[i].revenueOptOut = _pcPaidTotal(arr[i]); } catch(_){}
   }
   arr[i].updatedAt = new Date().toISOString();
   saveLeads(arr);
@@ -13017,8 +13042,8 @@ function _renderJobRail(lead){
     <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <input class="jd-fi" type="number" step="1" style="width:118px" value="${amt?Math.round(amt):''}" placeholder="Enter $" onchange="_editJobValue('${id}',this.value)">
       ${inv
-        ? `<span style="font-size:11.5px;font-weight:600;color:var(--green)">💰 Counted</span><button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="markJobInvoiced('${id}',false);renderJobDetail('${id}')">Undo</button>`
-        : `<button class="btn btn-p" style="padding:3px 11px;font-size:11.5px" onclick="if(markJobInvoiced('${id}',true))renderJobDetail('${id}')">Mark invoiced</button>`}
+        ? `<span style="font-size:11.5px;font-weight:600;color:var(--green)" title="${(lead.invoiced && lead.invoiced.auto)?'Marked automatically when payments covered the job total':'Marked by hand'}">💰 Paid${(lead.invoiced && lead.invoiced.auto)?' · auto':''}</span><button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="markJobInvoiced('${id}',false);renderJobDetail('${id}')">Undo</button>`
+        : `<button class="btn btn-p" style="padding:3px 11px;font-size:11.5px" title="Marks itself when recorded payments cover the job total — this button is for jobs paid outside the CRM" onclick="if(markJobInvoiced('${id}',true))renderJobDetail('${id}')">Mark paid</button>`}
     </div>${srcTag}
   </div></div>`;
   const addr=_jobSiteAddress(lead);
@@ -15619,9 +15644,9 @@ function _photoWhyBroken(f) {
     return { msg: 'Not in SharePoint',
              hint: 'This never finished uploading and this device has no copy. ↻ Sync cannot recover it — open the job on the device the photo was taken on and press ↻ Sync there, or delete this tile.' };
   }
-  if (/\.(heic|heif)$/.test(nm) && !hasLocal) {
+  if (/\.(heic|heif)$/.test(nm) && !hasLocal && !(f && f.thumbUrl)) {
     return { msg: 'HEIC — no preview',
-             hint: 'iPhone format; Chrome and Edge cannot render it. Click to download, or re-upload from the phone so the CRM converts it to JPEG.' };
+             hint: 'iPhone format; Chrome and Edge cannot render it. ↻ Sync fetches a JPEG preview from SharePoint; click to download the original.' };
   }
   return { msg: 'Cannot display', hint: 'The image link has expired. Click ↻ Sync above to refresh it.' };
 }
@@ -15629,7 +15654,13 @@ function _photoWhyBroken(f) {
 function _imgSrc(f) {
   if (!f) return '';
   if (f.dataUrl) return f.dataUrl;
+  // HEIC never decodes in Chrome/Edge — Graph's JPEG thumbnail rendition is
+  // the displayable form (2026-08-18, Chase's phone dropping .heic straight
+  // into Sherri's Operations folder).
+  const _heic = /\.(heic|heif)$/i.test(String(f.name||'')) || /hei[cf]/.test(String(f.mimeType||'').toLowerCase());
+  if (_heic && f.thumbUrl) return f.thumbUrl;
   if (f.downloadUrl) return f.downloadUrl;
+  if (f.thumbUrl) return f.thumbUrl;
   return ''; // webUrl is a browser landing page, not safe to use as <img src>
 }
 
@@ -24825,7 +24856,9 @@ async function _refreshUrlsByItemId(jobId, force) {
   let refreshed = 0, missing = 0;
   for (const f of targets) {
     try {
-      const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${f.spDriveItemId}`,
+      // $expand=thumbnails (2026-08-18): the thumbnail rendition is a Graph-made
+      // JPEG, so it displays even for HEIC originals the browser can't decode.
+      const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${f.spDriveItemId}?$expand=thumbnails`,
                             { headers: { 'Authorization': 'Bearer ' + _gToken } });
       if (r.status === 404) {
         f.spMissing = true; missing++;
@@ -24838,6 +24871,9 @@ async function _refreshUrlsByItemId(jobId, force) {
       if (!url) continue;
       f.downloadUrl = url;
       f.downloadUrlFetchedAt = Date.now();
+      const _th = (item.thumbnails && item.thumbnails[0]) || null;
+      const _tu = (_th && ((_th.large&&_th.large.url)||(_th.medium&&_th.medium.url)||(_th.small&&_th.small.url))) || '';
+      if (_tu) f.thumbUrl = _tu;
       f.spUrl = item.webUrl || f.spUrl || '';
       f.spName = item.name || f.spName || null;
       f.spMissing = false;
@@ -24867,6 +24903,8 @@ async function _hydrateOpsFolderFromSP(jobId, force){
     const cust = lead.customerId ? getCustomer(lead.customerId) : null;
     const baseName = (typeof _buildSPLeadFolderName === 'function') ? _buildSPLeadFolderName(lead, cust) : null;
     if (!baseName) return { added: 0 };
+    const _fctx = _opsFolderCtx(lead, cust);           // Smith-vs-Smith-aware matcher (2026-08-18)
+    if (!_fctx) return { added: 0 };
     // READ-ONLY. ⚠ 2026-08-08: this used to look in ONE bucket — NEEDS
     // INSPECTION COMPLETED — so the moment Sherri moved a job folder into a
     // weekly Active Projects folder (Brett Robertson → `8-17-2026`), the puller
@@ -24902,7 +24940,7 @@ async function _hydrateOpsFolderFromSP(jobId, force){
         if (!r.ok) break;
         const data = await r.json();
         for (const it of (data.value||[])){
-          if (it.folder && it.name && it.name !== 'Archive' && (it.name===baseName || it.name.startsWith(baseName))) matches.push(it);
+          if (it.folder && it.name && it.name !== 'Archive' && _opsNameMatch(it.name, _fctx)) matches.push(it);
         }
         next = data['@odata.nextLink'] || null;
       }
@@ -24910,9 +24948,13 @@ async function _hydrateOpsFolderFromSP(jobId, force){
     }
     if (!matches.length) return { added: 0 };   // job not filed in Operations yet — do NOTHING
     // Walk matched folders; flag files inside a "Completion pics" subfolder.
+    // $expand=thumbnails (2026-08-18): Graph renders a JPEG thumbnail even for
+    // HEIC files, which Chrome/Edge cannot display natively — Chase's phone
+    // drops .heic straight into Sherri's folder, bypassing the app's JPEG
+    // conversion, so the thumbnail rendition is the only displayable form.
     const filesFound = [];
     async function _walk(itemId, inCompletion){
-      let n = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
+      let n = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200&$expand=thumbnails`;
       while (n){
         const r = await fetch(n, { headers: { 'Authorization': `Bearer ${_gToken}` } });
         if (!r.ok) break;
@@ -24942,13 +24984,16 @@ async function _hydrateOpsFolderFromSP(jobId, force){
       const isImg = /^image\//i.test((item.file && item.file.mimeType) || '');
       const category = inCompletion ? 'install' : (isImg ? 'site' : 'documents');
       const freshUrl = await _dlUrl(item);
+      const _th = (item.thumbnails && item.thumbnails[0]) || null;
+      const thumbUrl = (_th && ((_th.large&&_th.large.url)||(_th.medium&&_th.medium.url)||(_th.small&&_th.small.url))) || '';
       const existing = existingByDriveId.get(item.id) || existingByNameJob.get(jobId+'|'+item.name);
       if (existing){
         const stale = !existing.downloadUrl || (Date.now() - (existing.downloadUrlFetchedAt||0)) > URL_FRESH_MS;
-        if (stale && freshUrl){ existing.downloadUrl=freshUrl; existing.downloadUrlFetchedAt=Date.now(); if(!existing.spDriveItemId) existing.spDriveItemId=item.id; if(!existing.spUrl) existing.spUrl=item.webUrl||''; try{ await _idbPut(existing); }catch(_){} refreshed++; }
+        if (stale && freshUrl){ existing.downloadUrl=freshUrl; existing.downloadUrlFetchedAt=Date.now(); if(thumbUrl) existing.thumbUrl=thumbUrl; if(!existing.spDriveItemId) existing.spDriveItemId=item.id; if(!existing.spUrl) existing.spUrl=item.webUrl||''; try{ await _idbPut(existing); }catch(_){} refreshed++; }
+        else if (thumbUrl && !existing.thumbUrl){ existing.thumbUrl=thumbUrl; try{ await _idbPut(existing); }catch(_){} }
         continue;
       }
-      const rec = { id:'sp-'+item.id, jobId, category, name:item.name, size:item.size||0, mimeType:(item.file&&item.file.mimeType)||'application/octet-stream', uploadedBy:'SharePoint (Operations)', uploadedAt:item.lastModifiedDateTime||new Date().toISOString(), spDriveItemId:item.id, spUrl:item.webUrl||'', downloadUrl:freshUrl, downloadUrlFetchedAt:Date.now(), dataUrl:null };
+      const rec = { id:'sp-'+item.id, jobId, category, name:item.name, size:item.size||0, mimeType:(item.file&&item.file.mimeType)||'application/octet-stream', uploadedBy:'SharePoint (Operations)', uploadedAt:item.lastModifiedDateTime||new Date().toISOString(), spDriveItemId:item.id, spUrl:item.webUrl||'', downloadUrl:freshUrl, thumbUrl:thumbUrl||null, downloadUrlFetchedAt:Date.now(), dataUrl:null };
       _filesCache.push(rec); try{ await _idbPut(rec); }catch(_){} added++;
     }
     if (added||refreshed) console.log(`[GK] Ops/NeedsInspection hydrate (${jobId}): added=${added} refreshed=${refreshed}`);
@@ -25050,9 +25095,55 @@ function _opsMondayName(dateStr) {
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
   return (d.getMonth() + 1) + '-' + d.getDate() + '-' + d.getFullYear();
 }
-function _opsNameMatch(folderName, baseName, tailName) {
-  return folderName === baseName || folderName.startsWith(baseName)
-      || folderName === tailName || folderName.startsWith(tailName);
+// ── WHICH OPERATIONS FOLDER IS THIS JOB'S? (2026-08-18, Smith vs Smith) ──
+// Matching was last-name-prefix only. Jennifer Smith and Justin Smith (both
+// Qmerit) resolved to the same "Qmerit - Smith Project", so the photo mirror
+// filed BOTH jobs' completion pics together and the pulls walked whatever
+// matched — Sherri had to separate them by hand into
+// "Qmerit - Smith, Jennifer Project" / "Qmerit - Smith, Justin Project",
+// names the old startsWith() matcher then couldn't find AT ALL. This matcher
+// understands her actual naming:
+//   [Prefix - ]Last[, First-or-initial] Project[-SCHEDULED …][(note)]
+// Rules: a folder's prefix must agree with the lead's source prefix
+// ("AF1 - Glass" is not "Qmerit - Glass"); a ", First" marker must agree with
+// the customer's first name (initial OK: "Bennett, S", "Wood, K"); and when
+// ANOTHER active lead shares the surname+prefix, an UNMARKED folder is
+// ambiguous and is REFUSED — mis-filing two Smiths is worse than waiting for
+// the rename.
+function _opsFolderCtx(lead, cust){
+  const last = String((cust && (cust.lastName || cust.businessName)) || '').trim();
+  if (!last) return null;
+  const first = String((cust && cust.firstName) || '').trim();
+  const prefix = _spFolderPrefixForSource(lead && lead.source);
+  let sibs = false;
+  try {
+    sibs = getLeads().some(l => {
+      if (!l || l.id === lead.id || l.deleted || l.stage === 'archived' || l.stage === 'not-won') return false;
+      if (_spFolderPrefixForSource(l.source) !== prefix) return false;
+      const c = l.customerId && (typeof getCustomer === 'function') ? getCustomer(l.customerId) : null;
+      const ln = String((c && (c.lastName || c.businessName)) || l.customerLastName || '').trim();
+      return !!ln && ln.toLowerCase() === last.toLowerCase() && (!c || c.id !== (cust && cust.id));
+    });
+  } catch(_){}
+  return { last, first, prefix, sibs };
+}
+function _opsNameMatch(folderName, ctx){
+  if (!ctx || !ctx.last) return false;
+  let body = String(folderName || '').trim();
+  let fPrefix = '';
+  const pm = body.match(/^([A-Za-z0-9&]+)\s*-\s*(.*)$/);
+  if (pm){ fPrefix = pm[1].toLowerCase(); body = pm[2]; }
+  if (fPrefix && fPrefix !== String(ctx.prefix||'').toLowerCase()) return false;
+  // Strip "Project…" and any trailing decoration: "-SCHEDULED 8.7.26",
+  // "(Charger Swap)", "-FAILED" — they all come at or after "Project".
+  body = body.replace(/\bproject\b[\s\S]*$/i, '').replace(/\(.*$/, '').trim().replace(/[-–—]\s*$/, '').trim();
+  const parts = body.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!parts.length) return false;
+  const L = ctx.last.toLowerCase(), F = String(ctx.first||'').toLowerCase();
+  if (!(parts[0] === L || parts[0].endsWith(' ' + L))) return false;   // "smith", or full-name "darius johnson"
+  const marker = parts[1] || '';
+  if (marker) return !!F && (marker === F || F.startsWith(marker) || marker.startsWith(F));
+  return !ctx.sibs;   // unmarked folder is fine only while this surname+prefix is unique
 }
 async function _opsPhotoMirrorSweep() {
   if (_opsMirrorBusy) return;
@@ -25084,7 +25175,9 @@ async function _opsPhotoMirrorSweep() {
       const cust = lead.customerId ? getCustomer(lead.customerId) : null;
       const baseName = _buildSPLeadFolderName(lead, cust);
       if (!baseName) continue;
-      const tailName = baseName.replace(/^.*? - /, '');       // "Kelly Project"
+      const tailName = baseName.replace(/^.*? - /, '');       // "Kelly Project" (display only)
+      const _fctx = _opsFolderCtx(lead, cust);                // Smith-vs-Smith-aware matcher context
+      if (!_fctx) continue;
       // 1. This job's INSTALL photos — and ONLY those.
       // ⚠ 2026-08-05 (Sherri): this used to walk EVERY category folder and take
       // every file in it, so "Completion pics" filled up with things that have no
@@ -25128,14 +25221,14 @@ async function _opsPhotoMirrorSweep() {
       for (const wf of ordered) {
         try {
           const ch = await _graphFetch('/drives/' + _spDrive + '/items/' + wf.id + '/children?$top=200&$select=name,id,folder');
-          jobFolder = (ch.value || []).find(it => it.folder && _opsNameMatch(it.name || '', baseName, tailName)) || null;
+          jobFolder = (ch.value || []).find(it => it.folder && _opsNameMatch(it.name || '', _fctx)) || null;
         } catch(_){}
         if (jobFolder) break;
       }
       if (!jobFolder && niFolder) {
         try {
           const ch = await _graphFetch('/drives/' + _spDrive + '/items/' + niFolder.id + '/children?$top=200&$select=name,id,folder');
-          jobFolder = (ch.value || []).find(it => it.folder && it.name !== 'Archive' && _opsNameMatch(it.name || '', baseName, tailName)) || null;
+          jobFolder = (ch.value || []).find(it => it.folder && it.name !== 'Archive' && _opsNameMatch(it.name || '', _fctx)) || null;
         } catch(_){}
       }
       if (!jobFolder) continue;             // Sherri hasn't made it yet — photos wait
@@ -25238,7 +25331,7 @@ async function _hydrateJobFolderFromSP(jobId, force){
 
     const filesFound = [];
     async function _walk(itemId){
-      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200`;
+      let next = `https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${itemId}/children?$top=200&$expand=thumbnails`;
       while (next){
         const r = await fetch(next, { headers: { 'Authorization': `Bearer ${_gToken}` } });
         if (!r.ok) break;
@@ -25273,16 +25366,19 @@ async function _hydrateJobFolderFromSP(jobId, force){
       const isImg = /^image\//i.test((item.file && item.file.mimeType) || '');
       const category = isImg ? 'site' : 'documents';
       const freshUrl = await _dlUrl(item);
+      const _th = (item.thumbnails && item.thumbnails[0]) || null;
+      const thumbUrl = (_th && ((_th.large&&_th.large.url)||(_th.medium&&_th.medium.url)||(_th.small&&_th.small.url))) || '';
       const existing = existingByDriveId.get(item.id) || existingByNameJob.get(jobId + '|' + item.name);
       if (existing){
         const stale = !existing.downloadUrl || (Date.now() - (existing.downloadUrlFetchedAt||0)) > URL_FRESH_MS;
         if (stale && freshUrl){
           existing.downloadUrl = freshUrl; existing.downloadUrlFetchedAt = Date.now();
+          if (thumbUrl) existing.thumbUrl = thumbUrl;
           if (!existing.spDriveItemId) existing.spDriveItemId = item.id;
           if (!existing.spUrl) existing.spUrl = item.webUrl || '';
           try { await _idbPut(existing); } catch(_){}
           refreshed++;
-        }
+        } else if (thumbUrl && !existing.thumbUrl){ existing.thumbUrl = thumbUrl; try { await _idbPut(existing); } catch(_){} }
         continue;
       }
       const rec = {
@@ -25297,6 +25393,7 @@ async function _hydrateJobFolderFromSP(jobId, force){
         spDriveItemId: item.id,
         spUrl: item.webUrl || '',
         downloadUrl: freshUrl,
+        thumbUrl: thumbUrl || null,
         downloadUrlFetchedAt: Date.now(),
         dataUrl: null
       };
@@ -26566,7 +26663,11 @@ function dismissInspModal(leadId) {
 // inspector-SMS picker uses.
 function _inspImgSrc(f) {
   if (!f) return '';
-  return f.dataUrl || f.downloadUrl || f.spUrl || '';
+  // HEIC: prefer the Graph JPEG thumbnail — it both displays AND attaches as
+  // a normal JPEG in the scheduling email (2026-08-18).
+  const _heic = /\.(heic|heif)$/i.test(String(f.name||'')) || /hei[cf]/.test(String(f.mimeType||'').toLowerCase());
+  if (_heic) return f.dataUrl || f.thumbUrl || f.downloadUrl || f.spUrl || '';
+  return f.dataUrl || f.downloadUrl || f.thumbUrl || f.spUrl || '';
 }
 // A tile whose image 404s cannot be attached either — the send path fetches the
 // SAME url. So a dead tile unchecks itself: the modal must never claim it will
@@ -27350,6 +27451,7 @@ function _applyStripePayment(row) {
     if (!lead.milestones) lead.milestones = {};
     lead.milestones.paymentReceived = { done: true, date: String(at).slice(0,10), amount: _pcPaidTotal(lead) };
   }
+  try { _autoMarkPaid(lead); } catch(_){}
   lead.updatedAt = now;
   saveLeads(arr);
   try { checkAutoArchive(lead.id); } catch (_) {}
@@ -27614,6 +27716,38 @@ function _pcBalance(l){
   return t == null ? null : Math.max(0, t - _pcPaidTotal(l));
 }
 
+// ── AUTO-PAID (2026-08-15c) ── Jon: "by the time that we invoice a person, we
+// really don't visit them again in the CRM" — so the revenue flag now flips
+// ITSELF the moment recorded money covers the job total, wherever the payment
+// was confirmed (field app, office recording, Stripe link). Rules:
+// - Direct jobs only — platform (Qmerit/Electrum/Treehouse) money is the
+//   platform's closeout flow, not a customer payment.
+// - The balance must be COMPUTABLE and $0. A deposit alone never triggers it,
+//   and a job with no accepted quote / override has nothing honest to count.
+// - A blank Job Value prefills from the job total (override, else accepted-
+//   quote net) so the flag never refuses to count a $0.
+// - A manual Undo records the paid total at that moment (`revenueOptOut`);
+//   only MORE money re-triggers, so Undo doesn't fight the background sweep.
+// Mutates the lead in place; the caller saves. Returns true if it fired.
+// The internal storage key stays `lead.invoiced` — reports, backfills and
+// history all read it; only the UI wording changed to "Paid".
+function _autoMarkPaid(l){
+  if (!l || (l.invoiced && l.invoiced.done)) return false;
+  if (typeof PLATFORM_PAY_SOURCES !== 'undefined' && PLATFORM_PAY_SOURCES.includes(l.source)) return false;
+  const paid = _pcPaidTotal(l);
+  if (paid <= 0 || _pcBalance(l) !== 0) return false;
+  if (typeof l.revenueOptOut === 'number' && paid <= l.revenueOptOut) return false;
+  const now = new Date().toISOString();
+  if (!getJobValueAmount(l)) {
+    l.jobValue = { amount: _pcJobTotal(l), source: 'quote', quoteId: l.acceptedQuoteId || null, setAt: now, setBy: 'auto-paid' };
+  }
+  l.invoiced = { done: true, at: now, auto: true };
+  delete l.revenueOptOut;
+  l.updatedAt = now;
+  try { toast('💰 ' + ((typeof leadDisplayName === 'function' && leadDisplayName(l)) || l.id) + ' paid in full — counted as revenue', 'success'); } catch(_){}
+  return true;
+}
+
 function _pcStampPayment(leadId, method, amount){
   const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
   if (i < 0) { toast('Job not found', 'error'); return false; }
@@ -27628,6 +27762,7 @@ function _pcStampPayment(leadId, method, amount){
     // honest answer to that is everything the customer has paid.
     arr[i].milestones.paymentReceived = { done: true, date: now.slice(0,10), amount: _pcPaidTotal(arr[i]) };
   }
+  try { _autoMarkPaid(arr[i]); } catch(_){}
   arr[i].updatedAt = now;
   saveLeads(arr);
   return true;
@@ -27868,6 +28003,15 @@ function _reconcileFieldPayments() {
       };
       lead.updatedAt = new Date().toISOString();
       changed = true;
+    }
+    // AUTO-PAID sweep (2026-08-15c): field-recorded payments and deposits reach
+    // the CRM through the SharePoint sync — no CRM code runs at recording time —
+    // so this poller-side pass is what flips the revenue flag for them. It also
+    // catches the deposits-only-paid-in-full case, which the loop above skips
+    // (those jobs have no `lead.payment`). Idempotent.
+    for (const lead of arr) {
+      if (!lead || lead.stage === 'archived') continue;
+      try { if (_autoMarkPaid(lead)) changed = true; } catch (_) {}
     }
     if (changed) saveLeads(arr);
     // Paid invoices for field-collected payments (Zelle / cash / check / Tap to
