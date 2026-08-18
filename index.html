@@ -1287,7 +1287,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18m</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18n</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -11748,10 +11748,36 @@ function _buildUtilityCoordinatedEmail({ q, custFirst, projectPhrase, total, add
   return { subject: _emailTplSubject(key, ctx), body: _emailTplText(key, ctx) };
 }
 
+// ── PDF pagination helpers (2026-08-18n, Jon on the Schneider quote:
+// "when I downloaded to view it, it was missing a significant amount of
+// information. Do quotes max out at one page?") They did — no addPage()
+// anywhere, so everything past 792pt was drawn off-canvas and LOST. These
+// helpers give any pdf builder page breaks: _pdfBrk reserves room and starts
+// a new page when it runs out; _pdfFlow emits text line-by-line so long scope
+// or inclusions wrap across pages; _pdfFooterAll stamps the footer (and Page
+// N of M when multi-page) on every page at the end.
+function _pdfMakeBrk(doc, PH, state){ const FOOT=70; return (need)=>{ if(state.y + need > PH - FOOT){ doc.addPage(); state.y = 54; } }; }
+function _pdfMakeFlow(doc, brk, state){ return (lines, x, lh)=>{ for(const ln of (lines||[])){ brk(lh); doc.text(ln, x, state.y); state.y += lh; } }; }
+function _pdfFooterAll(doc, W, PH, LGRAY, GRAY, line2){
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++){
+    doc.setPage(p);
+    doc.setDrawColor(...LGRAY); doc.setLineWidth(0.5); doc.line(36, PH-48, W-36, PH-48);
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(...GRAY);
+    doc.text('GreenKey — Licensed Electrical Contractor — Central Virginia', W/2, PH-34, {align:'center'});
+    doc.text(line2, W/2, PH-22, {align:'center'});
+    if (pages > 1) doc.text('Page ' + p + ' of ' + pages, W-36, PH-22, {align:'right'});
+  }
+}
 function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const jsPDF=getPDFLib();if(!jsPDF)return;
   const doc=new jsPDF({unit:'pt',format:'letter'});
-  const W=612,PH=792;let y=0;
+  const W=612,PH=792;
+  const _st={y:0};
+  const _brk=_pdfMakeBrk(doc,PH,_st), _flow=_pdfMakeFlow(doc,_brk,_st);
+  // Local y stays the source of truth; _sync keeps the helpers' state aligned.
+  let y=0; const _b=(need)=>{ _st.y=y; _brk(need); y=_st.y; };
+  const _fl=(lines,x,lh)=>{ _st.y=y; _flow(lines,x,lh); y=_st.y; };
   const GREEN=[109,194,48],DARK=[15,17,23],GRAY=[100,110,130],LGRAY=[238,240,245];
   pdfHeader(doc,'QUOTE',q.id,q.createdAt?q.createdAt.slice(0,10):new Date().toISOString().slice(0,10),W);
   y=108;
@@ -11768,12 +11794,13 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   // SCOPE OF WORK section even though the customer can see it in the form.
   const _pdfScope = q.scope || (typeof autoScope === 'function' ? autoScope(q) : '');
   if(_pdfScope){
+    _b(48);   // header + at least two lines together — no orphan headers
     doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SCOPE OF WORK',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...DARK);
-    const sl=doc.splitTextToSize(_pdfScope,W-72);doc.text(sl,36,y);y+=sl.length*12+10;
-    doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
+    const sl=doc.splitTextToSize(_pdfScope,W-72);
+    _fl(sl,36,12);y+=10;
+    _b(16);doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
-  doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('QUOTE SUMMARY',36,y);y+=12;
   const _totalsPDF = calcQuoteTotals(q);
   const _isQmeritPDF = q.source==='Qmerit';
   const _lmPDF = _isQmeritPDF ? (_totalsPDF.laborAndMaterials||0)+(_totalsPDF.qmeritFee||0) : (_totalsPDF.laborAndMaterials||0);
@@ -11796,6 +11823,8 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   const _ccBufPct  = _totalsPDF.ccBufferPct  || 0;
   const _achBufPct = _totalsPDF.achBufferPct || 0;
   const _hasTiersPDF = (_ccPDF > 0) && (_ccPDF !== _achPDF || _ccPDF !== _cashPDF);
+  _b(12 + 20 + _pdfRows.length*20 + 44);   // header + table header + rows + total band
+  doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('QUOTE SUMMARY',36,y);y+=12;
   y=pdfTable(doc,y,W,_pdfRows,'TOTAL',_cashPDF||_totalsPDF.quoteTotal||0);
   // 3-tier payment options block — cash first (it IS the total), surcharged
   // options after. Only shown when a tier differs; suppressed for platform/
@@ -11809,6 +11838,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     ];
     const _footnote = 'Total above is the cash / Zelle / check price. Card and ACH add the surcharge shown.';
     const _boxH = 22 + _tierLines.length * 15 + (_footnote ? 14 : 4);
+    _b(_boxH + 10);
     doc.setFillColor(235,250,225);
     doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
     doc.setDrawColor(...GREEN);doc.setLineWidth(0.75);
@@ -11835,6 +11865,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   if (_schedule.length > 0) {
     // Compute box height — title (16) + each milestone (~28) + bottom padding (8)
     const _boxH = 22 + _schedule.length * 28 + 8;
+    _b(_boxH + 10);
     doc.setFillColor(248,250,252);
     doc.roundedRect(36,y,W-72,_boxH,4,4,'F');
     doc.setDrawColor(...LGRAY);doc.setLineWidth(0.5);
@@ -11862,30 +11893,47 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
       const _rationale = 'A note on the deposit: this covers the materials we order specifically for your project and reserves your spot on our schedule. It\'s standard practice for licensed contractors and protects both of us if scope changes mid-project. If anything comes up during the work that affects the price, we\'ll always discuss it with you before adding to the total.';
       doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
       const _rl = doc.splitTextToSize(_rationale, W-72);
-      doc.text(_rl, 36, y);
-      y += _rl.length * 10 + 8;
+      _fl(_rl, 36, 10);
+      y += 8;
     }
   }
-  // inclusions/exclusions
+  // inclusions/exclusions — measured, never clipped (2026-08-18n). The old
+  // block advanced y by a flat 52pt no matter how long the text was, so long
+  // lists overprinted the footer or fell off the page entirely.
   if(q.inclusions||q.exclusions){
     const col=(W-88)/2;
-    if(q.inclusions){
-      doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GREEN);doc.text('INCLUSIONS',36,y);
-      doc.setFont('helvetica','normal');doc.setTextColor(...DARK);
-      const il=doc.splitTextToSize(q.inclusions,col);doc.text(il,36,y+11);
+    const il=q.inclusions?doc.splitTextToSize(q.inclusions,col):[];
+    const el=q.exclusions?doc.splitTextToSize(q.exclusions,col):[];
+    const _ieH = 13 + Math.max(il.length, el.length)*10 + 8;
+    if (_ieH <= PH - 70 - 54) {
+      _b(_ieH);   // two columns side by side, moved whole to a fresh page if needed
+      if(q.inclusions){
+        doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GREEN);doc.text('INCLUSIONS',36,y);
+        doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
+        doc.text(il,36,y+11);
+      }
+      if(q.exclusions){
+        doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('EXCLUSIONS',36+col+16,y);
+        doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
+        doc.text(el,36+col+16,y+11);
+      }
+      y+=_ieH;
+    } else {
+      // Longer than a page — run each full-width, flowing across pages.
+      if(q.inclusions){
+        _b(40);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GREEN);doc.text('INCLUSIONS',36,y);y+=11;
+        doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
+        _fl(doc.splitTextToSize(q.inclusions,W-72),36,10);y+=8;
+      }
+      if(q.exclusions){
+        _b(40);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('EXCLUSIONS',36,y);y+=11;
+        doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
+        _fl(doc.splitTextToSize(q.exclusions,W-72),36,10);y+=8;
+      }
     }
-    if(q.exclusions){
-      doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('EXCLUSIONS',36+col+16,y);
-      doc.setFont('helvetica','normal');doc.setTextColor(...DARK);
-      const el=doc.splitTextToSize(q.exclusions,col);doc.text(el,36+col+16,y+11);
-    }
-    y+=52;
   }
-  // footer
-  doc.setDrawColor(...LGRAY);doc.line(36,PH-48,W-36,PH-48);
-  doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...GRAY);
-  doc.text('GreenKey — Licensed Electrical Contractor — Central Virginia',W/2,PH-34,{align:'center'});
-  doc.text('This quote is valid for 30 days. Pricing subject to change after expiration.',W/2,PH-22,{align:'center'});
+  // footer — every page, with Page N of M when it runs long (2026-08-18n)
+  _pdfFooterAll(doc,W,PH,LGRAY,GRAY,'This quote is valid for 30 days. Pricing subject to change after expiration.');
   const cn=cust?custFullName(cust).replace(/\s/g,'_'):'Customer';
   const filename=`GreenKey_Quote_${q.id}_${cn}.pdf`;
   if(returnDataUrl){
@@ -11912,7 +11960,11 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
 function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
   const jsPDF=getPDFLib();if(!jsPDF)return;
   const doc=new jsPDF({unit:'pt',format:'letter'});
-  const W=612,PH=792;let y=0;
+  const W=612,PH=792;
+  const _st={y:0};
+  const _brk=_pdfMakeBrk(doc,PH,_st), _flow=_pdfMakeFlow(doc,_brk,_st);
+  let y=0; const _b=(need)=>{ _st.y=y; _brk(need); y=_st.y; };
+  const _fl=(lines,x,lh)=>{ _st.y=y; _flow(lines,x,lh); y=_st.y; };
   const GREEN=[109,194,48],DARK=[15,17,23],GRAY=[100,110,130],LGRAY=[238,240,245];
   pdfHeader(doc,'INVOICE',invNum,new Date().toISOString().slice(0,10),W);
   y=108;
@@ -11938,7 +11990,6 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
     doc.text(`Job ID: ${lead.id}  |  ${lead.siteStreet||''}, ${lead.siteCity||''}, ${lead.siteState||'VA'}`,36,y);y+=18;
     doc.setDrawColor(...LGRAY);doc.line(36,y,W-36,y);y+=14;
   }
-  doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SERVICES PROVIDED',36,y);y+=12;
   const _totalsInv = calcQuoteTotals(q);
   // Service calls (2026-07-24): itemize labor + each material at its billed
   // price, so the customer sees what was done instead of one lump line.
@@ -11979,11 +12030,14 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
   const _netTotal  = Math.max(0, (_totalsInv.quoteTotal||0) - _feeAmt);
   const _cardTotal = (_totalsInv.quoteTotal||0);
   const _invTotal  = _noFee ? _netTotal : _cardTotal;
+  _b(12 + 20 + _invRows.length*20 + 44);   // 2026-08-18n: itemized service calls can run long
+  doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...GREEN);doc.text('SERVICES PROVIDED',36,y);y+=12;
   y=pdfTable(doc,y,W,_invRows,_both ? 'TOTAL DUE (Zelle / check)' : 'TOTAL DUE',_invTotal);
 
   // ── HOW TO PAY block — only in 'both' mode ──
   if(_both){
     y += 14;
+    _b(110);
     const _memo = payMemoCode((lead && lead.id) || q.leadId || '');
     doc.setDrawColor(...LGRAY); doc.setLineWidth(0.8);
     doc.roundedRect(36, y, W-72, 96, 4, 4);
@@ -12014,14 +12068,12 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
   }
   const _wnotes = q.notes || q.qq?.scNotes;
   if(_wnotes){
+    _b(40);
     doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('WORK PERFORMED / NOTES',36,y);y+=11;
     doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
-    const nl=doc.splitTextToSize(_wnotes,W-72);doc.text(nl,36,y);
+    _fl(doc.splitTextToSize(_wnotes,W-72),36,10);
   }
-  doc.setDrawColor(...LGRAY);doc.line(36,PH-48,W-36,PH-48);
-  doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...GRAY);
-  doc.text('GreenKey — Licensed Electrical Contractor — Central Virginia',W/2,PH-34,{align:'center'});
-  doc.text(paidInfo?'Paid in full — thank you for your business! Keep this for your records.':'Thank you for your business! Please contact us with any questions.',W/2,PH-22,{align:'center'});
+  _pdfFooterAll(doc,W,PH,LGRAY,GRAY,paidInfo?'Paid in full — thank you for your business! Keep this for your records.':'Thank you for your business! Please contact us with any questions.');
   const cn=cust?custFullName(cust).replace(/\s/g,'_'):'Customer';
   const filename = paidInfo ? `GreenKey_PaidInvoice_${invNum}_${cn}.pdf` : `GreenKey_Invoice_${invNum}_${cn}.pdf`;
   if(returnDataUrl){ const dataUrl=doc.output('datauristring'); return {dataUrl, filename}; }
