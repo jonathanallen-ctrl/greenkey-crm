@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18s</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18t</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -8463,9 +8463,38 @@ function pullLeadScope(qid){
 
 // Explicit push from quote scope → lead's scopeOfWork.
 // Used when the lead already has a scope and the auto-mirror won't fire.
+// ── THE SCOPE A QUOTE ACTUALLY HAS (crm-2026-08-18t, 2026-08-19) ──
+// The Scope of Work textarea DISPLAYS `q.scope || lead.scopeOfWork || autoScope(q)`
+// but only WRITES q.scope when the user types in it. So a quote whose
+// auto-generated scope was accepted as-is — which is most of them — has a full
+// paragraph on screen and an empty `q.scope` underneath.
+//
+// Jon hit this live on 18o mid-quote: "Push to Job" answered "Quote has no scope
+// text yet" while he was looking straight at the scope. The quote PDF and the
+// customer email had each grown their own autoScope() fallback for exactly this
+// reason (see `_pdfScope`); this button never got one.
+//
+// One resolver instead of a third copy of the fallback chain. Deliberately
+// mirrors the textarea expression EXACTLY, so what the button acts on is always
+// what the user is reading.
+//
+// ⚠ Deliberately does NOT persist the resolved text back onto q.scope. A
+// non-empty q.scope is the "user has hand-edited this" marker: it makes the
+// ↻ Reset to auto button appear and it STOPS _refreshAutoTexts() from
+// re-generating the scope when quote inputs change (footage, breaker, panel
+// location…). Persisting here would silently freeze the scope of every quote
+// this button touches.
+function quoteScopeText(q){
+  if(!q) return '';
+  const stored=(q.scope||'').trim(); if(stored) return stored;
+  const lead=(q.leadId && typeof getLead==='function') ? getLead(q.leadId) : null;
+  const ls=((lead&&lead.scopeOfWork)||'').trim(); if(ls) return ls;
+  const auto=(typeof autoScope==='function') ? autoScope(q) : '';
+  return (auto||'').trim();
+}
 function pushQuoteScope(qid){
   const q=getQuote(qid); if(!q) return;
-  const v=(q.scope||'').trim();
+  const v=quoteScopeText(q);
   if(!v){ toast('Quote has no scope text yet','warning'); return; }
   const lead=getLead(q.leadId); if(!lead) return;
   const existing=(lead.scopeOfWork||'').trim();
@@ -13146,8 +13175,37 @@ function _chipEditorHTML(leadId, key){
 // internal Active Quotes display + Job Value/revenue, so revenue isn't inflated.
 // Robust to older quotes that predate preProcessingTotal: subtract the stored
 // fee, then fall back to quoteTotal.
+//
+// ── $5 ROUND-UP REACHES THE EMAIL (crm-2026-08-18t, 2026-08-19) ──
+// Jon, sending a live quote: the email read "Total: $1,109.00" while the quote
+// form, the PDF and the payment tiers all read $1,110.00.
+//
+// Cause: the $5 round-up added in `18o` lives in calcQuoteTotals(), which every
+// DISPLAY surface calls fresh. But `_quoteNet` read the STORED
+// q.preProcessingTotal — written before that rule existed and never re-rounded.
+// So the email (and everything else routed through _quoteNet) quoted the raw
+// pre-round figure while the document in the customer's hand said $5 more.
+//
+// Fixed at the source rather than in the email template: recompute through
+// calcQuoteTotals() so every surface — email, quote list, job value, pay link,
+// invoice — reports the same number the customer is holding.
+//
+// ⚠ EXTERNAL quotes are deliberately excluded. Outside-recorded quotes
+// (Sherri's Qmerit path, Treehouse, AF1) store a hand-entered `amount` as
+// preProcessingTotal — that is somebody else's fixed figure, not something our
+// pricing engine produced, and rounding it up would invent money that was never
+// quoted. They keep the stored value verbatim. The `> 0` guard is a second net:
+// an external/lineless quote computes to 0 and falls through to the stored path.
 function _quoteNet(q){
   if (!q) return 0;
+  if (!q.external && typeof calcQuoteTotals === 'function') {
+    try {
+      const t = calcQuoteTotals(q);
+      if (t && typeof t.preProcessingTotal === 'number' && isFinite(t.preProcessingTotal) && t.preProcessingTotal > 0) {
+        return Math.round(t.preProcessingTotal);
+      }
+    } catch (e) { /* fall through to the stored value */ }
+  }
   if (typeof q.preProcessingTotal === 'number' && isFinite(q.preProcessingTotal)) return Math.round(q.preProcessingTotal);
   const fee = (typeof q.paymentProcessingFee === 'number') ? q.paymentProcessingFee : 0;
   if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.round(Math.max(0, q.quoteTotal - fee));

@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-19 field-23';
+const BUILD = '2026-08-19 field-24';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -322,7 +322,11 @@ async function syncFromSP(){
   let next='/sites/'+_spSite+'/lists/'+_spList+'/items?$expand=fields&$top=200'; const got={};
   while(next){ const res=await graphFetch(next); for(const it of (res.value||[])){ const k=it.fields&&it.fields.Title, v=it.fields&&it.fields.DataValue; if(k&&v) got[k]=v; } next=res['@odata.nextLink']||null; }
   // Read-only: overwrite the keys this tool needs.
-  ['gk_leads','gk_customers','gk_quotes'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
+  // field-24: gk_ahjs + gk_inspectors added. These were ALREADY arriving in the
+  // bulk read above (both are in the CRM's SYNC_KEYS, so they are rows in the
+  // same SharePoint list this loop already walks) — they were simply thrown away
+  // instead of persisted. Adding them costs ZERO extra network calls.
+  ['gk_leads','gk_customers','gk_quotes','gk_ahjs','gk_inspectors'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
 }
 // field-19 — WHICH PHOTOS A TECH MAY DELETE.
 // Only files the field app itself uploaded, which are named "<shot>__<epoch>_<name>"
@@ -867,6 +871,107 @@ async function saveWalkdown(jobId){
   }catch(e){ alert('Could not save: '+(e.message||e)); }
   renderWalkdown(jobId);
 }
+
+// ══════════════ field-24 (2026-08-19): INSPECTION CONTACTS ══════════════
+// Jon, 8/19: on inspection days the crew needs the AHJ's inspection office and
+// that AHJ's inspectors reachable from the job page — "so regardless of who ends
+// up getting the assignment, we can reach them."
+//
+// CALL ONLY in this cut, deliberately. Every button below is a plain `tel:` href:
+// no fetch, no auth token, no worker round-trip, no new storage, nothing to
+// drain a battery or stall on bad signal — the app stays as light as it was.
+// 💬 Texting an inspector goes in field-25, AFTER the 8/20 phone port, so no
+// inspector thread is opened on a number that is about to move.
+//
+// The data is already here: gk_ahjs + gk_inspectors ride the syncFromSP() bulk
+// read (see above). Mirrors the CRM's getAHJs()/getInspectors()/inspectorsForAHJ().
+const AHJ_KEY_F = 'gk_ahjs', INSPECTORS_KEY_F = 'gk_inspectors';
+function getAHJs(){
+  try{ const a=JSON.parse(localStorage.getItem(AHJ_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
+  catch(e){ return []; }
+}
+function getInspectors(){
+  try{ const a=JSON.parse(localStorage.getItem(INSPECTORS_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
+  catch(e){ return []; }
+}
+function inspectorsForAHJ(ahjId){ return getInspectors().filter(i=>i.ahjId===ahjId); }
+
+// Jurisdiction, in the CRM's order of truth (getLeadJurisdiction in index.html):
+// a human's answer wins, then the geocoded county, then the legacy value, and
+// only then the mailing city — which is the one that used to send Sherri to the
+// City of Richmond portal for a Chesterfield house.
+function _jurisOf(l){
+  if(!l) return '';
+  return String(l.jurisdictionManual || l.jurisdictionDerived || l.jurisdiction || l.siteCity || '').trim();
+}
+// Matches the CRM's textInspectorForJob() rule, with one guard it lacks: an AHJ
+// whose name reduces to nothing (or to a 1-2 char stub) after stripping
+// " county"/" city" must NOT match every job by way of ''.includes.
+function ahjForLead(l){
+  const j=_jurisOf(l).toLowerCase(); if(!j) return null;
+  const ahjs=getAHJs();
+  for(let k=0;k<ahjs.length;k++){
+    const a=ahjs[k], an=String(a.name||'').toLowerCase().trim(); if(!an) continue;
+    if(an.indexOf(j)>=0) return a;
+    const stub=an.replace(/ county| city/g,'').trim();
+    if(stub.length>=3 && j.indexOf(stub)>=0) return a;
+  }
+  return null;
+}
+// Is this job an inspection job? Either the office recorded an inspection on it,
+// or there is an inspection appointment on the calendar.
+function _hasInspContext(l){
+  if(!l) return false;
+  const st = l.inspection && l.inspection.status;
+  if(st && String(st).toLowerCase()!=='none') return true;
+  return apptsOf(l).some(a=>a && a.type==='inspection');
+}
+function _telHref(p){ const d=String(p==null?'':p).replace(/[^0-9+]/g,''); return d.length>=7 ? ('tel:'+d) : ''; }
+
+// The card. Returns '' on any job with no inspection context, so ordinary
+// install job pages render exactly as they did in field-23.
+function _inspectionContactsCard(l){
+  if(!_hasInspContext(l)) return '';
+  const juris = _jurisOf(l);
+  const ahj   = ahjForLead(l);
+  let h = '<div class="card"><div class="lab">Inspection contacts'
+        + (ahj ? ' · '+esc(ahj.name) : (juris ? ' · '+esc(juris) : ''))
+        + '</div>';
+
+  if(!ahj){
+    h += '<div class="muted" style="font-size:13.5px;line-height:1.5">'
+       + (juris ? 'No AHJ on file matching <b>'+esc(juris)+'</b>.' : 'No jurisdiction on this job yet.')
+       + ' Ask the office to add it in the CRM under Permitting → AHJ Directory.</div></div>';
+    return h;
+  }
+
+  const officeTel = _telHref(ahj.phone);
+  h += officeTel
+    ? '<a class="btn green" href="'+officeTel+'">📞 Inspection office · '+esc(ahj.phone)+'</a>'
+    : '<div class="muted" style="font-size:13.5px;line-height:1.5">No office phone on file for '+esc(ahj.name)
+      + ' — ask the office to add one in Permitting → AHJ Directory.</div>';
+
+  const insps = inspectorsForAHJ(ahj.id);
+  if(insps.length){
+    h += '<div class="lab" style="margin-top:14px">Inspectors</div>';
+    h += insps.map(function(i){
+      const t=_telHref(i.phone);
+      return '<div style="padding:8px 0;border-top:1px solid #1d222c">'
+        + '<div style="font-size:14.5px;font-weight:600;color:#e8eaed">'+esc(i.name||'Inspector')+'</div>'
+        + (i.notes?'<div class="muted" style="font-size:12px;margin-top:2px;line-height:1.4">'+esc(i.notes)+'</div>':'')
+        + (t ? '<a class="btn ghost" style="margin-top:8px" href="'+t+'">📞 Call '+esc(i.phone)+'</a>'
+             : '<div class="muted" style="font-size:12px;margin-top:6px">No number on file</div>')
+        + '</div>';
+    }).join('');
+  } else {
+    h += '<div class="muted" style="font-size:12.5px;margin-top:12px;line-height:1.5">No inspectors on file for '
+       + esc(ahj.name)+'. The office can add them in Permitting → AHJ Directory.</div>';
+  }
+
+  h += '<div class="muted" style="font-size:12px;margin-top:12px;line-height:1.45">📞 dials from your phone, so the inspector sees YOUR number. Texting inspectors from the GreenKey business line is coming after the phone port.</div>';
+  return h + '</div>';
+}
+
 function renderDetail(id){
   const l=activeLeads().find(x=>x.id===id) || getLeads().find(x=>x.id===id);
   if(!l){ $app().innerHTML=header('Job', true)+'<div class="wrap"><div class="empty">Job not found.</div></div>'; return; }
@@ -953,6 +1058,7 @@ function renderDetail(id){
   // Install Spec table (read-only) — ASSEMBLED from data the office already
   // maintains. Nothing new to fill in.
   const _spec = _installSpecRows(l);
+  const inspCard = _inspectionContactsCard(l);   // field-24 — '' unless this is an inspection job
   const specCard = _spec.length
     ? '<div class="card"><div class="lab">Install Spec</div>'
       + '<div style="display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px">'
@@ -988,6 +1094,7 @@ function renderDetail(id){
     + payCard
     + statusCard
     + specCard
+    + inspCard
     + (l.scopeOfWork?'<div class="card"><div class="lab">Scope of Work</div><div class="scope">'+esc(l.scopeOfWork)+'</div></div>':'')
     + '<div class="card">'
       + '<div class="lab" style="display:flex;align-items:center;justify-content:space-between">Required photos<span id="shot-count" class="muted" style="font-size:12px;font-weight:600">0 of '+INSTALL_SHOTS.length+'</span></div>'
