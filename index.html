@@ -1134,10 +1134,10 @@
       <label id="lc-photo-drop" for="lc-photo-input" style="display:flex;align-items:center;gap:12px;border:1.5px dashed var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.6"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         <div style="flex:1"><div style="font-weight:600;font-size:13px" id="lc-photo-title">Panel photo (required)</div>
-        <div style="font-size:11px;color:var(--text-muted)" id="lc-photo-sub">Tap to take or choose a photo — or drag one in / paste with Ctrl+V</div></div>
-        <img id="lc-photo-thumb" style="display:none;width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--text-muted)" id="lc-photo-sub">Tap to take or choose — or drag in / paste with Ctrl+V. Add closeups any time; new photos ride out with your next Send.</div></div>
       </label>
-      <input type="file" id="lc-photo-input" accept="image/*" capture="environment" style="display:none">
+      <input type="file" id="lc-photo-input" accept="image/*" capture="environment" multiple style="display:none">
+      <div id="lc-photo-tray" style="display:none;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
       <div style="margin-top:8px">
         <button class="btn btn-g" style="padding:5px 11px;font-size:11.5px" onclick="openLcJobPhotoPicker()"
           title="Pick a photo already filed on this job — no downloading or dragging needed">📁 Use a photo already on this job</button>
@@ -1172,6 +1172,8 @@
      background:var(--green);color:#08130c;font-weight:700;font-size:12.5px;padding:10px 16px;border-radius:24px;
      box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer;display:none;align-items:center;gap:8px">
   ⚡ <span>Load Calc in progress — tap to resume</span>
+  <span onclick="event.stopPropagation();_lcDismissPill()" title="Hide this — the calc stays saved; reopen it from the job's ⚡ Load Calc button"
+        style="margin-left:4px;padding:0 6px;border-left:1px solid rgba(8,19,12,.3);font-weight:800">✕</span>
 </div>
 
 <div class="moverlay" id="ai-draft-modal">
@@ -1287,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18o</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18s</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5105,6 +5107,14 @@ function getQQPricing(){
     //   2 lugs → (15 + 30) × 1.30 = $58.50    3 lugs → (15 + 45) × 1.30 = $78.00
     // Lug count scales because a 2-wire splice needs 2 and a 3-wire needs 3.
     jbBoxCost:15, jbLugCost:15,
+    // ── 8x8 access covers (2026-08-19, Jonathan) ──
+    // Used whenever we cut the wall above/below a panel for access — which is
+    // often. Was only chargeable as a Custom add-on, which printed a separate
+    // $20 line on the customer's quote and drew their eye to it. Now a counted
+    // add-on FOLDED INTO L&M like the junction box — mentioned in Inclusions,
+    // never its own priced line. $20 flat each (cost swings $12 Home Depot /
+    // $20 Lowes — flat $20 never goes underwater on the Lowes run).
+    accessCover:20,
     panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
     // AFCI/GFCI dual-function breaker upgrade — optional add-on for panel swaps.
     // $100 per upgraded circuit. The math (Capital Electric pricing data):
@@ -6576,6 +6586,16 @@ function renderQuickQuoteForm(q){
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Access covers</div>
+          <div class="qq-sub">Wall access above/below the panel (8×8 pop-in) · $${getQQPricing().accessCover} each, folded into L&amp;M — never a separate line · <span id="qq-ac-calc" style="color:var(--green);font-weight:600">$${(((qq.accessCovers||0)*getQQPricing().accessCover)).toFixed(2)}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
+          <span style="font-size:11px;color:var(--text-muted)">covers</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Custom add-on</div>
           <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
         </div>
@@ -6773,6 +6793,16 @@ function _renderQQ_HVAC(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Access covers</div>
+          <div class="qq-sub">Wall access above/below the panel (8×8 pop-in) · $${getQQPricing().accessCover} each, folded into L&amp;M — never a separate line · <span id="qq-ac-calc" style="color:var(--green);font-weight:600">$${(((qq.accessCovers||0)*getQQPricing().accessCover)).toFixed(2)}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
+          <span style="font-size:11px;color:var(--text-muted)">covers</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Custom add-on</div>
           <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
         </div>
@@ -6913,6 +6943,16 @@ function _renderQQ_CircuitReplacement(q) {
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
           <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Access covers</div>
+          <div class="qq-sub">Wall access above/below the panel (8×8 pop-in) · $${getQQPricing().accessCover} each, folded into L&amp;M — never a separate line · <span id="qq-ac-calc" style="color:var(--green);font-weight:600">$${(((qq.accessCovers||0)*getQQPricing().accessCover)).toFixed(2)}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
+          <span style="font-size:11px;color:var(--text-muted)">covers</span>
         </div>
       </div>
       <div class="qq-row">
@@ -7086,6 +7126,16 @@ function _renderQQ_PanelReplacement(q) {
         <div style="display:flex;align-items:center;gap:6px">
           <input class="li-inp num" type="number" id="qq-jb-lugs" value="${qq.jbLugs||0}" min="0" max="12" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="Number of Polaris lugs. 0 = no junction box on this job. A 2-wire splice needs 2, a 3-wire needs 3.">
           <span style="font-size:11px;color:var(--text-muted)">lugs</span>
+        </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Access covers</div>
+          <div class="qq-sub">Wall access above/below the panel (8×8 pop-in) · $${getQQPricing().accessCover} each, folded into L&amp;M — never a separate line · <span id="qq-ac-calc" style="color:var(--green);font-weight:600">$${(((qq.accessCovers||0)*getQQPricing().accessCover)).toFixed(2)}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
+          <span style="font-size:11px;color:var(--text-muted)">covers</span>
         </div>
       </div>
       <div class="qq-row">
@@ -7945,6 +7995,10 @@ function _qqReadAddOns() {
   const jbFee = lugs > 0
     ? Math.round(((p.jbBoxCost || 0) + (p.jbLugCost || 0) * lugs) * 1.30 * 100) / 100
     : 0;
+  // Access covers (2026-08-19) — counted like lugs, folded into L&M so the
+  // customer never sees a separate $20 line item drawing their eye.
+  const covers = Math.max(0, parseInt(document.getElementById('qq-access-covers')?.value) || 0);
+  const acFee = covers * (p.accessCover || 0);
   const cLabel = (document.getElementById('qq-custom-label')?.value || '').trim().slice(0, 80);
   const cAmt   = Math.max(0, parseFloat(document.getElementById('qq-custom-amt')?.value) || 0);
   // Counts only with BOTH a name and a number — an unexplained charge on a
@@ -7954,9 +8008,11 @@ function _qqReadAddOns() {
   // render time left it reading $0.00 while you typed.
   const el = document.getElementById('qq-jb-calc');
   if (el) el.textContent = '$' + jbFee.toFixed(2);
+  const acEl = document.getElementById('qq-ac-calc');
+  if (acEl) acEl.textContent = '$' + acFee.toFixed(2);
   return {
-    total: jbFee + cFee,
-    patch: { jbLugs: lugs, jbFee, customLabel: cLabel, customAmount: cAmt }
+    total: jbFee + acFee + cFee,
+    patch: { jbLugs: lugs, jbFee, accessCovers: covers, accessCoverFee: acFee, customLabel: cLabel, customAmount: cAmt }
   };
 }
 
@@ -8725,6 +8781,12 @@ function autoInclusions(q){
   if ((q.qq?.jbLugs || 0) > 0) {
     lines.push('• Junction box and insulated multi-tap connectors for splicing into the existing conductors');
   }
+  // Access covers ride in Inclusions WITHOUT a price — the charge lives inside
+  // L&M by design (Jonathan, 2026-08-19: a separate $20 line drew attention).
+  if ((q.qq?.accessCovers || 0) > 0) {
+    const _acN = q.qq.accessCovers;
+    lines.push('• ' + (_acN > 1 ? _acN + ' flush wall-access covers' : 'Flush wall-access cover') + ' where wall access is needed at the panel');
+  }
   const _ciLbl = (q.qq?.customLabel || '').trim();
   if (_ciLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) lines.push('• ' + _ciLbl);
   return lines.join('\n');
@@ -8882,8 +8944,18 @@ function _refreshScopeSubtotals(lines){
   }
   if(hi>=0){const el=document.getElementById('scope-sub-'+hi); if(el)el.textContent=fmt$(sum);}
 }
+// Heal fraction-style markups (0.35 → 35) in the STORED lines so the inputs
+// show the same number the math uses — covers quotes saved before the fix.
+// Returns the (possibly healed) quote; persists only when something changed.
+function _healQuoteMarkups(q){
+  if(!(q&&(q.lines||[]).some(ln=>ln&&!ln.header&&ln.markup>0&&ln.markup<1))) return q;
+  const healed={...q,lines:q.lines.map(ln=>(ln&&!ln.header)?{...ln,markup:_markupPct(ln.markup)}:ln)};
+  upsertQuote(healed);
+  return healed;
+}
 function renderDetailedQuoteForm(q){
   const wrap=document.getElementById('qb-form'); if(!wrap) return;
+  q=_healQuoteMarkups(q);
   const isQmerit=q.source==='Qmerit';
   const lead=getLead(q.leadId);
   const mats=getMaterials();
@@ -9052,7 +9124,14 @@ function _onDQSpecialMaterialsChange(qid, value) {
 }
 
 // ── LINE ITEM CRUD ──
-function calcLine(ln){if(ln&&ln.header)return 0;return(parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0)*(1+(parseFloat(ln.markup)||0)/100);}
+// Markup is a PERCENT (30 = 30%). The AI estimator sometimes returns it as a
+// FRACTION (0.35 meaning 35%) despite the prompt, and 0.35 stored into a
+// percent field silently applied 0.35% — near-zero markup on those lines
+// (Bennett quote, 8/18: $200 breaker extended $200.70 instead of $270). No
+// real markup here is ever under 1%, so 0 < m < 1 is read as a fraction and
+// normalized ×100. Math, display healing, and AI-draft apply share this rule.
+function _markupPct(raw){const m=parseFloat(raw)||0;return (m>0&&m<1)?m*100:m;}
+function calcLine(ln){if(ln&&ln.header)return 0;return(parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0)*(1+_markupPct(ln.markup)/100);}
 function addLine(qid){const q=getQuote(qid);if(!q)return;const lines=[...(q.lines||[]),{id:'ln-'+Date.now(),desc:'',qty:1,unit:'each',unitCost:0,markup:30}];upsertQuote({...q,lines});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function removeLine(qid,idx){const q=getQuote(qid);if(!q)return;const lines=[...(q.lines||[])];lines.splice(idx,1);upsertQuote({...q,lines});onDQChange(qid);renderDetailedQuoteForm(getQuote(qid));}
 function updateLine(qid,idx,field,val){
@@ -26215,8 +26294,14 @@ setInterval(() => {
 // registration.  See cloudflare-worker/README.md for one-time setup.
 
 // Worker deployment URL — paste once after `wrangler deploy`.
-// Example: 'https://greenkey-sms.your-subdomain.workers.dev'
-const SMS_WORKER_URL  = 'https://greenkey-sms.greenkey-usa.workers.dev';
+// 2026-08-19: custom domain (Cloudflare route link.greenkey-usa.com/* → the
+// greenkey-sms worker). The worker mints EVERY customer-facing link from the
+// request origin, so calling it here re-homes quote accept/decline, consent,
+// inspection, and call-back links onto GreenKey's own domain — workers.dev in
+// email bodies was a top spam-filter trigger. The old
+// https://greenkey-sms.greenkey-usa.workers.dev stays live for old links and
+// for Twilio/Stripe webhooks (configured separately; unaffected).
+const SMS_WORKER_URL  = 'https://link.greenkey-usa.com';
 
 // MSAL scope for the SMS Relay API.  Format: api://<api-app-client-id>/SMS.Send
 // Example: 'api://00000000-0000-0000-0000-000000000000/SMS.Send'
@@ -30210,15 +30295,15 @@ const GKLoadCalc = (function () {
 
 // ── Load Calc modal state ──
 let _lcJobId = null;         // lead the modal is bound to
-let _lcMessages = [];        // Anthropic-format transcript (photo in msg[0])
-let _lcPhotoB64 = null;      // resized panel photo, base64 (no prefix)
-let _lcPhotoDataUrl = null;  // same, with data: prefix (for save + thumb)
+let _lcMessages = [];        // Anthropic-format transcript (photos ride in user messages)
+let _lcPhotos = [];          // photo tray: [{ b64, dataUrl, sent }] — unsent ones ride the NEXT Send
 let _lcResult = null;        // { inputs, assumptions } once Claude says done
 let _lcBusy = false;
+const LC_MAX_PHOTOS = 10;    // payload guard — the whole transcript re-sends every turn
 
 function openLoadCalcModal(jobId, forceFresh) {
   const lead = getLead(jobId); if (!lead) { toast('Job not found', 'error'); return; }
-  _lcJobId = jobId; _lcMessages = []; _lcPhotoB64 = null; _lcPhotoDataUrl = null; _lcResult = null; _lcBusy = false;
+  _lcJobId = jobId; _lcMessages = []; _lcPhotos = []; _lcResult = null; _lcBusy = false;
   _lcShowPill(false);
   const cust = lead.customerId ? getCustomer(lead.customerId) : null;
   const label = lead.address || (cust ? customFullNameSafe(cust) : '');
@@ -30227,23 +30312,24 @@ function openLoadCalcModal(jobId, forceFresh) {
     '<div id="lc-hint" style="font-size:12px;color:var(--text-muted)">Attach the panel photo, add anything you already know (charger amps, square footage, gas appliances…), and hit Send.</div>';
   const res = document.getElementById('lc-result'); res.style.display = 'none'; res.innerHTML = '';
   const err = document.getElementById('lc-error'); err.style.display = 'none'; err.textContent = '';
-  const thumb = document.getElementById('lc-photo-thumb'); thumb.style.display = 'none'; thumb.src = '';
-  document.getElementById('lc-photo-title').textContent = 'Panel photo (required)';
-  document.getElementById('lc-photo-sub').textContent = 'Tap to take or choose a photo — the calc can\'t start without one';
   document.getElementById('lc-photo-input').value = '';
   document.getElementById('lc-input').value = '';
-  const send = document.getElementById('lc-send-btn'); send.disabled = true; send.title = 'Attach the panel photo first';
   document.getElementById('lc-save-btn').style.display = 'none';
+  _lcPaintTray();
 
   // Resume an in-progress calc for THIS job unless we were told to start fresh.
   const saved = forceFresh ? null : _lcLoadSession(jobId);
   if (saved) {
     _lcMessages = saved.messages || [];
-    if (saved.photoDataUrl) {
-      _lcPhotoDataUrl = saved.photoDataUrl;
-      _lcPhotoB64 = String(saved.photoDataUrl).split(',')[1] || null;
-      _lcApplyPhotoUI(saved.photoDataUrl);
+    if (Array.isArray(saved.photos)) {
+      _lcPhotos = saved.photos
+        .filter(p => p && p.dataUrl)
+        .map(p => ({ dataUrl: p.dataUrl, b64: String(p.dataUrl).split(',')[1] || null, sent: !!p.sent }));
+    } else if (saved.photoDataUrl) {
+      // legacy single-photo session → one-photo tray (sent if the conversation started)
+      _lcPhotos = [{ dataUrl: saved.photoDataUrl, b64: String(saved.photoDataUrl).split(',')[1] || null, sent: _lcMessages.length > 0 }];
     }
+    _lcPaintTray();
     // Rebuild the visible transcript from the stored turns.
     const hint = document.getElementById('lc-hint'); if (hint && _lcMessages.length) hint.remove();
     _lcMessages.forEach(m => {
@@ -30271,6 +30357,7 @@ function closeLoadCalcModal() {
 async function _lcAcceptPhotoFile(f) {
   if (!f) return;
   if (!/^image\//.test(f.type || '')) { toast('That isn\'t an image file', 'warning'); return; }
+  if (_lcPhotos.length >= LC_MAX_PHOTOS) { toast('Photo limit reached (' + LC_MAX_PHOTOS + ') — remove one first', 'warning'); return; }
   try {
     const rawUrl = await new Promise((res, rej) => {
       const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(f);
@@ -30279,24 +30366,60 @@ async function _lcAcceptPhotoFile(f) {
     const jpgUrl = await new Promise((res, rej) => {
       const rd = new FileReader(); rd.onload = () => res(rd.result); rd.onerror = rej; rd.readAsDataURL(out.blob);
     });
-    _lcPhotoDataUrl = jpgUrl;
-    _lcPhotoB64 = jpgUrl.split(',')[1];
-    _lcApplyPhotoUI(jpgUrl);
+    _lcPhotos.push({ dataUrl: jpgUrl, b64: jpgUrl.split(',')[1], sent: false });
+    _lcPaintTray();
     _lcSaveSession();
   } catch (e) {
     console.warn('[GK] load calc photo failed:', e);
     toast('Couldn\'t read that photo (' + (e.message || e) + ') — try a different one', 'error');
   }
 }
-function _lcApplyPhotoUI(jpgUrl) {
-  const thumb = document.getElementById('lc-photo-thumb'); if (thumb) { thumb.src = jpgUrl; thumb.style.display = ''; }
-  const t = document.getElementById('lc-photo-title'); if (t) t.textContent = '✓ Panel photo attached';
-  const s = document.getElementById('lc-photo-sub');   if (s) s.textContent = 'Tap to change — or drag/paste another';
-  const send = document.getElementById('lc-send-btn'); if (send) { send.disabled = false; send.title = ''; }
+// The tray is the single source of photo-state truth in the UI: which photos
+// exist, which already went to the AI (✓ sent — part of the transcript, can't
+// be pulled back) and which ride out with the NEXT Send (✕ removable).
+function _lcPaintTray() {
+  const tray = document.getElementById('lc-photo-tray');
+  if (tray) {
+    if (!_lcPhotos.length) { tray.style.display = 'none'; tray.innerHTML = ''; }
+    else {
+      tray.style.display = 'flex';
+      tray.innerHTML = _lcPhotos.map((p, i) =>
+        '<div style="position:relative;flex:0 0 auto">' +
+          '<img src="' + p.dataUrl + '" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1.5px solid ' +
+            (p.sent ? 'var(--border)' : 'var(--green)') + '">' +
+          (p.sent
+            ? '<span title="Already sent to the AI" style="position:absolute;left:2px;bottom:2px;background:rgba(8,19,12,.72);color:var(--green);font-size:10px;font-weight:700;border-radius:4px;padding:0 4px">✓ sent</span>'
+            : '<span title="Rides out with your next Send" style="position:absolute;left:2px;bottom:2px;background:var(--green);color:#08130c;font-size:10px;font-weight:700;border-radius:4px;padding:0 4px">next send</span>' +
+              '<span onclick="_lcRemovePhoto(' + i + ')" title="Remove — hasn\'t been sent yet" style="position:absolute;top:-6px;right:-6px;background:#c94a3a;color:#fff;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;cursor:pointer">✕</span>') +
+        '</div>').join('');
+    }
+  }
+  const n = _lcPhotos.length, unsent = _lcPhotos.filter(p => !p.sent).length;
+  const t = document.getElementById('lc-photo-title');
+  if (t) t.textContent = n ? ('✓ ' + n + ' photo' + (n > 1 ? 's' : '') + (unsent ? ' (' + unsent + ' going out on next Send)' : ' — all sent')) : 'Panel photo (required)';
+  const s = document.getElementById('lc-photo-sub');
+  if (s) s.textContent = n ? 'Tap to add more — closeups of breakers, labels, the load list…' : 'Tap to take or choose — or drag in / paste with Ctrl+V. Add closeups any time; new photos ride out with your next Send.';
+  const send = document.getElementById('lc-send-btn');
+  if (send) {
+    const ready = n > 0 || _lcMessages.length > 0;
+    send.disabled = !ready;
+    send.title = ready ? '' : 'Attach the panel photo first';
+  }
+}
+function _lcRemovePhoto(i) {
+  const p = _lcPhotos[i];
+  if (!p) return;
+  if (p.sent) { toast('That photo already went to the AI — it can\'t be pulled back', 'warning'); return; }
+  _lcPhotos.splice(i, 1);
+  _lcPaintTray();
+  _lcSaveSession();
 }
 document.addEventListener('DOMContentLoaded', () => {
   const inp = document.getElementById('lc-photo-input');
-  if (inp) inp.addEventListener('change', () => _lcAcceptPhotoFile(inp.files && inp.files[0]));
+  if (inp) inp.addEventListener('change', async () => {
+    for (const f of Array.from(inp.files || [])) await _lcAcceptPhotoFile(f);
+    inp.value = '';
+  });
 
   // Drag & drop straight onto the dropzone — no file-picker hunting.
   const drop = document.getElementById('lc-photo-drop');
@@ -30308,10 +30431,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
       stop(e); drop.style.borderColor = ''; drop.style.background = '';
     }));
-    drop.addEventListener('drop', e => {
+    drop.addEventListener('drop', async e => {
       const dt = e.dataTransfer; if (!dt) return;
-      const f = (dt.files && dt.files[0]) || null;
-      if (f) _lcAcceptPhotoFile(f);
+      const fs = Array.from(dt.files || []);
+      if (fs.length) { for (const f of fs) await _lcAcceptPhotoFile(f); }
       else toast('Drag an image file in — dragging from another browser tab doesn\'t carry the file', 'warning');
     });
   }
@@ -30336,9 +30459,9 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault(); e.stopPropagation();
       if (box) { box.style.outline = ''; box.style.outlineOffset = ''; }
     }));
-    lcModal.addEventListener('drop', e => {
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) _lcAcceptPhotoFile(f);
+    lcModal.addEventListener('drop', async e => {
+      const fs = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      for (const f of fs) await _lcAcceptPhotoFile(f);
     });
   }
 
@@ -30405,10 +30528,14 @@ function _lcSaveSession() {
   try {
     if (!_lcJobId) return;
     localStorage.setItem(LC_SESSION_KEY, JSON.stringify({
-      jobId: _lcJobId, messages: _lcMessages || [], photoDataUrl: _lcPhotoDataUrl || '',
+      jobId: _lcJobId, messages: _lcMessages || [],
+      photos: (_lcPhotos || []).map(p => ({ dataUrl: p.dataUrl, sent: !!p.sent })),
       result: _lcResult || null, savedAt: new Date().toISOString()
     }));
-  } catch (e) { console.warn('[GK] load calc session save failed (probably storage full):', e); }
+  } catch (e) {
+    console.warn('[GK] load calc session save failed (probably storage full):', e);
+    toast('Heads up: this calc couldn\'t be saved for resume (storage full) — finish it in one sitting', 'warning');
+  }
 }
 function _lcLoadSession(jobId) {
   try {
@@ -30421,6 +30548,13 @@ function _lcClearSession() { try { localStorage.removeItem(LC_SESSION_KEY); } ca
 function _lcShowPill(show) {
   const pill = document.getElementById('lc-resume-pill');
   if (pill) pill.style.display = show ? 'flex' : 'none';
+}
+// ✕ on the pill — hides it WITHOUT discarding anything. The session stays
+// saved; the job's ⚡ Load Calc button resumes it. Before this the only way to
+// make the pill go away was Start over (which threw the conversation out).
+function _lcDismissPill() {
+  _lcShowPill(false);
+  toast('Hidden — the calc is still saved; the job\'s ⚡ Load Calc button resumes it', 'info');
 }
 function minimizeLoadCalc() {
   _lcSaveSession();
@@ -30460,22 +30594,25 @@ function _lcAppendBubble(role, text) {
 async function sendLoadCalcMsg() {
   if (_lcBusy) return;
   if (!_lcJobId) { toast('No job bound to the load calc', 'error'); return; }
-  if (!_lcPhotoB64) { toast('Attach the panel photo first — it\'s required', 'warning'); return; }
+  const unsent = _lcPhotos.filter(p => !p.sent && p.b64);
+  if (!_lcMessages.length && !unsent.length) { toast('Attach the panel photo first — it\'s required', 'warning'); return; }
   const box = document.getElementById('lc-input');
   const text = (box.value || '').trim();
-  if (!text && _lcMessages.length) return;                 // nothing to add mid-conversation
-  const firstText = text || 'Here is the panel. Read the main and branch breakers and ask me whatever you need.';
+  if (!text && !unsent.length && _lcMessages.length) return;   // nothing to add mid-conversation
 
-  // Build this turn (photo rides in the FIRST user message only).
-  if (_lcMessages.length === 0) {
-    _lcMessages.push({ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: _lcPhotoB64 } },
-      { type: 'text', text: firstText }
-    ]});
+  // Every unsent photo rides in THIS user message — first turn or any later one.
+  const outText = text ||
+    (_lcMessages.length === 0
+      ? 'Here is the panel. Read the main and branch breakers and ask me whatever you need.'
+      : (unsent.length === 1 ? 'Here is another photo.' : 'Here are more photos.'));
+  if (unsent.length) {
+    _lcMessages.push({ role: 'user', content: unsent
+      .map(p => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: p.b64 } }))
+      .concat([{ type: 'text', text: outText }]) });
   } else {
-    _lcMessages.push({ role: 'user', content: text });
+    _lcMessages.push({ role: 'user', content: outText });
   }
-  _lcAppendBubble('user', firstText === text ? text : firstText);
+  _lcAppendBubble('user', (unsent.length ? '📷×' + unsent.length + '  ' : '') + outText);
   box.value = '';
 
   _lcBusy = true;
@@ -30493,6 +30630,8 @@ async function sendLoadCalcMsg() {
     if (!resp.ok) throw new Error(data.error || ('Worker returned ' + resp.status));
     _lcMessages.push({ role: 'assistant', content: data.reply + (data.done && data.result ? '\n```json\n' + JSON.stringify(data.result) + '\n```' : '') });
     thinking.textContent = data.reply || (data.done ? 'Got everything I need.' : '…');
+    unsent.forEach(p => { p.sent = true; });   // delivered — lock them into the transcript
+    _lcPaintTray();
     _lcSaveSession();   // persist after every turn, so nothing is lost mid-conversation
     if (data.done && data.result && data.result.inputs) {
       _lcResult = data.result;
@@ -30566,13 +30705,20 @@ function saveLoadCalcToJob() {
     const fname = GKLoadCalc.filename(inp);
     const pdfSize = Math.round((dataUrl.length - 28) * 3 / 4);
     addFileRecord(_lcJobId, 'documents', null, { name: fname, size: pdfSize, type: 'application/pdf' }, dataUrl);
-    if (_lcPhotoDataUrl) {
-      const photoName = 'LoadCalc_Panel_' + inp.date + '.jpg';
-      const photoSize = Math.round((_lcPhotoDataUrl.length - 23) * 3 / 4);
-      addFileRecord(_lcJobId, 'documents', null, { name: photoName, size: photoSize, type: 'image/jpeg' }, _lcPhotoDataUrl);
-    }
-    toast('Load calc PDF + panel photo saved to Documents', 'success');
+    (_lcPhotos || []).forEach((p, i) => {
+      if (!p.dataUrl) return;
+      const photoName = 'LoadCalc_Panel_' + inp.date + (i ? '_' + (i + 1) : '') + '.jpg';
+      const photoSize = Math.round((p.dataUrl.length - 23) * 3 / 4);
+      addFileRecord(_lcJobId, 'documents', null, { name: photoName, size: photoSize, type: 'image/jpeg' }, p.dataUrl);
+    });
+    toast('Load calc PDF + ' + (_lcPhotos.length === 1 ? 'panel photo' : _lcPhotos.length + ' photos') + ' saved to Documents', 'success');
     try { if (window.S && S.jobDetailId === _lcJobId && typeof renderJobDetail === 'function') renderJobDetail(_lcJobId); } catch (_) {}
+    // The calc is DONE — clear the saved session so the "in progress" pill
+    // doesn't haunt the corner forever (it used to: Save closed through the
+    // same path as Close, which re-showed the pill, and nothing ever cleared
+    // the session short of Start over).
+    _lcClearSession();
+    _lcMessages = []; _lcPhotos = []; _lcResult = null; _lcJobId = null;   // unbind, or Close re-saves an empty session
     closeLoadCalcModal();
   } catch (e) {
     console.warn('[GK] load calc save failed:', e);
@@ -30789,7 +30935,7 @@ function _renderAIDraftResult(draft) {
   const assumptions = Array.isArray(draft.assumptions) ? draft.assumptions : [];
   const sc = draft.sanityCheck || {};
   const labor = (parseFloat(draft.laborHours) || 0) * (parseFloat(draft.laborRate) || 160);
-  const matsTotal = lines.reduce((s, ln) => s + (parseFloat(ln.qty)||0) * (parseFloat(ln.unitCost)||0) * (1 + (parseFloat(ln.markup)||0)/100), 0);
+  const matsTotal = lines.reduce((s, ln) => s + (parseFloat(ln.qty)||0) * (parseFloat(ln.unitCost)||0) * (1 + _markupPct(ln.markup)/100), 0);
   const rentalsTotal = rentals.reduce((s, r) => s + (parseFloat(r.cost)||0), 0);
   const permit = parseFloat(draft.permitFee) || 0;
   const total = matsTotal + labor + rentalsTotal + permit;
@@ -30800,7 +30946,7 @@ function _renderAIDraftResult(draft) {
   const linesRows = lines.map(ln => {
     const qty = parseFloat(ln.qty) || 0;
     const cost = parseFloat(ln.unitCost) || 0;
-    const markup = parseFloat(ln.markup) || 0;
+    const markup = _markupPct(ln.markup);
     const ext = qty * cost * (1 + markup / 100);
     return `<tr>
       <td style="padding:4px 6px;font-size:12px">${(ln.desc||'').replace(/</g,'&lt;')}</td>
@@ -30905,7 +31051,7 @@ function applyAIDraft() {
     qty: parseFloat(ln.qty) || 1,
     unit: ln.unit || 'each',
     unitCost: parseFloat(ln.unitCost) || 0,
-    markup: parseFloat(ln.markup) || 30,
+    markup: (ln.markup == null || ln.markup === '') ? 30 : _markupPct(ln.markup),   // fraction-proof; explicit 0 sticks
     aiSource: 'ai-suggested',
     aiMaterialId: ln.materialId || null
   }));

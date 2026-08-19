@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-15 field-22';
+const BUILD = '2026-08-19 field-23';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -121,7 +121,7 @@ const PLATFORMS       = ['Qmerit','Electrum','Treehouse'];
 // SMS Relay worker (same as the main CRM) — used to create + text a Stripe
 // payment link. The main CRM and this app share the same Azure client app, so
 // the SMS.send scope is already consented; the token acquires silently.
-const SMS_WORKER_URL  = 'https://greenkey-sms.greenkey-usa.workers.dev';
+const SMS_WORKER_URL  = 'https://link.greenkey-usa.com';   // 2026-08-19: custom domain — customer links (Stripe pay link texts etc.) mint from GreenKey's own domain, not workers.dev
 const SMS_SCOPE_URL   = 'api://f4704bd1-8316-4740-8f59-540901153810/SMS.send';
 
 let _msal=null,_gToken=null,_spSite=null,_spList=null,_spDrive=null;
