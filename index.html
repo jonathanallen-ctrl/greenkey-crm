@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -28395,8 +28395,25 @@ function _pcPaidTotal(l){
 function _pcJobTotal(l){
   if (l && l.priceOverride && typeof l.priceOverride.amount === 'number' && isFinite(l.priceOverride.amount)) return Math.round(l.priceOverride.amount);
   const t = (typeof _acceptedScopeTotals === 'function') ? _acceptedScopeTotals(l) : { nDirect: 0 };
-  if (!t.nDirect) return null;                 // platform-only or nothing accepted → customer owes us nothing computable
-  return Math.round(t.direct);
+  if (t.nDirect) return Math.round(t.direct);
+  // ⚠ 2026-08-25f — HAND-PRICED JOBS WERE INVISIBLE TO THE MONEY.
+  // Scanning Jon's live data turned up EIGHT finished jobs with a Job Value on
+  // the record (1150, 1450, 1456, 1655, 980, 994 …) and no computable total, so
+  // no balance, so they could never appear on the waiting list no matter what
+  // was owed. Cause: this only ever read a price override or an accepted quote,
+  // and ignored `jobValue` — the figure the office types into the Job Value box.
+  //
+  // ⚠ Guarded to DIRECT jobs only. Job Value is deliberately the sum of ALL
+  // accepted scopes INCLUDING platform ones (see the multi-scope model), so on a
+  // Qmerit/Electrum/Treehouse job it includes money the platform pays us, not
+  // the customer — using it there would invent a customer debt that does not
+  // exist. Those jobs keep returning null, exactly as before.
+  const _plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(l && l.source);
+  if (!_plat && l && l.jobValue && typeof l.jobValue.amount === 'number'
+      && isFinite(l.jobValue.amount) && l.jobValue.amount > 0) {
+    return Math.round(l.jobValue.amount);
+  }
+  return null;                                 // nothing honest to compute → callers show "—", never a fake $0
 }
 // ⚠ 2026-08-25e — THE $3 PHANTOM BALANCE, AND WHAT IT COST.
 // Jon: "several of them had a few dollars still owed so I suspect that was a
@@ -28866,7 +28883,24 @@ function renderPaymentsPage(){
   // platform-only job (Qmerit/Electrum/Treehouse) has a null customer total
   // because the platform pays us, and listing every finished Qmerit job as
   // "owing" would bury the real ones.
-  const _installDone = l => !!(l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.done);
+  // ⚠ 2026-08-25f — "FINISHED" IS THE STAGE, NOT JUST THE MILESTONE (Rod Silva).
+  // Rod sits in `final-inspection` with an accepted $800 quote and nothing paid,
+  // and the CRM even texted him "your installation is complete!" on Aug 20 — but
+  // he never appeared here, because this asked ONLY for
+  // milestones.installCompleted.done and nobody had stamped it. The milestone is
+  // set by the tech in the field app; the stage moves through several other
+  // paths, so a job can be demonstrably past installation with the milestone
+  // still blank. Trusting only the milestone hides real money.
+  //
+  // The three stages below are the same trio used elsewhere in this file to mean
+  // "installation is behind us" — a job cannot reach Post Install, Awaiting
+  // Inspection or Invoiced without the work being done.
+  // Deliberately NOT included: `punch-list` (work WE still owe them — chasing
+  // money before finishing is wrong) and `waiting` (blocked on someone else,
+  // and the install may not have happened yet).
+  const _POST_INSTALL_STAGES = ['post-install-docs', 'final-inspection', 'invoiced'];
+  const _installDone = l => !!(l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.done)
+                         || _POST_INSTALL_STAGES.includes(l.stage);
   const _owesReal = l => { const b = _pcBalance(l); return b != null && b > 0; };
   const _sinceOf = l => (l.paymentExpected && l.paymentExpected.at)
     || (l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.date) || '';
