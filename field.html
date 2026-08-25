@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-25 field-25';
+const BUILD = '2026-08-25 field-26';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -271,11 +271,48 @@ function _installSpecRows(l){
 // app is identical to field-19. Nothing is inferred from the deposit TIERS,
 // because a scheduled deposit and a paid one are not the same thing.
 function priorPayments(l){ return (l && Array.isArray(l.priorPayments)) ? l.priorPayments : []; }
-function priorPaid(l){
-  return priorPayments(l).reduce(function(sum,p){
+// ⚠ 2026-08-25 (field-26) — MONEY THE OFFICE RECORDED WAS INVISIBLE HERE.
+// The CRM counts BOTH stores (`_pcPaidTotal` = ledger + field deposits), but
+// this app counted only `priorPayments[]`. So a deposit Sherri recorded on the
+// Payments page did not come off the tech's "Amount to collect" — he would have
+// asked the customer for the full price on a job already part-paid.
+// `ledgerPayments()` is the other half; `allPaid()` is what every number on
+// this screen now nets against. Same arithmetic as the CRM, deliberately.
+function ledgerPayments(l){ return (l && Array.isArray(l.payments)) ? l.payments : []; }
+function _sumAmts(list){
+  return list.reduce(function(sum,p){
     const a = p && Number(p.amount);
     return sum + ((isFinite(a) && a>0) ? Math.round(a) : 0);
   },0);
+}
+function priorPaid(l){ return _sumAmts(priorPayments(l)); }
+function ledgerPaid(l){ return _sumAmts(ledgerPayments(l)); }
+function allPaid(l){ return priorPaid(l) + ledgerPaid(l); }
+// Everything already paid, newest last, as ONE list the tech can read —
+// office deposits and field collections together. Jon, 2026-08-25: "it may
+// benefit them to know what the original total was and that the customer paid
+// a deposit, since the customer will likely tell them they did."
+function allPaymentsList(l){
+  var out = [];
+  priorPayments(l).forEach(function(p){
+    if(!p) return;
+    out.push({ id:p.id||'', amount:Number(p.amount)||0, method:p.method||'deposit',
+               at:p.at||p.collectedAt||'', note:p.note||'', kind:'deposit', prior:true });
+  });
+  ledgerPayments(l).forEach(function(p){
+    if(!p) return;
+    out.push({ id:p.id||'', amount:Number(p.amount)||0, method:p.method||'',
+               at:p.collectedAt||'', note:p.note||'', kind:p.kind||'', prior:false });
+  });
+  return out.filter(function(p){ return p.amount > 0; })
+            .sort(function(a,b){ return String(a.at||'').localeCompare(String(b.at||'')); });
+}
+function payKindLabel(p){
+  if(!p) return 'Payment';
+  if(p.kind === 'deposit') return 'Deposit';
+  if(p.kind === 'balance') return 'Balance';
+  if(p.kind === 'partial') return 'Partial payment';
+  return p.prior ? 'Deposit' : 'Payment';
 }
 // Everything that quotes a number to a customer or charges a card goes through
 // here — the amount card, the Collect Payment buttons, Tap to Pay and the texted
@@ -287,10 +324,23 @@ function jobPayAmounts(l){
   if(l && l.priceOverride && typeof l.priceOverride.amount==='number' && isFinite(l.priceOverride.amount)){
     const a=Math.round(l.priceOverride.amount); base={net:a, card:a, overridden:true};
   } else { base=quoteAmounts(l); }
-  const paid=priorPaid(l);
+  // field-26: nets EVERY recorded payment, not just field deposits.
+  const paid=allPaid(l);
   if(!paid) return {net:base.net, card:base.card, overridden:!!base.overridden, base:base, paid:0};
   const cut=v=>(v==null?null:Math.max(0, v-paid));
   return {net:cut(base.net), card:cut(base.card), overridden:!!base.overridden, base:base, paid:paid};
+}
+// Is this job actually settled? field-26: the payment card used to read
+// `if (l.payment)`, i.e. "any payment at all exists" — so the first office
+// deposit flipped a job to "✓ Collected" and REMOVED the Collect Payment,
+// Tap to Pay and pay-link buttons, leaving the tech no way to take the balance
+// and a screen telling him not to. Settled now means the balance is really 0.
+function jobFullyPaid(l){
+  if(!l) return false;
+  const amt = jobPayAmounts(l);
+  const owed = (amt.net!=null ? amt.net : amt.card);
+  if(owed == null) return !!(l.payment && l.payment.collectedAt);  // no computable total → old behaviour
+  return owed <= 0 && allPaid(l) > 0;
 }
 
 // ---------- auth ----------
@@ -994,11 +1044,14 @@ function renderDetail(id){
   const maps = addr? 'https://maps.apple.com/?q='+encodeURIComponent(addr) : '';
   const pay = jobPayAmounts(l); const paid = l.payment;
   let payCard;
-  if(paid){
+  // field-26: settled means the BALANCE is zero — not merely "a payment exists".
+  if(jobFullyPaid(l)){
+    const _tot = allPaid(l);
     payCard = '<div class="card"><div class="lab">Payment</div>'
-      + '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Collected'+(paid.amount?(' · '+fmt$(paid.amount)):'')+(paid.method?(' · '+esc(String(paid.method).toUpperCase())):'')+'</div>'
-      + (paid.collectedAt?'<div class="muted" style="font-size:12px;margin-top:2px">'+esc(mdy(paid.collectedAt))+'</div>':'')
-      + '<button class="btn ghost" style="margin-top:10px" onclick="doClearPayment(\''+esc(l.id)+'\')">Undo</button></div>';
+      + '<div style="color:#7fe0a6;font-size:15px;font-weight:600">✓ Paid in full'+(_tot?(' · '+fmt$(_tot)):'')+'</div>'
+      + (paid && paid.collectedAt?'<div class="muted" style="font-size:12px;margin-top:2px">last payment '+esc(mdy(paid.collectedAt))+(paid.method?(' · '+esc(String(paid.method).toUpperCase())):'')+'</div>':'')
+      + (paid ? '<button class="btn ghost" style="margin-top:10px" onclick="doClearPayment(\''+esc(l.id)+'\')">Undo last payment</button>' : '')
+      + '</div>';
   } else if(!isDirect(l)){
     payCard = '<div class="card"><div class="lab">Payment</div><div class="muted" style="font-size:14px">'+esc(l.source||'Platform')+' invoices the customer — do not collect on site.</div></div>';
   } else {
@@ -1050,7 +1103,9 @@ function renderDetail(id){
   statusCard += '</div>';
   // Amount to collect (direct jobs) — quote price or the tech's on-site adjustment.
   const _amt = jobPayAmounts(l); const _qa = quoteAmounts(l); const _ov = l.priceOverride;
-  const _pp = priorPayments(l); const _prior = _amt.paid||0;
+  // field-26: every recorded payment, office and field alike — not just the
+  // deposits this app happened to take.
+  const _pp = allPaymentsList(l); const _prior = _amt.paid||0;
   const _collect = (_amt.net!=null?_amt.net:_amt.card);
   const _gross = _amt.base ? (_amt.base.net!=null?_amt.base.net:_amt.base.card) : null;
   let amountCard = '<div class="card"><div class="lab">Amount to collect</div>'
@@ -1058,8 +1113,13 @@ function renderDetail(id){
     + ((_amt.card!=null&&_amt.net!=null&&_amt.card!==_amt.net) ? '<div class="muted" style="font-size:12.5px;margin-top:2px">Card '+fmt$(_amt.card)+' · Cash/Zelle '+fmt$(_amt.net)+'</div>' : '')
     + (_prior ? '<div style="font-size:12.5px;color:#7fe0a6;margin-top:6px;font-weight:600">'+(_gross!=null?('Job '+fmt$(_gross)+' \u00b7 '):'')+'less '+fmt$(_prior)+' already paid</div>'
         + _pp.map(p=>'<div class="muted" style="font-size:12px;display:flex;justify-content:space-between;gap:10px;padding:3px 0">'
-            + '<span>'+fmt$(p.amount)+' \u00b7 '+esc(p.method||'deposit')+(p.at?(' \u00b7 '+esc(mdy(p.at))):'')+(p.note?('<br>'+esc(p.note)):'')+'</span>'
-            + '<span style="color:#ff9a9a;cursor:pointer;flex:0 0 auto" onclick="removePriorPayment(\''+esc(l.id)+'\',\''+esc(p.id||'')+'\')">remove</span>'
+            + '<span>'+esc(payKindLabel(p))+' '+fmt$(p.amount)+(p.method?(' \u00b7 '+esc(p.method)):'')+(p.at?(' \u00b7 '+esc(mdy(p.at))):'')+(p.note?('<br>'+esc(p.note)):'')+'</span>'
+            // Only deposits THIS app recorded can be removed here. An office
+            // recording is the office's to undo \u2014 a tech deleting Sherri's
+            // ledger row from a driveway is not a thing we want.
+            + (p.prior
+                ? '<span style="color:#ff9a9a;cursor:pointer;flex:0 0 auto" onclick="removePriorPayment(\''+esc(l.id)+'\',\''+esc(p.id||'')+'\')">remove</span>'
+                : '<span style="color:#5d6675;flex:0 0 auto;font-size:11px">office</span>')
           + '</div>').join('')
       : '')
     + (_ov ? '<div style="font-size:12.5px;color:#ffc861;margin-top:6px">✎ Price adjusted on site'+(_qa.net!=null?(' · quoted '+fmt$(_qa.net)):'')+(_ov.note?('<br>'+esc(_ov.note)):'')+'</div>' : '')

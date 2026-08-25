@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14984,6 +14984,7 @@ function renderJobDetail(id) {
            entry points to the same modal meant two mental models for the same
            task. "Schedule now" in Appointments is the one-click equivalent. -->
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="recordPaymentForJob('${id}')" title="Record a deposit, partial payment or balance for this job — opens the Payments page with the form already pointed at this customer.">💵 Record payment</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="openPaymentsFromJob('${id}')" title="Open the Payments page — deposits and payments are recorded and reconciled there, not on the job. It has a Back button to return here.">💰 Payments</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
       ${lead.customerId ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>` : ''}
@@ -28431,12 +28432,25 @@ function _autoMarkPaid(l){
   return true;
 }
 
-function _pcStampPayment(leadId, method, amount){
+// 2026-08-25b: `opts` added — { kind:'deposit'|'partial'|'balance', note, at }.
+// Every existing 3-argument call site keeps working untouched; `kind` defaults
+// to '' so nothing already in the ledger is reinterpreted. `kind` is a LABEL for
+// humans (and for the field app's breakdown) — it never changes the arithmetic,
+// which stays "sum of every recorded amount".
+function _pcStampPayment(leadId, method, amount, opts){
   const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
   if (i < 0) { toast('Job not found', 'error'); return false; }
-  const now = new Date().toISOString();
+  const o = opts || {};
+  // A back-dated payment keeps its real date — Sherri often records a Zelle
+  // deposit days after it landed, and the ledger should say when the money
+  // actually arrived, not when she typed it.
+  const now = (o.at && /^\d{4}-\d{2}-\d{2}/.test(String(o.at)))
+    ? new Date(String(o.at).slice(0,10) + 'T12:00:00').toISOString()
+    : new Date().toISOString();
   _pcLedgerAppend(arr[i], { id: 'pay_' + Date.now() + '_' + Math.round(Math.random()*1e6),
-    method: method, amount: Math.round(Number(amount)||0), collectedAt: now });
+    method: method, amount: Math.round(Number(amount)||0), collectedAt: now,
+    kind: o.kind || '', note: (o.note || '').trim(), recordedBy: (S.user && S.user.name) || '',
+    recordedAt: new Date().toISOString() });
   const plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(arr[i].source);
   // 2026-08-18g: a platform-SOURCE lead can still carry a DIRECT scope (Isaac
   // Scott's panel) — customer money recorded on it deserves the milestone.
@@ -28526,8 +28540,156 @@ function openPaymentsFromJob(leadId){
   S.payReturnLeadId = leadId;
   navigate('payments');
 }
+// 2026-08-25b — "💵 Record payment" from the job screen. Same sticky return
+// target as the 💰 button, but it also PRELOADS the entry form for this job so
+// the office lands on a form that is already pointed at the right customer.
+function recordPaymentForJob(leadId){
+  S.payReturnLeadId = leadId;
+  S.payFormLeadId = leadId;
+  navigate('payments');
+  try { setTimeout(function(){ const a = document.getElementById('pc-rec-amt'); if (a) a.focus(); }, 60); } catch(_){}
+}
 function _pcReturnToJob(){
   if (S.payReturnLeadId) openJobDetail(S.payReturnLeadId);
+}
+
+// ══════════════ RECORD A PAYMENT (2026-08-25b) ══════════════
+// Jon: "there is no way to enter payments." True — the only office entry point
+// was _pcMarkPaid's prompt() chain, reachable only from a "Waiting on payment"
+// row, so a deposit on a job nobody had asked for money on could not be
+// recorded at all. This is the form.
+//
+// The three kinds are LABELS, not different maths — every one appends the same
+// ledger row. What differs is what the amount box prefills with, which is the
+// part that actually saves time and prevents arithmetic mistakes:
+//   deposit → the accepted quote's deposit if one is known, else blank
+//   partial → blank (you type what arrived)
+//   balance → exactly what is still owed
+function _pcPayableJobs(){
+  return getLeads()
+    .filter(l => l && l.stage !== 'archived')
+    .map(l => ({ l, bal: _pcBalance(l), paid: _pcPaidTotal(l), total: _pcJobTotal(l) }))
+    // Owing money first, then everything else — the job you need is nearly
+    // always one that still owes.
+    .sort((a, b) => {
+      const ao = (a.bal != null && a.bal > 0) ? 0 : 1, bo = (b.bal != null && b.bal > 0) ? 0 : 1;
+      if (ao !== bo) return ao - bo;
+      return String(leadDisplayName(a.l) || '').localeCompare(String(leadDisplayName(b.l) || ''));
+    });
+}
+// The deposit figure the customer was actually quoted, when we know it.
+function _pcQuotedDeposit(l){
+  try {
+    const q = (l && l.acceptedQuoteId && typeof getQuote === 'function') ? getQuote(l.acceptedQuoteId) : null;
+    const d = q && (q.depositAmount != null ? q.depositAmount : (q.deposit && q.deposit.amount));
+    const n = Math.round(Number(d) || 0);
+    return n > 0 ? n : null;
+  } catch (_) { return null; }
+}
+function _pcRecordPanelHTML(cardStyle){
+  const jobs = _pcPayableJobs();
+  const selId = S.payFormLeadId || '';
+  const opts = ['<option value="">— choose a job —</option>'].concat(jobs.map(j => {
+    const bal = j.bal == null ? 'no total yet' : (j.bal > 0 ? _pcFmt$(j.bal) + ' owed' : 'paid in full');
+    return `<option value="${escHtml(j.l.id)}"${j.l.id === selId ? ' selected' : ''}>${
+      escHtml(leadDisplayName(j.l) || j.l.id)} — ${escHtml(bal)}</option>`;
+  })).join('');
+  return `<div style="${cardStyle}">
+    <h3 style="margin:0 0 4px;font-size:15px">💵 Record a payment</h3>
+    <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">Money already in hand — Zelle, card, cash or check. Recording it here updates the job and <strong>the amount the technician is told to collect</strong>.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+      <select id="pc-rec-job" class="jd-fi" style="min-width:260px;flex:1" onchange="_pcRecFormChanged(true)">${opts}</select>
+      <select id="pc-rec-kind" class="jd-fi" style="width:150px" onchange="_pcRecFormChanged(true)">
+        <option value="deposit">Deposit</option>
+        <option value="partial">Partial payment</option>
+        <option value="balance">Balance</option>
+      </select>
+      <input id="pc-rec-amt" class="jd-fi" type="number" min="0" step="1" placeholder="Amount $" style="width:120px" oninput="_pcRecFormChanged(false)">
+      <select id="pc-rec-method" class="jd-fi" style="width:120px">
+        <option value="zelle">Zelle</option>
+        <option value="card">Card</option>
+        <option value="cash">Cash</option>
+        <option value="check">Check</option>
+      </select>
+      <input id="pc-rec-date" class="jd-fi" type="date" value="${new Date().toISOString().slice(0,10)}" title="When the money actually arrived — back-date it if you're catching up" style="width:150px">
+      <input id="pc-rec-note" class="jd-fi" type="text" placeholder="Note (optional) — e.g. Zelle memo, check #" style="flex:1;min-width:180px">
+      <button class="btn btn-p" style="padding:6px 16px;font-size:13px" onclick="_pcRecordSubmit()">✓ Record payment</button>
+    </div>
+    <div id="pc-rec-math" style="font-size:12.5px;color:var(--text-muted);margin-top:10px;line-height:1.6"></div>
+  </div>`;
+}
+// Live math under the form. Runs on every change so the number in the box is
+// never a guess. `reprice` re-prefills the amount (job or kind changed); typing
+// in the amount box must NOT overwrite what the user is typing.
+function _pcRecFormChanged(reprice){
+  const jobEl = document.getElementById('pc-rec-job');
+  const kindEl = document.getElementById('pc-rec-kind');
+  const amtEl = document.getElementById('pc-rec-amt');
+  const out = document.getElementById('pc-rec-math');
+  if (!jobEl || !kindEl || !amtEl || !out) return;
+  const lead = jobEl.value ? getLead(jobEl.value) : null;
+  if (lead) S.payFormLeadId = lead.id;
+  if (!lead) { out.innerHTML = 'Choose a job to see its total and balance.'; return; }
+  const total = _pcJobTotal(lead), paid = _pcPaidTotal(lead);
+  const bal = _pcBalance(lead);
+  const kind = kindEl.value;
+  if (reprice) {
+    let pre = '';
+    if (kind === 'balance' && bal != null && bal > 0) pre = String(bal);
+    else if (kind === 'deposit') { const d = _pcQuotedDeposit(lead); if (d) pre = String(d); }
+    amtEl.value = pre;
+  }
+  const amt = Math.round(Number(amtEl.value) || 0);
+  const after = (bal == null) ? null : Math.max(0, bal - Math.max(0, amt));
+  const parts = [];
+  parts.push('Job total <strong>' + (total == null ? '—' : _pcFmt$(total)) + '</strong>');
+  parts.push('already paid <strong>' + _pcFmt$(paid) + '</strong>');
+  parts.push('balance <strong style="color:var(--amber)">' + (bal == null ? '—' : _pcFmt$(bal)) + '</strong>');
+  let html = parts.join(' &nbsp;·&nbsp; ');
+  if (amt > 0) {
+    html += '<br>Recording <strong>' + _pcFmt$(amt) + '</strong> → remaining after this: <strong style="color:' +
+            (after === 0 ? 'var(--green)' : 'var(--amber)') + '">' + (after == null ? '—' : _pcFmt$(after)) + '</strong>';
+    if (bal != null && amt > bal) html += ' <span style="color:var(--amber)">⚠ more than the balance</span>';
+  }
+  if (total == null) html += '<br><span style="color:var(--text-muted)">No accepted quote or price override on this job, so there is no balance to check this against — the payment still records.</span>';
+  out.innerHTML = html;
+}
+function _pcRecordSubmit(){
+  const jobEl = document.getElementById('pc-rec-job');
+  const kindEl = document.getElementById('pc-rec-kind');
+  const amtEl = document.getElementById('pc-rec-amt');
+  const methodEl = document.getElementById('pc-rec-method');
+  const dateEl = document.getElementById('pc-rec-date');
+  const noteEl = document.getElementById('pc-rec-note');
+  if (!jobEl || !jobEl.value) { toast('Choose a job first', 'warning'); return; }
+  const lead = getLead(jobEl.value);
+  if (!lead) { toast('Job not found', 'error'); return; }
+  const amt = Math.round(Number(amtEl && amtEl.value) || 0);
+  if (!amt || amt <= 0) { toast('Enter an amount greater than zero', 'warning'); return; }
+  const kind = (kindEl && kindEl.value) || 'partial';
+  const method = (methodEl && methodEl.value) || 'zelle';
+  const bal = _pcBalance(lead);
+  const who = leadDisplayName(lead) || lead.id;
+  const kindLbl = { deposit: 'Deposit', partial: 'Partial payment', balance: 'Balance' }[kind] || 'Payment';
+  let msg = 'Record ' + kindLbl.toLowerCase() + ' of ' + _pcFmt$(amt) + ' (' + method + ') on ' + who + '?';
+  // Overpayment is the one thing worth stopping for — it is nearly always a
+  // typo, and the ledger has no negative entry to undo it cleanly.
+  if (bal != null && amt > bal) {
+    msg += '\n\n⚠ That is MORE than the ' + _pcFmt$(bal) + ' balance on this job.';
+  }
+  if (!confirm(msg)) return;
+  const ok = _pcStampPayment(lead.id, method, amt, {
+    kind: kind,
+    note: (noteEl && noteEl.value) || '',
+    at: (dateEl && dateEl.value) || ''
+  });
+  if (!ok) return;
+  toast(kindLbl + ' of ' + _pcFmt$(amt) + ' recorded for ' + who, 'success');
+  // Clear the amount + note but KEEP the job selected — recording a deposit and
+  // then a balance on the same job is a normal pair of actions.
+  if (amtEl) amtEl.value = '';
+  if (noteEl) noteEl.value = '';
+  renderPaymentsPage();
 }
 
 function renderPaymentsPage(){
@@ -28640,6 +28802,7 @@ function renderPaymentsPage(){
     </div>` : '';
   el.innerHTML = `
   ${returnBar}
+  ${_pcRecordPanelHTML(card)}
   <div style="${card}">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0;font-size:15px">⏳ Waiting on payment (${expected.length})</h3>
@@ -28669,6 +28832,9 @@ function renderPaymentsPage(){
       <tr><th style="${th}">Job</th><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Date</th><th style="${th}">Balance</th></tr>${recRows}</table>`
     : `<p style="font-size:13px;color:var(--text-muted);margin:0">No recorded payments yet.</p>`}
   </div>`;
+  // Paint the live math for whatever job is preselected (job-screen entry point
+  // or the sticky selection after a recording).
+  try { _pcRecFormChanged(true); } catch (_) {}
 }
 
 function _reconcileFieldPayments() {
