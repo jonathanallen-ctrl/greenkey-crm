@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -28654,6 +28654,21 @@ function _pcRecFormChanged(reprice){
   if (total == null) html += '<br><span style="color:var(--text-muted)">No accepted quote or price override on this job, so there is no balance to check this against — the payment still records.</span>';
   out.innerHTML = html;
 }
+// "✓ Record received" on a waiting row — point the form at that job and jump to
+// it. Deliberately does NOT set payReturnLeadId: we're already on the Payments
+// page, so a "Back to <job>" bar would be nonsense.
+function _pcPickJob(leadId){
+  S.payFormLeadId = leadId;
+  const sel = document.getElementById('pc-rec-job');
+  if (sel) {
+    sel.value = leadId;
+    try { _pcRecFormChanged(true); } catch (_) {}
+    try { sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+    const a = document.getElementById('pc-rec-amt'); if (a) a.focus();
+  } else {
+    renderPaymentsPage();
+  }
+}
 function _pcRecordSubmit(){
   const jobEl = document.getElementById('pc-rec-job');
   const kindEl = document.getElementById('pc-rec-kind');
@@ -28703,23 +28718,65 @@ function renderPaymentsPage(){
   // moment any payment existed, which is exactly wrong once deposits are real.
   // With no computable job total, fall back to the old rule via the ledger.
   const _stillOwed = l => { const b = _pcBalance(l); return b == null ? _pcPaidTotal(l) <= 0 : b > 0; };
-  const expected = active.filter(l => l.paymentExpected && _stillOwed(l))
-    .sort((a,b) => new Date(b.paymentExpected.at||0) - new Date(a.paymentExpected.at||0));
+  // ── 2026-08-25b — WHAT BELONGS ON A CHASE LIST ──
+  // Jon: "It should be jobs where the installation is complete but the field app
+  // isn't telling us that payment was made, correct?" It wasn't. The only gate
+  // was `l.paymentExpected`, which exists ONLY when an ask went out — the
+  // options email, a field Zelle QR, or a texted pay link. So a finished job
+  // where nobody remembered to ask never appeared here AT ALL: silently absent,
+  // which is the opposite of what a chase list is for.
+  //
+  // Now it is the union Jon described:
+  //   • an ask went out and isn't covered      → "asked <date>"
+  //   • OR the install is done and money is owed → "no ask sent"
+  // The second branch demands a COMPUTABLE balance > 0 on purpose: a
+  // platform-only job (Qmerit/Electrum/Treehouse) has a null customer total
+  // because the platform pays us, and listing every finished Qmerit job as
+  // "owing" would bury the real ones.
+  const _installDone = l => !!(l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.done);
+  const _owesReal = l => { const b = _pcBalance(l); return b != null && b > 0; };
+  const _sinceOf = l => (l.paymentExpected && l.paymentExpected.at)
+    || (l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.date) || '';
+  const expected = active
+    .filter(l => (l.paymentExpected && _stillOwed(l)) || (_installDone(l) && _owesReal(l)))
+    // OLDEST FIRST — this is a chase list, so the thing that has been waiting
+    // longest belongs at the top. (It used to sort newest-first.)
+    .sort((a,b) => String(_sinceOf(a)||'').localeCompare(String(_sinceOf(b)||'')));
   const srcLabel = { 'options-email': 'Options email', 'field-link': 'Field pay link', 'field-qr': 'Field Zelle QR' };
   const _hl = l => (S.payReturnLeadId && l.id === S.payReturnLeadId) ? ' style="background:var(--green-dim)"' : '';
   const expRows = expected.map(l => {
-    const e = l.paymentExpected;
+    // `e` is now OPTIONAL — a row can be here because the install is done and
+    // money is owed, with no ask ever sent. Everything below tolerates null.
+    const e = l.paymentExpected || null;
     const _paid = _pcPaidTotal(l), _bal = _pcBalance(l);
+    // What we're chasing: the balance if we can compute it, else what was asked.
+    const _show = (_bal != null && _bal > 0) ? _bal : (e ? e.amount : 0);
+    const _icDate = (l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.date) || '';
+    const _askCell = e
+      ? (srcLabel[e.source] || e.source || 'asked')
+      : `<span style="color:var(--amber);font-weight:600">no ask sent</span><div style="font-size:11px;color:var(--text-muted)">install complete</div>`;
+    const _whenRaw = _sinceOf(l);
+    const _when = _whenRaw
+      ? (e && e.at
+          ? new Date(e.at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + new Date(e.at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
+          : mdy(String(_icDate)))
+      : '';
+    // Days waiting — the number that actually tells you which one to call.
+    let _age = '';
+    if (_whenRaw) {
+      const d = Math.floor((Date.now() - new Date(String(_whenRaw).slice(0,10) + 'T12:00:00').getTime()) / 86400000);
+      if (isFinite(d) && d >= 1) _age = `<div style="font-size:11px;color:${d >= 14 ? 'var(--amber)' : 'var(--text-muted)'}">${d} days</div>`;
+    }
     return `<tr${_hl(l)}>
       <td><a href="#" onclick="openJobDetail('${l.id}');return false" style="color:var(--green);font-weight:600;text-decoration:none">${escHtml(leadDisplayName(l)||l.id)}</a><div style="font-size:11px;color:var(--text-muted)">${l.id}</div></td>
-      <td style="font-weight:700">${_pcFmt$(e.amount)}${_paid > 0 ? `<div style="font-size:11px;font-weight:400;color:var(--text-muted)">paid ${_pcFmt$(_paid)}${_bal != null ? ` · <span style="color:var(--amber)">balance ${_pcFmt$(_bal)}</span>` : ''}</div>` : ''}</td>
-      <td>${(e.methods||[]).join(' / ')}</td>
-      <td>${srcLabel[e.source]||e.source||''}</td>
-      <td>${e.at ? new Date(e.at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' + new Date(e.at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : ''}</td>
-      <td style="font-weight:700;color:var(--green)">${e.memoCode||payMemoCode(l.id)}</td>
+      <td style="font-weight:700">${_pcFmt$(_show)}${_paid > 0 ? `<div style="font-size:11px;font-weight:400;color:var(--text-muted)">paid ${_pcFmt$(_paid)}${_bal != null ? ` · <span style="color:var(--amber)">balance ${_pcFmt$(_bal)}</span>` : ''}</div>` : ''}</td>
+      <td>${e ? (e.methods||[]).join(' / ') : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td>${_askCell}</td>
+      <td>${_when}${_age}</td>
+      <td style="font-weight:700;color:var(--green)">${(e && e.memoCode) || payMemoCode(l.id)}</td>
       <td style="white-space:nowrap">
-        <button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="_pcMarkPaid('${l.id}')">✓ Record received</button>
-        <button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcClearExpected('${l.id}')" title="Remove this expected entry">✕</button>
+        <button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="_pcPickJob('${l.id}')">✓ Record received</button>
+        ${e ? `<button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcClearExpected('${l.id}')" title="Remove this expected entry">✕</button>` : ''}
       </td></tr>`;
   }).join('');
 
@@ -28809,8 +28866,8 @@ function renderPaymentsPage(){
       <div style="font-size:12px;color:var(--text-muted)">Every payment ask now carries a memo code (e.g. <strong>${payMemoCode('GK-2026-1234')}</strong>) so Zelle deposits identify themselves.</div>
     </div>
     ${expected.length ? `<table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
-      <tr><th style="${th}">Job</th><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Asked via</th><th style="${th}">When</th><th style="${th}">Memo code</th><th style="${th}"></th></tr>${expRows}</table>`
-    : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0">Nothing outstanding. Rows appear here when a payment-options email or field pay link goes out.</p>`}
+      <tr><th style="${th}">Job</th><th style="${th}">Owed</th><th style="${th}">Method</th><th style="${th}">Asked via</th><th style="${th}">Waiting since</th><th style="${th}">Memo code</th><th style="${th}"></th></tr>${expRows}</table>`
+    : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0">Nothing outstanding. A job appears here when a payment ask goes out and isn't covered, <strong>or</strong> when the install is finished and there's still a balance — even if nobody sent an ask.</p>`}
   </div>
   <div style="${card}">
     <h3 style="margin:0 0 4px;font-size:15px">❓ Unmatched payments (${ups.length})</h3>
