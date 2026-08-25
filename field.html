@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-19 field-24';
+const BUILD = '2026-08-25 field-25';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -147,12 +147,26 @@ function schedDate(l){ return (l.milestones&&l.milestones.installScheduled&&l.mi
 // on 2026-07-30 and had to photograph and text everything by hand.
 // Mirrors getAppts() in index.html — keep the two in step.
 var WALKDOWN_TYPES = ['walkdown','phone-call'];
+// ⚠ 2026-08-25 (field-25) — THE DAY THE CREW'S "TODAY" CAME UP EMPTY.
+// The old first line was `if(Array.isArray(l.appointments)) return l.appointments;`
+// so ANY appointments array short-circuited the legacy synthesis below —
+// including an array holding only an undated "Needs scheduling" placeholder.
+// That is exactly what the CRM's Scheduled pill produces (it wrote
+// milestones.installScheduled and never touched appointments[]), so three jobs
+// booked for the day read "Scheduled · 08/25/2026" in the office and landed in
+// "In progress" here, because renderJobs() builds Today only from DATED appts.
+// Now the synthesis fires whenever no DATED install appointment exists.
+// Dated walkdowns/inspections in the array are preserved untouched.
+// ⚠ Mirrors getAppts() in index.html — keep the two in step.
 function apptsOf(l){
   if(!l) return [];
-  if(Array.isArray(l.appointments)) return l.appointments;
+  var arr = Array.isArray(l.appointments) ? l.appointments : [];
   var im = l.milestones && l.milestones.installScheduled;
-  if(im && im.date) return [{id:'appt-legacy-install',type:'installation',date:im.date,time:im.time||''}];
-  return [];
+  // An untyped appointment counts as the install — that is how the legacy
+  // synthesized record has always been typed.
+  var hasDatedInstall = arr.some(function(a){ return a && a.date && (a.type==='installation' || !a.type); });
+  if(hasDatedInstall || !(im && im.date)) return arr;
+  return arr.concat([{id:'appt-legacy-install',type:'installation',date:im.date,time:im.time||''}]);
 }
 function apptLabel(t){
   var M={installation:'Installation',walkdown:'Walkdown','phone-call':'Phone / Video',troubleshoot:'Service Call',maintenance:'Maintenance',inspection:'Final Inspection','quote-review':'Quote Review','material-pickup':'Material Pickup','follow-up':'Follow-Up',other:'Visit'};

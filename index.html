@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-18t</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -13914,6 +13914,45 @@ function saveMsField(leadId, key, field, val) {
     if (cb) cb.checked = !!val;
     const lbl = document.querySelector('#ms-item-installScheduled .ms-lbl');
     if (lbl) lbl.classList.toggle('done', !!val);
+  }
+  // ⚠ 2026-08-25 — MIRROR THE DATE ONTO THE INSTALL APPOINTMENT (Jon, after the
+  // Dowler morning). These boxes wrote the milestone ONLY, so the job read
+  // "Scheduled" on the status strip and "⏳ Needs scheduling" in Appointments at
+  // the same time — and the field app, which builds its Today list purely from
+  // dated appointments, never saw the day's work.
+  //
+  // DELIBERATELY SILENT, per Jon: this fixes the RECORD, nothing else. No
+  // Outlook event is created or moved, and the customer is NOT emailed — those
+  // stay exclusive to "📅 Schedule now" / scheduleInOutlook(). The chip editor's
+  // own warning note still tells the truth about Outlook and notification.
+  if (key === 'installScheduled' && (field === 'date' || field === 'time')) {
+    const L = arr[idx];
+    if (!Array.isArray(L.appointments)) L.appointments = [];
+    // Prefer the appointment already linked to an Outlook event, then any
+    // not-yet-completed install, then the placeholder Sherri's flow leaves.
+    let ap = L.appointments.find(a => a && a.type === 'installation' && !a.done && a.outlookEventId)
+          || L.appointments.find(a => a && a.type === 'installation' && !a.done)
+          || L.appointments.find(a => a && a.type === 'installation');
+    const ms = L.milestones.installScheduled || {};
+    if (!ap) {
+      // Nothing to attach to. Only mint a row when there is a real date to put
+      // on it — clearing a date must never conjure an appointment.
+      if (field === 'date' && !val) { /* nothing to do */ }
+      else if (ms.date) {
+        ap = { id: (typeof _apptNewId === 'function' ? _apptNewId() : 'appt-' + Date.now()),
+               type: 'installation', date: '', time: '',
+               hours: (typeof _apptHours === 'function' ? _apptHours('installation') : 1),
+               techId: ms.techId || '', createdAt: new Date().toISOString(), viaMilestone: true };
+        L.appointments.push(ap);
+      }
+    }
+    if (ap) {
+      // Clearing the date un-schedules: return the row to "Needs scheduling"
+      // rather than deleting it, so nothing the office typed is thrown away.
+      if (field === 'date') ap.date = val || '';
+      else ap.time = val || '';
+      if (ms.techId && !ap.techId) ap.techId = ms.techId;
+    }
   }
   arr[idx].updatedAt = new Date().toISOString();
   saveLeads(arr);
@@ -31367,25 +31406,44 @@ function _apptNewId() { return 'appt-' + Date.now().toString(36) + '-' + Math.ra
 // Read a job's appointments. PURE — never writes. Synthesizes from the legacy
 // installScheduled milestone so every job that was scheduled before today still
 // shows its install here.
+// ⚠ 2026-08-25 — THE FALLBACK WAS UNREACHABLE (Dowler, and both of that day's
+// other installs). The old first line was `if (Array.isArray(lead.appointments))
+// return lead.appointments;` — so ANY appointments array short-circuited the
+// legacy milestone synthesis below, INCLUDING an array holding nothing but an
+// undated "⏳ Needs scheduling" placeholder.
+//
+// That is the exact state the Scheduled pill produces: `saveMsField` writes
+// milestones.installScheduled.date and never touches appointments[]. Result —
+// the status strip read "Scheduled · 08/25/2026" while the Appointments panel
+// read "Needs scheduling", and the field app (which builds Today purely from
+// dated appointments) dropped all three of the day's jobs into "In progress".
+// The crew opened the app and their day was empty.
+//
+// Now the synthesis fires whenever there is no DATED install appointment,
+// rather than only when the array is absent entirely. Still PURE — never
+// writes, creates no Outlook event, notifies nobody. Any dated walkdown or
+// inspection in the array is preserved untouched.
+// ⚠ Mirrored in field.html `apptsOf()` — keep the two in step.
 function getAppts(lead) {
   if (!lead) return [];
-  if (Array.isArray(lead.appointments)) return lead.appointments;
+  const arr = Array.isArray(lead.appointments) ? lead.appointments : [];
   const im = lead.milestones && lead.milestones.installScheduled;
-  if (im && im.date) {
-    return [{
-      id: 'appt-legacy-install',
-      type: 'installation',
-      date: im.date || '',
-      time: im.time || '',
-      hours: _apptHours('installation'),
-      techId: im.techId || '',
-      outlookEventId: im.outlookEventId || '',
-      outlookCalId: im.outlookCalId || '',
-      createdAt: lead.updatedAt || '',
-      legacy: true
-    }];
-  }
-  return [];
+  // An untyped appointment counts as the install — that is how the legacy
+  // synthesized record has always been typed.
+  const hasDatedInstall = arr.some(a => a && a.date && (a.type === 'installation' || !a.type));
+  if (hasDatedInstall || !(im && im.date)) return arr;
+  return arr.concat([{
+    id: 'appt-legacy-install',
+    type: 'installation',
+    date: im.date || '',
+    time: im.time || '',
+    hours: _apptHours('installation'),
+    techId: im.techId || '',
+    outlookEventId: im.outlookEventId || '',
+    outlookCalId: im.outlookCalId || '',
+    createdAt: lead.updatedAt || '',
+    legacy: true
+  }]);
 }
 function getApptsById(leadId) { return getAppts(getLead(leadId)); }
 
