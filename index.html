@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25i</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -7484,17 +7484,21 @@ function onQQChange(qid){
   const veteranDiscount = _ddQ.vet;
   const manualDiscount  = _ddQ.man;
   const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
-  const preProcessingTotal=Math.ceil(_grossQ - _ddQ.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  // 2026-08-25g: buffer is read FIRST because the $5 round-up needs it, then the
+  // total is rounded and PERSISTED — see _saveRound5.
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
-  const quoteTotal=preProcessingTotal+paymentProcessingFee;
+  const _r5Q = _saveRound5(_grossQ - _ddQ.total, paymentBuffer);
+  const preProcessingTotal = _r5Q.pre;
+  const paymentProcessingFee = _r5Q.fee;
+  const quoteTotal = _r5Q.total;
+  const lmRounded = lm + _r5Q.pad;              // lines still add to the printed total
   const updated={
     ...q,
     qq:{...(q.qq||{}),panelLocation:panelLoc,runSegs,mountType,nemaLocation,evWireId,evInstallType,tandemBreakers,difficultyFee,travelMinutes,travelAdder,travelFee,travelFeeType,extras:q.qq?.extras||[],installOverride:installOverride,lmOverride:lmOverride,isVeteran,mountCustom,chargerLocText,panelLocText,..._evAddOns.patch},
     permitFee,
     baseInstall,
-    laborAndMaterials:lm,
+    laborAndMaterials:lmRounded,
     veteranDiscount,
     manualDiscount,
     ..._dQ,
@@ -8111,16 +8115,18 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const veteranDiscount = _ddF.vet;
   const manualDiscount  = _ddF.man;
   const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
-  const preProcessingTotal = Math.ceil(_grossF - _ddF.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  // 2026-08-25g — round at save, persist it. See _saveRound5.
   const _zeroBuf = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : false;
   const paymentBuffer = _zeroBuf ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee = Math.ceil(preProcessingTotal * paymentBuffer / 100);
-  const quoteTotal = preProcessingTotal + paymentProcessingFee;
+  const _r5F = _saveRound5(_grossF - _ddF.total, paymentBuffer);
+  const preProcessingTotal = _r5F.pre;
+  const paymentProcessingFee = _r5F.fee;
+  const quoteTotal = _r5F.total;
   upsertQuote({
     ...q,
     qq: { ...(q.qq||{}), ...qqPatch },
     permitFee,
-    laborAndMaterials: lm,
+    laborAndMaterials: lm + _r5F.pad,
     veteranDiscount,
     manualDiscount,
     ..._dF,
@@ -9414,12 +9420,14 @@ function onDQChange(qid){
   const veteranDiscount = _ddD.vet;
   const manualDiscount  = _ddD.man;
   const lmAfterDiscount = lm - veteranDiscount;   // legacy compat field only
-  const preProcessingTotal=Math.ceil(_grossD - _ddD.total);  // whole dollars, always rounded UP (Sherri, 2026-07-11)
+  // 2026-08-25g — round at save, persist it. See _saveRound5.
   const _zeroBufferQ = (typeof shouldZeroBuffer === 'function') ? shouldZeroBuffer(q) : ['Qmerit','Electrum','Treehouse'].includes(q.source);
   const paymentBuffer = _zeroBufferQ ? 0 : ((typeof q.paymentBuffer === 'number') ? q.paymentBuffer : 0);
-  const paymentProcessingFee=Math.ceil(preProcessingTotal*paymentBuffer/100);
-  const quoteTotal=preProcessingTotal+paymentProcessingFee;
-  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm,veteranDiscount,manualDiscount,..._dD,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
+  const _r5D = _saveRound5(_grossD - _ddD.total, paymentBuffer);
+  const preProcessingTotal = _r5D.pre;
+  const paymentProcessingFee = _r5D.fee;
+  const quoteTotal = _r5D.total;
+  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm + _r5D.pad,veteranDiscount,manualDiscount,..._dD,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
   // Live-refresh auto-generated scope text on the Detailed Quote form too.
   if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
@@ -9448,6 +9456,37 @@ function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||''
 function onDQCustomerNoteChange(qid){const v=document.getElementById('dq-cnote')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,customerNote:v});}
 
 // ── TOTALS & MARGIN ──
+// ══════ ROUND AT SAVE, NEVER AT READ (crm-2026-08-25i, 2026-08-25) ══════
+// The $5 round-up shipped in `18o` as a DISPLAY rule inside calcQuoteTotals and
+// was never written to the quote. In `18t` I made _quoteNet recompute through
+// it so the emailed total would stop disagreeing with the PDF — which quietly
+// re-priced EVERY quote in the system, including ones sent months earlier.
+//
+// It cost twice. Settled jobs grew $1–$4 phantom balances, sat on the waiting
+// list, and got their payments recorded a second time (~$8.5k double-counted).
+// And Paige Holbert, quoted $1,989 on July 30 — before the round-up existed —
+// started reading $1,990 in the office while the field app still said $1,989.
+//
+// A quote the customer has received is a HISTORICAL DOCUMENT. Whatever number
+// we sent them is what they owe, and no later pricing rule may revise it.
+//
+// So the rounding now happens ONCE, when the quote is saved, and is persisted.
+// Every reader — form, PDF, email, Job Value, balance, field app — then reads
+// one stored number. Old quotes keep exactly what was sent.
+//
+// Mirrors calcQuoteTotals' arithmetic deliberately: total up to the next $5,
+// the bump folded into Labor & Materials so the printed lines still add to the
+// printed total, and the card tier lifted to its own $5 mark. Idempotent — a
+// total already on a $5 mark gains nothing on a re-save.
+function _saveRound5(pre, bufferPct){
+  const ceil5 = x => Math.ceil(x / 5) * 5;
+  const rawPre = Math.max(0, Math.ceil(Number(pre) || 0));
+  const preR   = ceil5(rawPre);
+  const pad    = preR - rawPre;                 // goes onto laborAndMaterials
+  const pct    = Number(bufferPct) || 0;
+  const fee    = pct ? (ceil5(preR * (1 + pct / 100)) - preR) : 0;
+  return { pre: preR, pad, fee, total: preR + fee };
+}
 function calcQuoteTotals(q){
   if(!q) return {};
   // Buffer is force-zeroed for platform-paid jobs (Qmerit/Electrum/Treehouse)
@@ -13196,16 +13235,16 @@ function _chipEditorHTML(leadId, key){
 // pricing engine produced, and rounding it up would invent money that was never
 // quoted. They keep the stored value verbatim. The `> 0` guard is a second net:
 // an external/lineless quote computes to 0 and falls through to the stored path.
+// ⚠ 2026-08-25g — READS THE STORED TOTAL. DO NOT MAKE THIS RECOMPUTE AGAIN.
+// `18t` had this call calcQuoteTotals() so the emailed figure would match the
+// PDF. It fixed that, and in exchange it re-priced every quote ever written:
+// settled jobs sprouted $1–$4 balances and got double-paid, and Paige Holbert's
+// July quote of $1,989 started displaying as $1,990 against a field app still
+// showing $1,989. The email/PDF mismatch is now fixed at the SOURCE instead —
+// `_saveRound5` rounds once, at save, and the number is persisted, so every
+// surface reads this one stored value and agrees by construction.
 function _quoteNet(q){
   if (!q) return 0;
-  if (!q.external && typeof calcQuoteTotals === 'function') {
-    try {
-      const t = calcQuoteTotals(q);
-      if (t && typeof t.preProcessingTotal === 'number' && isFinite(t.preProcessingTotal) && t.preProcessingTotal > 0) {
-        return Math.round(t.preProcessingTotal);
-      }
-    } catch (e) { /* fall through to the stored value */ }
-  }
   if (typeof q.preProcessingTotal === 'number' && isFinite(q.preProcessingTotal)) return Math.round(q.preProcessingTotal);
   const fee = (typeof q.paymentProcessingFee === 'number') ? q.paymentProcessingFee : 0;
   if (typeof q.quoteTotal === 'number' && isFinite(q.quoteTotal)) return Math.round(Math.max(0, q.quoteTotal - fee));
@@ -28432,10 +28471,39 @@ function _pcJobTotal(l){
 // balances. Treat it as settled. A job that has paid NOTHING is untouched — a
 // genuine $4 invoice (there aren't any, but be honest) still reads as owed.
 const _PC_ROUND_RESIDUAL = 5;
+
+// ⚠ 2026-08-25h — THE MANUAL "PAID" LOOPHOLE (Jon: "There were a few jobs that
+// don't have milestones but are showing paid. They are showing up in the list
+// and shouldn't be.")
+//
+// Before the payment ledger existed, Sherri settled jobs the only way there
+// was: open the job and hit the 💰 Paid button beside Job Value. That writes
+// `lead.invoiced = {done:true}` and NOTHING ELSE — no payments[] row, no
+// priorPayments[] row. So _pcPaidTotal reads $0, the balance reads the whole
+// job total, and a job the office has explicitly declared settled sits on the
+// chase list forever (Shannon Bennett $5,525, Holly Blake $2,530 — both wearing
+// a green "Paid · $5,523" pill on the job screen while Payments chased them).
+//
+// A hand-marked Paid IS the office saying the money came in; it just predates
+// the place we now write that down. Treat it as settled.
+//
+// ⚠ Gated on `paid === 0` DELIBERATELY, for two reasons:
+//   1. It confines this to the pre-ledger jobs. The moment a job has ANY real
+//      recorded money, normal arithmetic takes over — so a $250 deposit on a
+//      marked-paid job still shows the true remaining balance.
+//   2. It keeps _autoMarkPaid non-circular. That function sets invoiced.done on
+//      a direct job only when `paid > 0 && _pcBalance(l) === 0`, so it can never
+//      be what put a paid===0 job into this state — only a human could. Without
+//      the gate an auto-marked job would pin its own balance at $0, and a change
+//      order raising the total later would silently vanish.
+function _pcSettledByHand(l){
+  return !!(l && l.invoiced && l.invoiced.done && _pcPaidTotal(l) === 0);
+}
 function _pcBalance(l){
   const t = _pcJobTotal(l);
   if (t == null) return null;
   const paid = _pcPaidTotal(l);
+  if (paid === 0 && _pcSettledByHand(l)) return 0;   // marked Paid before the ledger existed
   const bal = Math.max(0, t - paid);
   if (bal > 0 && bal < _PC_ROUND_RESIDUAL && paid > 0) return 0;
   return bal;
@@ -28904,8 +28972,14 @@ function renderPaymentsPage(){
   const _owesReal = l => { const b = _pcBalance(l); return b != null && b > 0; };
   const _sinceOf = l => (l.paymentExpected && l.paymentExpected.at)
     || (l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.date) || '';
+  // ⚠ 2026-08-25h — `_pcSettledByHand` also guards the row directly, not just
+  // through the balance. A platform job has a null customer total, so
+  // `_stillOwed` falls back to "nothing in the ledger = still owed" — which is
+  // exactly the shape of a hand-marked pre-ledger job. Checking it here means a
+  // job the office declared Paid stays off this list whether or not its total
+  // happens to be computable.
   const expected = active
-    .filter(l => !l.paymentChaseDismissedAt
+    .filter(l => !l.paymentChaseDismissedAt && !_pcSettledByHand(l)
               && ((l.paymentExpected && _stillOwed(l)) || (_installDone(l) && _owesReal(l))))
     // OLDEST FIRST — this is a chase list, so the thing that has been waiting
     // longest belongs at the top. (It used to sort newest-first.)

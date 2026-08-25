@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-25 field-26';
+const BUILD = '2026-08-25 field-27';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -335,8 +335,18 @@ function jobPayAmounts(l){
 // deposit flipped a job to "✓ Collected" and REMOVED the Collect Payment,
 // Tap to Pay and pay-link buttons, leaving the tech no way to take the balance
 // and a screen telling him not to. Settled now means the balance is really 0.
+// ⚠ field-27 (2026-08-25) — jobs the office settled BEFORE the payment ledger
+// existed carry `invoiced.done` and no payments[] rows at all. In the CRM that
+// put them on the chase list; here it is worse — allPaid() reads $0, so this
+// returns false and the tech is shown a Collect Payment button for money the
+// customer already handed over. Same gate as the CRM's _pcSettledByHand: only
+// when NOTHING is recorded, so a real deposit still leaves the balance visible.
+function officeSettled(l){
+  return !!(l && l.invoiced && l.invoiced.done && allPaid(l) === 0);
+}
 function jobFullyPaid(l){
   if(!l) return false;
+  if(officeSettled(l)) return true;
   const amt = jobPayAmounts(l);
   const owed = (amt.net!=null ? amt.net : amt.card);
   if(owed == null) return !!(l.payment && l.payment.collectedAt);  // no computable total → old behaviour
