@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14984,8 +14984,7 @@ function renderJobDetail(id) {
            entry points to the same modal meant two mental models for the same
            task. "Schedule now" in Appointments is the one-click equivalent. -->
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="recordPaymentForJob('${id}')" title="Record a deposit, partial payment or balance for this job — opens the Payments page with the form already pointed at this customer.">💵 Record payment</button>
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="openPaymentsFromJob('${id}')" title="Open the Payments page — deposits and payments are recorded and reconciled there, not on the job. It has a Back button to return here.">💰 Payments</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="recordPaymentForJob('${id}')" title="Record a deposit, partial payment or balance for this job, and see everything already paid — opens the Payments page with the form pointed at this customer and a Back button to return here.">💵 Payments</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
       ${lead.customerId ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>` : ''}
     </div>
@@ -15054,7 +15053,7 @@ function renderJobDetail(id) {
           ${_balLine}
           <div style="color:var(--text-secondary);line-height:1.45;margin-top:4px">Reconcile with the bank/QuickBooks deposit before invoicing.</div>
         </div>
-        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="openPaymentsFromJob('${id}')" title="Record / reconcile on the Payments page — it has a Back button to return here">💰 Payments page</button>
+        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;flex-shrink:0" onclick="recordPaymentForJob('${id}')" title="Record / reconcile on the Payments page — opens with this job selected and has a Back button to return here">💵 Record a payment</button>
       </div>`;
     }
   }
@@ -24038,9 +24037,42 @@ function _mergeArrayByIdAndTs(localArr, remoteArr) {
     if (rTs > lTs || rHasNewAcks) {
       const winner = rTs > lTs ? r : existing;
       const loser  = rTs > lTs ? existing : r;
-      const rec = (existing.ackedBy || r.ackedBy)
+      let rec = (existing.ackedBy || r.ackedBy)
         ? { ...winner, ackedBy: { ...(loser.ackedBy||{}), ...(winner.ackedBy||{}) } }
         : winner;
+      // ⚠ 2026-08-25e — MONEY MUST SURVIVE A LOST MERGE (the Paige Holbert hunt).
+      // This is whole-record last-write-wins: the copy with the older updatedAt
+      // is discarded ENTIRELY. So if Sherri records a deposit and anything
+      // touches that same job on another machine a moment later, her payment is
+      // gone — no error, no trace, nothing to find afterwards. Exactly the
+      // failure the `ackedBy` union above was added to prevent, and money
+      // deserves the protection more than an acknowledgement does.
+      //
+      // Payments are append-only and carry stable ids, so UNION BY ID is always
+      // correct here: no ordering question, no double-count. `payment` (the
+      // legacy "latest" copy every old reader uses) is re-pointed at the newest
+      // entry of the union so it can't disagree with the ledger.
+      const _uniPay = (a, b) => {
+        const seen = new Map();
+        [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].forEach(p => {
+          if (!p) return;
+          const k = p.id || (String(p.amount) + '|' + String(p.collectedAt || p.at || ''));
+          if (!seen.has(k)) seen.set(k, p);
+        });
+        return Array.from(seen.values());
+      };
+      const _payU   = _uniPay(winner.payments, loser.payments);
+      const _priorU = _uniPay(winner.priorPayments, loser.priorPayments);
+      if (_payU.length || _priorU.length) {
+        rec = { ...rec };
+        if (_payU.length) {
+          rec.payments = _payU.slice().sort((x, y) =>
+            String(x.collectedAt || '').localeCompare(String(y.collectedAt || '')));
+          const last = rec.payments[rec.payments.length - 1];
+          if (last) rec.payment = { ...last };
+        }
+        if (_priorU.length) rec.priorPayments = _priorU;
+      }
       byId.set(r.id, rec);
       remoteUpdated++;
     }
@@ -28366,9 +28398,30 @@ function _pcJobTotal(l){
   if (!t.nDirect) return null;                 // platform-only or nothing accepted → customer owes us nothing computable
   return Math.round(t.direct);
 }
+// ⚠ 2026-08-25e — THE $3 PHANTOM BALANCE, AND WHAT IT COST.
+// Jon: "several of them had a few dollars still owed so I suspect that was a
+// result of our rounding totals up to the nearest $5." He was right, and the
+// chain is worth spelling out because it did real damage:
+//
+//   1. `18t` made _quoteNet recompute through calcQuoteTotals, so a job quoted
+//      at $702 before the $5 round-up existed now computes a $705 total.
+//   2. The customer had already paid the $702 they were actually invoiced.
+//   3. Balance = 705 − 702 = $3, so a settled job looked like it still owed.
+//   4. It therefore sat on "Waiting on payment", and clearing that list with
+//      ✓ Record received recorded the whole payment a SECOND time.
+//
+// A residual under $5 on a job that has been paid something is arithmetic, not
+// money: the round-up can only ever add $1–$4, and this shop has no real $3
+// balances. Treat it as settled. A job that has paid NOTHING is untouched — a
+// genuine $4 invoice (there aren't any, but be honest) still reads as owed.
+const _PC_ROUND_RESIDUAL = 5;
 function _pcBalance(l){
   const t = _pcJobTotal(l);
-  return t == null ? null : Math.max(0, t - _pcPaidTotal(l));
+  if (t == null) return null;
+  const paid = _pcPaidTotal(l);
+  const bal = Math.max(0, t - paid);
+  if (bal > 0 && bal < _PC_ROUND_RESIDUAL && paid > 0) return 0;
+  return bal;
 }
 
 // ── AUTO-PAID (2026-08-15c) ── Jon: "by the time that we invoice a person, we
@@ -28437,10 +28490,37 @@ function _autoMarkPaid(l){
 // to '' so nothing already in the ledger is reinterpreted. `kind` is a LABEL for
 // humans (and for the field app's breakdown) — it never changes the arithmetic,
 // which stays "sum of every recorded amount".
+// ⚠ 2026-08-25e — DOUBLE-RECORDING GUARD. On 8/25 four already-settled jobs got
+// their payments recorded a SECOND time (Mike Pringle's two $1,277 entries are
+// 43 seconds apart — a double-click, because nothing visibly changed the first
+// time). ~$8.5k of money counted twice. This is the last line of defence: every
+// recording path funnels through here, so the check belongs here rather than in
+// one caller. `opts.force` lets a deliberate second payment through.
+function _pcDuplicateWarning(lead, method, amount){
+  if (!lead) return '';
+  const amt = Math.round(Number(amount) || 0);
+  const today = new Date().toISOString().slice(0,10);
+  const same = getJobPayments(lead).filter(p => p && Math.round(Number(p.amount)||0) === amt
+    && String(p.collectedAt||'').slice(0,10) === today);
+  if (same.length) {
+    return '⚠ ' + _pcFmt$(amt) + ' was ALREADY recorded on this job today'
+         + (same[0].method ? ' (' + same[0].method + ')' : '') + '.\n\nRecord it a second time?';
+  }
+  const bal = _pcBalance(lead);
+  if (bal === 0 && _pcPaidTotal(lead) > 0) {
+    return '⚠ This job is already PAID IN FULL (' + _pcFmt$(_pcPaidTotal(lead)) + ' recorded).'
+         + '\n\nRecording another ' + _pcFmt$(amt) + ' will overstate what was collected.\n\nAre you sure?';
+  }
+  return '';
+}
 function _pcStampPayment(leadId, method, amount, opts){
   const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
   if (i < 0) { toast('Job not found', 'error'); return false; }
   const o = opts || {};
+  if (!o.force) {
+    const warn = _pcDuplicateWarning(arr[i], method, amount);
+    if (warn && !confirm(warn)) { toast('Nothing recorded', 'warning'); return false; }
+  }
   // A back-dated payment keeps its real date — Sherri often records a Zelle
   // deposit days after it landed, and the ledger should say when the money
   // actually arrived, not when she typed it.
@@ -28654,6 +28734,26 @@ function _pcRecFormChanged(reprice){
   if (total == null) html += '<br><span style="color:var(--text-muted)">No accepted quote or price override on this job, so there is no balance to check this against — the payment still records.</span>';
   out.innerHTML = html;
 }
+// ✕ on a row that has no ask (install done, balance outstanding). Jon, 8/25, on
+// a test job stuck there: "I don't see a way to cancel this." Stops the chase
+// WITHOUT inventing a payment — the ✕ next to an ask clears the ask, and this is
+// its equivalent for rows that never had one. Reversible, and deliberately not
+// a money operation: nothing about the balance changes.
+function _pcDismissChase(leadId){
+  const lead = getLead(leadId); if (!lead) return;
+  const bal = _pcBalance(lead);
+  const who = leadDisplayName(lead) || leadId;
+  if (!confirm('Stop showing ' + who + ' on the waiting list?\n\n'
+    + (bal != null && bal > 0 ? 'It still shows a balance of ' + _pcFmt$(bal) + '. ' : '')
+    + 'This records NO payment and changes no amounts — it only hides the row.')) return;
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
+  arr[i].paymentChaseDismissedAt = new Date().toISOString();
+  arr[i].paymentChaseDismissedBy = (S.user && S.user.name) || '';
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  toast('Removed from the waiting list — no payment recorded', 'success');
+  renderPaymentsPage();
+}
 // "✓ Record received" on a waiting row — point the form at that job and jump to
 // it. Deliberately does NOT set payReturnLeadId: we're already on the Payments
 // page, so a "Back to <job>" bar would be nonsense.
@@ -28669,7 +28769,19 @@ function _pcPickJob(leadId){
     renderPaymentsPage();
   }
 }
+// Wrapper so a THROW anywhere in the submit path becomes a visible message
+// instead of nothing at all. Before this, an exception left the button looking
+// like it had worked and the office none the wiser.
 function _pcRecordSubmit(){
+  try { return _pcRecordSubmitInner(); }
+  catch (e) {
+    console.error('[GK] payment submit failed:', e);
+    alert('⚠ The payment could NOT be recorded.\n\n' + (e && e.message ? e.message : e)
+      + '\n\nNothing was saved. Please tell Jon what you were doing.');
+    try { toast('Payment failed — nothing recorded', 'error'); } catch (_) {}
+  }
+}
+function _pcRecordSubmitInner(){
   const jobEl = document.getElementById('pc-rec-job');
   const kindEl = document.getElementById('pc-rec-kind');
   const amtEl = document.getElementById('pc-rec-amt');
@@ -28699,6 +28811,27 @@ function _pcRecordSubmit(){
     at: (dateEl && dateEl.value) || ''
   });
   if (!ok) return;
+  // ⚠ 2026-08-25e — PROVE IT LANDED BEFORE CLAIMING SUCCESS.
+  // Sherri recorded a $250 deposit on Paige Holbert, saw the button behave
+  // normally, and the payment was nowhere afterwards. A green toast that fires
+  // on faith is worse than no toast: it stops you checking. Re-read the record
+  // straight back out of storage and only celebrate if the money is actually
+  // in it — otherwise say so loudly, because a silent failure here is money.
+  let _landed = false;
+  try {
+    const _fresh = (JSON.parse(localStorage.getItem('gk_leads') || '[]') || [])
+      .find(l => l && l.id === lead.id);
+    _landed = !!(_fresh && (_fresh.payments || []).some(p =>
+      p && Math.round(Number(p.amount) || 0) === amt && p.kind === kind));
+  } catch (e) { _landed = false; }
+  if (!_landed) {
+    alert('⚠ THE PAYMENT DID NOT SAVE.\n\n' + kindLbl + ' of ' + _pcFmt$(amt) + ' for ' + who
+      + ' could not be written to this browser\'s storage.\n\nDo NOT assume it was recorded — '
+      + 'write it down and tell Jon before trying again.');
+    toast('Payment NOT saved — see the message', 'error');
+    renderPaymentsPage();
+    return;
+  }
   toast(kindLbl + ' of ' + _pcFmt$(amt) + ' recorded for ' + who, 'success');
   // Clear the amount + note but KEEP the job selected — recording a deposit and
   // then a balance on the same job is a normal pair of actions.
@@ -28738,7 +28871,8 @@ function renderPaymentsPage(){
   const _sinceOf = l => (l.paymentExpected && l.paymentExpected.at)
     || (l.milestones && l.milestones.installCompleted && l.milestones.installCompleted.date) || '';
   const expected = active
-    .filter(l => (l.paymentExpected && _stillOwed(l)) || (_installDone(l) && _owesReal(l)))
+    .filter(l => !l.paymentChaseDismissedAt
+              && ((l.paymentExpected && _stillOwed(l)) || (_installDone(l) && _owesReal(l))))
     // OLDEST FIRST — this is a chase list, so the thing that has been waiting
     // longest belongs at the top. (It used to sort newest-first.)
     .sort((a,b) => String(_sinceOf(a)||'').localeCompare(String(_sinceOf(b)||'')));
@@ -28776,7 +28910,9 @@ function renderPaymentsPage(){
       <td style="font-weight:700;color:var(--green)">${(e && e.memoCode) || payMemoCode(l.id)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-p" style="padding:4px 10px;font-size:12px" onclick="_pcPickJob('${l.id}')">✓ Record received</button>
-        ${e ? `<button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcClearExpected('${l.id}')" title="Remove this expected entry">✕</button>` : ''}
+        ${e
+          ? `<button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcClearExpected('${l.id}')" title="Remove this expected entry — does NOT record any money">✕</button>`
+          : `<button class="btn btn-g" style="padding:4px 8px;font-size:12px" onclick="_pcDismissChase('${l.id}')" title="Stop chasing this job — hides the row without recording any money. Recording a payment later brings it back if a balance remains.">✕</button>`}
       </td></tr>`;
   }).join('');
 
