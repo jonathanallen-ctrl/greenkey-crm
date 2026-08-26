@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25i</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -9456,7 +9456,7 @@ function onDQExcChange(qid){const v=document.getElementById('dq-exc')?.value||''
 function onDQCustomerNoteChange(qid){const v=document.getElementById('dq-cnote')?.value||'';const q=getQuote(qid);if(q)upsertQuote({...q,customerNote:v});}
 
 // ── TOTALS & MARGIN ──
-// ══════ ROUND AT SAVE, NEVER AT READ (crm-2026-08-25i, 2026-08-25) ══════
+// ══════ ROUND AT SAVE, NEVER AT READ (crm-2026-08-25j, 2026-08-25) ══════
 // The $5 round-up shipped in `18o` as a DISPLAY rule inside calcQuoteTotals and
 // was never written to the quote. In `18t` I made _quoteNet recompute through
 // it so the emailed total would stop disagreeing with the PDF — which quietly
@@ -25646,6 +25646,26 @@ function _opsMirrorLedger() {
   try { return JSON.parse(localStorage.getItem('gk_ops_photo_mirrored') || '{}'); } catch(_) { return {}; }
 }
 function _opsMirrorLedgerSave(v) { try { localStorage.setItem('gk_ops_photo_mirrored', JSON.stringify(v)); } catch(_){} }
+// ── 2026-08-25j — SEED "Completion pics" EARLY (Sherri) ──
+// Sherri: she'd like the Completion Pics folder to exist inside every job
+// folder without her having to make it. The CRM has ALWAYS created it — but
+// only as a side effect of the photo mirror, which bails out at
+// `if (!todo.length) continue;` on any job with no NEW install photos to copy.
+// So the folder appeared only once the crew had already uploaded closeout
+// shots, which is exactly the window in which she was making it by hand.
+//
+// Seeding it needs the job's Operations folder resolved, and that costs a few
+// Graph calls. This ledger makes that a ONE-TIME cost per job: once the folder
+// is confirmed present, the job is never re-resolved for seeding again. Steady
+// state is therefore zero extra calls — only brand-new jobs pay anything.
+//
+// ⚠ Keyed by lead id, and it stores only a timestamp. If Sherri DELETES a
+// Completion pics folder on purpose, the CRM will not recreate it (the ledger
+// says it was seeded) — clearing `gk_ops_cp_seeded` is the undo.
+function _cpSeededLedger() {
+  try { return JSON.parse(localStorage.getItem('gk_ops_cp_seeded') || '{}'); } catch(_) { return {}; }
+}
+function _cpSeededSave(v) { try { localStorage.setItem('gk_ops_cp_seeded', JSON.stringify(v)); } catch(_){} }
 function _opsMondayName(dateStr) {
   const d = new Date(dateStr + 'T12:00:00'); if (isNaN(d)) return null;
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
@@ -25763,6 +25783,8 @@ async function _opsPhotoMirrorSweep() {
       else if (/NEEDS INSPECTION/i.test(it.name)) niFolder = it;
     }
     const ledger = _opsMirrorLedger();
+    const seeded = _cpSeededLedger();          // 2026-08-25j — see _cpSeededLedger
+    let seededDirty = false, cpSeededCount = 0;
     let copiedTotal = 0, filedTo = [], processed = 0, examined = 0;
     for (let k = 0; k < cands.length && processed < OPS_MIRROR_JOBS_PER_SWEEP; k++) {
       examined = k + 1;
@@ -25803,11 +25825,18 @@ async function _opsPhotoMirrorSweep() {
             photos.push(it);
           }
         }
-      } catch (_) { continue; }             // no photo folder yet → next job
+      // ⚠ 2026-08-25j — was `continue`. A job whose photo library folder doesn't
+      // exist yet still needs its Completion pics folder SEEDED (that is the
+      // normal state of a job that hasn't been worked yet, which is precisely
+      // when Sherri wants the folder there). Carry on with no photos instead.
+      } catch (_) { photos = []; }
       processed++;
       const done = ledger[lead.id] || {};
       const todo = photos.filter(p => p.name && !done[p.name]);
-      if (!todo.length) continue;
+      const needSeed = !seeded[lead.id];
+      // Nothing to copy AND the folder is already known to exist → no Graph
+      // calls at all for this job. This is the steady state.
+      if (!todo.length && !needSeed) continue;
       // 2. Resolve the job's Operations folder — scheduled week first.
       let jobFolder = null;
       const schedDateStr = (lead.milestones && lead.milestones.installScheduled && lead.milestones.installScheduled.date) || '';
@@ -25848,6 +25877,17 @@ async function _opsPhotoMirrorSweep() {
         }
       }
       if (!cp || !cp.id) continue;
+      // 2026-08-25j — the folder is confirmed present. Record it so this job
+      // never costs the folder-resolution calls again, and note whether WE made
+      // it (Sherri asked for this, so it's worth being able to see it working).
+      if (needSeed) {
+        seeded[lead.id] = new Date().toISOString();
+        seededDirty = true;
+        cpSeededCount++;
+      }
+      // Folder seeded, but there is nothing to file yet — that is the whole
+      // point of the early seed. Stop here rather than running the copy loop.
+      if (!todo.length) continue;
       // 4. Dedupe against what's already in Completion pics, then copy.
       const present = new Set();
       try {
@@ -25870,6 +25910,10 @@ async function _opsPhotoMirrorSweep() {
     }
     _opsMirrorCursor = (_opsMirrorCursor + examined) % Math.max(1, cands.length);
     _opsMirrorLedgerSave(ledger);
+    if (seededDirty) _cpSeededSave(seeded);
+    // Deliberately quiet — no toast. Sherri wants the folder to simply BE there;
+    // a popup every time the CRM makes one is noise, not news.
+    if (cpSeededCount) console.log('[GK] Completion pics folder ensured on', cpSeededCount, 'job(s)');
     if (copiedTotal) {
       console.log('[GK] Ops photo mirror: filed', copiedTotal, 'photo(s) —', filedTo.join(', '));
       try { toast('📁 Filed ' + copiedTotal + ' field photo' + (copiedTotal === 1 ? '' : 's') + ' to Operations — ' + filedTo.join(', '), 'success'); } catch(_){}
