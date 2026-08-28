@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-27b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2706,7 +2706,7 @@ function buildApp(user) {
   //   ?desktop in the URL → forces Dashboard regardless of detection
   // Useful for debugging mobile-detection issues on devices we can't inspect.
   const _hash = (location.hash || '').replace(/^#/, '');
-  const _isMeaningfulDeepLink = /^(tech=.+|job-.+)$/.test(_hash);
+  const _isMeaningfulDeepLink = /^(tech=.+|job-.+|open=.+)$/.test(_hash);
   const _qs = location.search || '';
   const _forceMobile  = /[?&]tech(=|&|$)/.test(_qs);
   const _forceDesktop = /[?&]desktop(=|&|$)/.test(_qs);
@@ -2753,9 +2753,21 @@ function buildApp(user) {
 // Supported:
 //   #tech=LEAD_ID    → Tech Mode for a specific job (calendar deep-link)
 //   #job-LEAD_ID     → job detail (legacy)
+//   #open=THREAD_ID  → the office "New text" email button (2026-08-28): a lead
+//                      id opens the job; 'insp-<id>' opens the inspector's text
+//                      window; anything else lands on the Calls page. Routes
+//                      through _bellOpenLead so the email and the bell agree.
 function _handleDeepLinkHash() {
   const h = (location.hash || '').replace(/^#/,'');
   if (!h) return;
+  const openMatch = h.match(/^open=(.+)$/);
+  if (openMatch) {
+    const id = decodeURIComponent(openMatch[1]);
+    try { history.replaceState(null, '', location.pathname + location.search); } catch(_) {}
+    // Give the post-login render a beat to finish before opening a modal/page.
+    setTimeout(() => { if (typeof _bellOpenLead === 'function') _bellOpenLead(id); }, 150);
+    return;
+  }
   // #tech=LEAD_ID — drill into a specific job
   const techWithId = h.match(/^tech=(.+)$/);
   if (techWithId) {
@@ -24170,6 +24182,48 @@ async function _spEnsureDrive() {
 // from the worker independently, so a destructive replace would lose whichever
 // side polled second. Rows carry id + updatedAt like every other merged array.
 const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments', 'gk_calls'];
+// ── Payment VOIDS (2026-08-28, crm-2026-08-28b) ──────────────────────────
+// The merge below UNIONS payment ledgers by id (25e), which is right for money
+// that was added — and wrong for money that was deliberately REMOVED: the
+// 8/25 duplicate payments were deleted on Jonathan's machine and came straight
+// back from Sherri's copy on the next sync. A deletion needs a record of its
+// own that survives the union, so a removed payment leaves a tombstone in
+// `lead.voidedPayments[]` ({ k, at, by, reason }) keyed exactly the way the
+// union keys payments. Voids union across copies just like acks, and the
+// filtered ledger is what every machine ends up with. Append-only, tiny.
+function _payKey(p) {
+  return p ? (p.id || (String(p.amount) + '|' + String(p.collectedAt || p.at || ''))) : '';
+}
+function _payVoidKeys(l) {
+  const out = new Set();
+  (l && Array.isArray(l.voidedPayments) ? l.voidedPayments : []).forEach(v => { if (v && v.k) out.add(String(v.k)); });
+  return out;
+}
+// Remove a payment from a job's ledger AND leave the tombstone. Returns the
+// removed entry (or null). Callers set updatedAt and save.
+function _voidPayment(lead, key, meta) {
+  if (!lead || !key) return null;
+  const k = String(key);
+  lead.voidedPayments = Array.isArray(lead.voidedPayments) ? lead.voidedPayments : [];
+  if (!lead.voidedPayments.some(v => v && String(v.k) === k)) {
+    lead.voidedPayments.push(Object.assign({ k, at: new Date().toISOString() }, meta || {}));
+  }
+  return _applyPaymentVoids(lead);
+}
+// Drop every ledger entry whose key is on the void list; re-point the legacy
+// `payment` slot at the newest survivor. Returns the last dropped entry.
+function _applyPaymentVoids(lead) {
+  const voids = _payVoidKeys(lead);
+  if (!voids.size || !Array.isArray(lead.payments)) return null;
+  let dropped = null;
+  const keep = lead.payments.filter(p => { if (p && voids.has(_payKey(p))) { dropped = p; return false; } return true; });
+  if (keep.length === lead.payments.length) return null;
+  lead.payments = keep;
+  if (keep.length) lead.payment = Object.assign({}, keep[keep.length - 1]);
+  else delete lead.payment;
+  return dropped;
+}
+
 function _mergeArrayByIdAndTs(localArr, remoteArr) {
   if (!Array.isArray(localArr)) localArr = [];
   if (!Array.isArray(remoteArr)) remoteArr = [];
@@ -24193,7 +24247,11 @@ function _mergeArrayByIdAndTs(localArr, remoteArr) {
     // simultaneously drop each other's ack (whole record replaced). Union
     // keys instead — an ack, once made, survives any merge direction.
     const rHasNewAcks = r.ackedBy && Object.keys(r.ackedBy).some(k => !(existing.ackedBy||{})[k]);
-    if (rTs > lTs || rHasNewAcks) {
+    // Same for payment voids (28b): a tombstone made on another machine must
+    // be adopted even when this copy has the newer updatedAt.
+    const _lVoids = _payVoidKeys(existing);
+    const rHasNewVoids = Array.isArray(r.voidedPayments) && r.voidedPayments.some(v => v && v.k && !_lVoids.has(String(v.k)));
+    if (rTs > lTs || rHasNewAcks || rHasNewVoids) {
       const winner = rTs > lTs ? r : existing;
       const loser  = rTs > lTs ? existing : r;
       let rec = (existing.ackedBy || r.ackedBy)
@@ -24220,15 +24278,25 @@ function _mergeArrayByIdAndTs(localArr, remoteArr) {
         });
         return Array.from(seen.values());
       };
-      const _payU   = _uniPay(winner.payments, loser.payments);
+      // 28b: voids union too (keyed by k), and the unioned ledger is filtered
+      // through them — a payment removed on EITHER side stays removed.
+      const _voidSeen = new Map();
+      [...(Array.isArray(winner.voidedPayments) ? winner.voidedPayments : []),
+       ...(Array.isArray(loser.voidedPayments)  ? loser.voidedPayments  : [])].forEach(v => {
+        if (v && v.k && !_voidSeen.has(String(v.k))) _voidSeen.set(String(v.k), v);
+      });
+      const _voidU = Array.from(_voidSeen.values());
+      const _payU   = _uniPay(winner.payments, loser.payments).filter(p => !_voidSeen.has(_payKey(p)));
       const _priorU = _uniPay(winner.priorPayments, loser.priorPayments);
-      if (_payU.length || _priorU.length) {
+      const _hadPay = Array.isArray(winner.payments) || Array.isArray(loser.payments);
+      if (_hadPay || _priorU.length || _voidU.length) {
         rec = { ...rec };
-        if (_payU.length) {
+        if (_voidU.length) rec.voidedPayments = _voidU;
+        if (_hadPay) {
           rec.payments = _payU.slice().sort((x, y) =>
             String(x.collectedAt || '').localeCompare(String(y.collectedAt || '')));
           const last = rec.payments[rec.payments.length - 1];
-          if (last) rec.payment = { ...last };
+          if (last) rec.payment = { ...last }; else delete rec.payment;
         }
         if (_priorU.length) rec.priorPayments = _priorU;
       }
@@ -29792,11 +29860,28 @@ function _bellSelectNotif(id, jobId) {
       if (n && n.quoteId) jobId = (getQuote(n.quoteId) || {}).leadId || '';
     } catch(_){}
   }
+  // Inspector threads are keyed 'insp-<inspectorId>' — not a lead, so the
+  // getLead() gate below used to swallow them with "hasn't synced to this
+  // machine yet" and the reply was unreachable from the bell (Jonathan,
+  // 2026-08-28). _bellOpenLead already knows how to route them.
+  if (jobId && /^insp-/.test(jobId)) { _bellOpenLead(jobId); return; }
   if (jobId && typeof getLead === 'function' && getLead(jobId)) { _bellOpenLead(jobId); }
   else {
     if (typeof toggleSmsBell === 'function') toggleSmsBell();
     if (typeof toast === 'function') toast(jobId ? 'Acknowledged — the linked job hasn\'t synced to this machine yet' : 'Acknowledged — no job is linked to this notice (unmatched number)', 'success');
   }
+}
+
+// Open an inspector's text window by inspector id. Used by the bell, the
+// desktop popup and the #open= deep link in the office email. If the inspector
+// directory hasn't arrived from SharePoint yet (fresh machine, first load after
+// clicking the email link), wait for the sync once before giving up.
+function _openInspectorThread(inspId, _retried) {
+  const have = (typeof getInspector === 'function') && getInspector(inspId);
+  if (!have && !_retried) { setTimeout(() => _openInspectorThread(inspId, true), 3000); return; }
+  if (!have) { if (typeof toast === 'function') toast('Inspector not found — open Permitting → AHJ Directory', 'warning'); return; }
+  if (typeof openInspectorSMS === 'function') openInspectorSMS(inspId);
+  else if (typeof toast === 'function') toast('Open Permitting → AHJ Directory to see this reply', 'info');
 }
 
 function _bellOpenLead(leadId) {
@@ -29805,9 +29890,8 @@ function _bellOpenLead(leadId) {
   // (Permitting → AHJ Directory) instead of the "no matching job" dead end.
   const _insp = /^insp-(.+)$/.exec(leadId);
   if (_insp) {
-    toggleSmsBell();
-    if (typeof openInspectorSMS === 'function') openInspectorSMS(_insp[1]);
-    else if (typeof toast === 'function') toast('Open Permitting → AHJ Directory to see this reply', 'info');
+    if (typeof _bellOpen !== 'undefined' && _bellOpen) toggleSmsBell();
+    _openInspectorThread(_insp[1]);
     return;
   }
   // Guard: an unresolvable id (e.g. 'unrouted' texts) must not open a blank

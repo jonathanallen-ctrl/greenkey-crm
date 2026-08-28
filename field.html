@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-25 field-27';
+const BUILD = '2026-08-28 field-28';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -1613,6 +1613,11 @@ async function clearPayment(jobId){
   const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) return;
   const l=arr[i];
   if(Array.isArray(l.payments) && l.payments.length){
+    // field-28: leave a tombstone so the office merge (which UNIONS ledgers)
+    // doesn't resurrect the entry from another machine's copy.
+    const gone=l.payments[l.payments.length-1];
+    const k=gone ? (gone.id || (String(gone.amount)+'|'+String(gone.collectedAt||gone.at||''))) : '';
+    if(k){ l.voidedPayments=Array.isArray(l.voidedPayments)?l.voidedPayments:[]; l.voidedPayments.push({k, at:new Date().toISOString(), by:'field', reason:'undo'}); }
     l.payments.pop();
     if(l.payments.length){
       l.payment = Object.assign({}, l.payments[l.payments.length-1]);
