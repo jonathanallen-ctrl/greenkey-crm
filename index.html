@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-25j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-27b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12999,8 +12999,8 @@ function _chipEditorHTML(leadId, key){
       return _chipEditorShell('Quote',
         row(btnP('+ Record outside quote',`openExternalQuote('${leadId}')`))
         + row(manual
-          ? `<span style="font-size:12px;color:var(--text-secondary)">Marked approved (no value).</span>`+btn('Set back to pending',`_setMilestone('${leadId}','quoteApproved',false);renderJobDetail('${leadId}')`)
-          : btn('Mark approved without a value',`_setMilestone('${leadId}','quoteApproved',true);renderJobDetail('${leadId}')`))
+          ? `<span style="font-size:12px;color:var(--text-secondary)">Marked approved (no value).</span>`+btn('Set back to pending',`_manualApproveQuote('${leadId}',false);renderJobDetail('${leadId}')`)
+          : btn('Mark approved without a value',`_manualApproveQuote('${leadId}',true);renderJobDetail('${leadId}')`))
         + note('No CRM quote yet. Use “Record outside quote” for Qmerit / Electrum / Treehouse fixed-price jobs so the value shows in Active Quotes and counts as revenue. “Mark approved” only flags the stage, with no dollar value.'));
     }
     case 'permit': {
@@ -13913,7 +13913,83 @@ function _createUploadFollowupTask(leadId, docType) {
 }
 
 // ── MILESTONE SAVE HELPERS ──
+// ⚠ 2026-08-26 — A MANUAL APPROVAL MUST APPROVE BOTH SIDES.
+// Jon: "Approving the quote manually is something that we want to be able to do
+// but it should FULLY approve it so it shows that way on both sides."
+//
+// It didn't. Ticking "Quote approved by customer" in the milestone list ran
+// saveMsToggle, which wrote `milestones.quoteApproved.done = true` and NOTHING
+// ELSE — no accepted quote, no Job Value, no quote status. But the status strip
+// reads `latestApproved || ms.quoteApproved?.done`, so the chip went green while
+// Active Quotes still showed every quote as merely "delivered" with an Accept
+// button. Found on Zohaib Rana (GK-2026-8285798): a green "Quote Approved ·
+// 07/22/2026" chip over two un-accepted quotes ($3,783 direct, $1,324 Qmerit).
+// Jon was about to archive the job for inactivity and the chip made him stop —
+// so the disagreement cost real attention, and a job with a green approval chip
+// and no Job Value contributes nothing to revenue while LOOKING like it does.
+//
+// Now the milestone is a real approval: it routes through the same
+// acceptJobQuote() path the Accept button uses, so the two sides cannot drift.
+// Returns false when the user backs out, so the caller repaints and the
+// checkbox snaps back to the truth rather than to what was clicked.
+function _manualApproveQuote(leadId, on) {
+  const lead = getLead(leadId); if (!lead) return false;
+  const quotes = getQuotes().filter(q => q && q.leadId === leadId);
+  const accSet = new Set(getAcceptedQuoteIds(lead) || []);
+  const isAcc  = q => accSet.has(q.id) || q.status === 'approved' || q.status === 'contingent-approved';
+
+  if (on) {
+    // Already consistent, or an outside-CRM job with nothing to accept (Qmerit /
+    // Electrum / Treehouse quoted in their portal) — flag the stage and stop.
+    // That case is legitimate and stays exactly as it was.
+    const open = quotes.filter(q => !isAcc(q));
+    if (quotes.some(isAcc) || !open.length) { _setMilestone(leadId, 'quoteApproved', true); return true; }
+
+    let pick = open[0];
+    if (open.length > 1) {
+      // Never guess which quote the customer said yes to — on a job with a
+      // direct scope AND a platform scope that choice sets the Job Value and
+      // decides who owes us money.
+      const ans = prompt('Which quote did the customer approve?\n\n'
+        + open.map((q, i) => (i + 1) + ')  $' + _quoteNet(q).toLocaleString()
+            + (q.source ? '  ' + q.source : '') + '   ' + q.id).join('\n')
+        + '\n\nEnter a number, or Cancel to leave it unapproved.', '1');
+      if (ans === null) return false;
+      const n = parseInt(ans, 10);
+      if (!(n >= 1 && n <= open.length)) { toast('Nothing approved — that was not one of the options', 'warning'); return false; }
+      pick = open[n - 1];
+    }
+    // Does the whole job: quote status → approved, acceptedQuoteIds, Job Value,
+    // the quoteApproved milestone, and the stage advance.
+    acceptJobQuote(leadId, pick.id);
+    return true;
+  }
+
+  // ── turning it OFF ──
+  const acc = quotes.filter(isAcc);
+  if (acc.length) {
+    if (!confirm('Un-approve this job?\n\nThis also un-accepts '
+      + acc.map(q => '$' + _quoteNet(q).toLocaleString() + ' (' + q.id + ')').join(', ')
+      + ' and clears the Job Value.')) return false;
+    acc.forEach(q => { try { acceptJobQuote(leadId, q.id); } catch(_){} });   // acceptJobQuote toggles
+    // Belt and braces: acceptJobQuote's undo path leaves the milestone alone
+    // when the accept came from the customer, so clear it explicitly.
+    _setMilestone(leadId, 'quoteApproved', false);
+    return true;
+  }
+  _setMilestone(leadId, 'quoteApproved', false);
+  return true;
+}
+
 function saveMsToggle(leadId, key, checked) {
+  // ⚠ Quote approval is not a plain checkbox — see _manualApproveQuote above.
+  if (key === 'quoteApproved') {
+    try { _manualApproveQuote(leadId, checked); } catch (e) { console.warn('[GK] manual approve failed:', e); }
+    // Repaint from DATA either way: if the user cancelled, the checkbox must go
+    // back to what is actually true, not stay where they clicked it.
+    try { renderJobDetail(leadId); } catch(_){}
+    return;
+  }
   const arr = getLeads();
   const idx = arr.findIndex(l => l.id === leadId);
   if (idx < 0) return;
@@ -18694,8 +18770,52 @@ function _inspPreviewPhotoById(fileId){
     ${f.name?`<div style="color:#fff;font-size:13px;margin-top:10px;opacity:.85">${escHtml(f.name)}</div>`:''}`;
   lb.style.display='flex';
 }
+// ⚠ 2026-08-27 — A FINISHED JOB WENT INVISIBLE TO THE INSPECTOR (Tim Dean).
+// Jon: "We have a customer that is not showing up in the inspection pics list
+// right now. He is in post install status... We really need to send pics to the
+// inspector asap."
+//
+// The old rule let a job in through ONE of two doors: stage `final-inspection`,
+// or `milestones.installScheduled.date` being filled in. Tim Dean sat in
+// `post-install-docs` with no scheduling milestone — scheduled some other way
+// (the Appointments section, or straight into Outlook) — so neither door opened
+// and a job whose install was finished could not be found at the moment someone
+// needed to send photos to the county.
+//
+// The old rule asked "was this SCHEDULED?" when the question that matters is
+// "is the install DONE?". A job in post-install-docs or final-inspection is past
+// installation BY DEFINITION — it should never have to prove it with a
+// scheduling milestone. Same reasoning as the Rod Silva fix on the payments
+// list (2026-08-25f): trusting only the milestone hides real work, because the
+// milestone is one of several ways a job legitimately gets there.
+//
+// The scheduled-date door is KEPT for jobs still at `scheduled`/`installation`,
+// which genuinely have not been installed yet — and it now also accepts a dated
+// installation APPOINTMENT, which is the form Sherri's bookings actually take.
+const _INSP_PAST_INSTALL = ['post-install-docs', 'final-inspection'];
 function _awaitingInspectionJobs(){
-  return getLeads().filter(l=>{ const ms=l.milestones||{}; if(ms.finalInspPassed&&ms.finalInspPassed.done) return false; return l.stage==='final-inspection' || (ms.installScheduled&&ms.installScheduled.date && ['scheduled','installation','post-install-docs','final-inspection'].includes(l.stage)); });
+  const _hasInstallDate = l => {
+    const ms = l.milestones || {};
+    if (ms.installScheduled && ms.installScheduled.date) return true;
+    // Appointments are the other half of the scheduling story (see getAppts,
+    // 2026-08-25a) — a booking made there is just as real as the pill's date.
+    let arr = [];
+    try { arr = (typeof getAppts === 'function') ? getAppts(l) : (Array.isArray(l.appointments) ? l.appointments : []); }
+    catch(_) { arr = Array.isArray(l.appointments) ? l.appointments : []; }
+    return arr.some(a => a && a.date && (a.type === 'installation' || !a.type));
+  };
+  return getLeads().filter(l => {
+    if (!l || l.deleted || l.stage === 'archived') return false;
+    const ms = l.milestones || {};
+    if (ms.finalInspPassed && ms.finalInspPassed.done) return false;
+    // Past installation → in, however it got there.
+    if (_INSP_PAST_INSTALL.includes(l.stage)) return true;
+    if (!['scheduled', 'installation'].includes(l.stage)) return false;
+    // Still pre-install by stage: the tech stamping "install complete" counts,
+    // otherwise fall back to having a real install date on the books.
+    if (ms.installCompleted && ms.installCompleted.done) return true;
+    return _hasInstallDate(l);
+  });
 }
 
 // ── WHAT IS THIS PHOTO OF? (2026-08-08) ──
@@ -27583,6 +27703,36 @@ function _inspScopeFor(lead) {
   } catch (_) { return ''; }
 }
 
+// ⚠ 2026-08-27 — "failed issue-token 400" (Sherri, Edward Cush).
+// She tried to send the inspection scheduling email and got a raw HTTP status
+// back. She worked out the cause herself — *"There isn't an email or phone
+// number listed for him"* — but the CRM should have told her that, not made her
+// decode a 400. It happily began the send with an empty address, let the worker
+// reject it, and reported the rejection code.
+//
+// Two separate faults; she only hit the first:
+//   1. NO EMAIL → the scheduling link has nowhere to go. Hard stop, say so.
+//   2. NO PHONE → the send SUCCEEDS but the text is silently skipped, while the
+//      button reads "Send email + text". The job note does record "text NOT
+//      sent" afterwards, which is honest but easy to miss. Ask up front instead.
+// Kept pure so it can be tested without a DOM, a token or a mailbox.
+function _inspContactGate(email, phone, who) {
+  const nm = String(who || '').trim() || 'this customer';
+  if (!String(email || '').trim()) {
+    return { block: true, confirm: false, field: 'email',
+      message: 'No email address on file for ' + nm + '.\n\n'
+        + 'The inspection scheduling link is delivered by email, so there is nowhere to send it.\n\n'
+        + 'Add an email address on the job (Customer & Site → Edit) and try again.' };
+  }
+  if (!String(phone || '').trim()) {
+    return { block: false, confirm: true, field: 'phone',
+      message: 'No phone number on file for ' + nm + '.\n\n'
+        + 'The email will still go out with the scheduling link and photos — only the text nudge is skipped.\n\n'
+        + 'Send the email anyway?' };
+  }
+  return { block: false, confirm: false, field: '' };
+}
+
 async function sendInspectionScheduling(leadId) {
   const btn = document.getElementById('insp-send-btn');
   const status = document.getElementById('insp-modal-status');
@@ -27596,6 +27746,21 @@ async function sendInspectionScheduling(leadId) {
     const first = (cust && cust.firstName) || String(lead.customerName || 'there').split(' ')[0];
     const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (lead.customerName || '');
     const addr = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA'].filter(Boolean).join(', ');
+    // 0. ⚠ Check we can actually reach this customer BEFORE doing any work —
+    // see _inspContactGate. Returning (not throwing) keeps the modal open with
+    // the button live, so she can fix the record and hit send again.
+    const _gate = _inspContactGate(email, phone, who || lead.customerName);
+    if (_gate.block) {
+      say('Missing ' + _gate.field + ' — nothing was sent.');
+      if (btn) { btn.disabled = false; btn.textContent = '📧 Send email + text'; }
+      alert(_gate.message);
+      return;
+    }
+    if (_gate.confirm && !confirm(_gate.message)) {
+      say('Cancelled — nothing was sent.');
+      if (btn) { btn.disabled = false; btn.textContent = '📧 Send email + text'; }
+      return;
+    }
     // 1. Window: first pickable day is 3 business days out; horizon 8 weeks.
     const winStart = _inspISO(_inspAddBusinessDays(new Date(), 3));
     const endD = new Date(); endD.setDate(endD.getDate() + 56);
