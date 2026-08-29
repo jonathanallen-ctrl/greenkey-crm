@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4152,6 +4152,17 @@ function renderCustomersPage() {
   }).join('')}</div>`;
 }
 
+// From a job header: jump to the customer's page, which lists ALL their jobs
+// (Jonathan, 2026-08-29: "select other jobs for the same person quickly").
+// openCustomerDetail only swaps views inside the Customers page, so navigate
+// first — the same cross-page lesson as openLeadDetail / openJobDetail (15b).
+function openCustomerFromJob(custId) {
+  if (!custId || typeof getCustomer !== 'function' || !getCustomer(custId)) { if (typeof toast==='function') toast('No customer record linked to this job', 'warning'); return; }
+  if (S.page === 'customers') { openCustomerDetail(custId); return; }
+  navigate('customers');
+  setTimeout(() => { try { openCustomerDetail(custId); } catch(e){ console.warn('[GK] openCustomerFromJob:', e); } }, 60);
+}
+
 function openCustomerDetail(custId) {
   S.custView = custId;
   document.getElementById('cust-list-view').style.display = 'none';
@@ -5869,7 +5880,10 @@ function quoteStatusChip(s, q){
 //     quoteId: id of the quote that was acted on }
 function getLeadCustomerAction(leadId) {
   if (!leadId) return null;
-  const quotes = getQuotes().filter(q => q.leadId === leadId && q.customerActionAt);
+  // 28d: an acceptance the office has since un-accepted is history, not the
+  // current state — the banner must not keep saying "Customer accepted on …".
+  const quotes = getQuotes().filter(q => q.leadId === leadId && q.customerActionAt
+    && !(q.acceptUndoneAt && new Date(q.acceptUndoneAt) > new Date(q.customerActionAt)));
   if (!quotes.length) return null;
   // Latest by customerActionAt — most recent action wins. If they declined
   // an old quote and accepted a newer one, the newer one is what counts.
@@ -13051,7 +13065,7 @@ function _chipEditorHTML(leadId, key){
           const qd=q.createdAt?new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
           const lbl=`<span style="flex:1;min-width:0;font-size:12.5px"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qd?' · '+qd:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')}</span>`:''} — <strong>$${_quoteNet(q).toLocaleString()}</strong> <span style="color:var(--text-muted)">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</span></span>`;
           return row(lbl + (isAcc
-            ? btn('✓ Accepted — undo',`acceptJobQuote('${leadId}','${q.id}')`)
+            ? btn('✓ Accepted — undo',`unacceptJobQuote('${leadId}','${q.id}')`)
             : btnP('Accept this quote',`acceptJobQuote('${leadId}','${q.id}')`)));
         }).join('');
         return _chipEditorShell('Quote', qrows
@@ -13539,7 +13553,7 @@ function _renderJobRail(lead){
       ${isInv
         ? `<button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#8e44ad;color:#a55ecc" onclick="event.stopPropagation();generateInvoice('${q.id}')" title="Re-download invoice ${escHtml(q.invoiceId||'')} as a PDF (same invoice number — it is not re-minted)">🧾 Invoice</button>
            <button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#3498db;color:#3498db" onclick="event.stopPropagation();emailInvoice('${q.id}')" title="Email invoice ${escHtml(q.invoiceId||'')} to the bill-to party with the PDF attached">✉ Send</button>`
-        : `<button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="acceptJobQuote('${id}','${q.id}')">${isAcc?'✓ Accepted':'Accept'}</button>
+        : `<button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="${isAcc?`unacceptJobQuote('${id}','${q.id}')`:`acceptJobQuote('${id}','${q.id}')`}" title="${isAcc?'Click to un-accept this quote':''}">${isAcc?'✓ Accepted':'Accept'}</button>
            ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}`}
     </div>`;
   }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
@@ -13625,24 +13639,68 @@ async function _loadJobRailMap(leadId){
 }
 // Accept a quote → mark it the winner, prefill Job Value, green the Quote chip,
 // and fire the pre-install tasks (811/materials) like the normal approval path.
+// ── UN-ACCEPT (2026-08-29, crm-2026-08-28d) ──────────────────────────────
+// Sherri hit "✓ Accepted — undo" on the Quote chip and nothing changed. The old
+// undo only removed the id from acceptedQuoteIds; it left the quote's status
+// 'approved' when the accept came from the customer's email link, left the
+// quoteApproved milestone, the stage, the Job Value and the "Customer accepted
+// on …" banner — every surface that paints green reads one of those, so the
+// screen looked identical. This does the whole job, with one confirm.
+//   • removes the scope (others stay); Job Value re-sums or clears
+//   • quote status → 'delivered' (customer accepts too — the customer's action
+//     is kept as history on the quote: acceptUndoneAt/By, so the banner stops
+//     reporting an acceptance that the office has withdrawn)
+//   • clears the quoteApproved milestone when no accepted quote remains
+//   • stage 'quote-approved' → 'quote-delivered' when nothing remains
+//   • writes a job note with who/when
+function unacceptJobQuote(leadId, quoteId, opts){
+  opts = opts || {};
+  const lead=getLead(leadId); const q=getQuotes().find(x=>x.id===quoteId); if(!lead||!q) return false;
+  const _accIds=getAcceptedQuoteIds(lead);
+  const _isAcc=_accIds.includes(quoteId) || q.status==='approved' || q.status==='contingent-approved';
+  if(!_isAcc) return false;
+  const _others=_accIds.filter(x=>x!==quoteId);
+  if(!opts.silent){
+    const msg = 'Un-accept quote ' + quoteId + ' ($' + _quoteNet(q).toLocaleString() + ')?\n\n'
+      + (q.customerActionAt ? 'The customer accepted this one through their email link on ' + mdy(q.customerActionAt) + '. Undoing it here records that the office withdrew the acceptance.\n\n' : '')
+      + (_others.length ? 'Job Value re-sums from the remaining accepted scope(s).' : 'Job Value clears and the job goes back to Quote Delivered.');
+    if(!confirm(msg)) return false;
+  }
+  const now=new Date().toISOString();
+  const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
+  if(i>=0){
+    arr[i].acceptedQuoteIds=_others;
+    if(!_others.length){ arr[i].acceptedQuoteIds=undefined; arr[i].acceptedQuoteId=null; }
+    else _syncAcceptedPointer(arr[i]);
+    if(!_others.length && arr[i].stage==='quote-approved'){ arr[i].stage='quote-delivered'; arr[i].stageAt=now; }
+    if(!Array.isArray(arr[i].jobNotes)) arr[i].jobNotes=[];
+    arr[i].jobNotes.push({ id:'note-'+Date.now(), text:'↩ Un-accepted quote '+quoteId+' ($'+_quoteNet(q).toLocaleString()+')'+(q.customerActionAt?' — customer had accepted via email on '+mdy(q.customerActionAt):''), author:S.user?.id||'unknown', authorName:S.user?.name||'Unknown', timestamp:now, mentions:[] });
+    arr[i].updatedAt=now; saveLeads(arr);
+  }
+  try{
+    const _q=getQuote(quoteId)||q;
+    const _patch={ ..._q, updatedAt:now, acceptUndoneAt:now, acceptUndoneBy:(S.user?.name||S.user?.id||'') };
+    if(!_q.external && (_q.status==='approved' || _q.status==='contingent-approved')) _patch.status='delivered';
+    upsertQuote(_patch);
+  }catch(e){ console.warn('[GK] unaccept quote patch failed:', e); }
+  const _rest=getAcceptedQuotes(getLead(leadId));
+  if(_rest.length===1) setJobValueFromQuote(leadId, _quoteJobNet(_rest[0]), _rest[0].id);
+  else if(_rest.length>1) setJobValue(leadId, _rest.reduce((s,x)=>s+_quoteJobNet(x),0), {source:'quote-sum'});
+  else { const _jv=getJobValue(getLead(leadId)); if(_jv && (_jv.source==='quote' || _jv.source==='quote-sum')) setJobValue(leadId, null, {source:'quote'}); }
+  const _stillApproved = getQuotes().some(x => x && x.leadId===leadId && x.id!==quoteId && (x.status==='approved' || x.status==='contingent-approved'));
+  if(!_stillApproved){ try{ _setMilestone(leadId,'quoteApproved',false); }catch(_){} }
+  if(!opts.noRender){ renderJobDetail(leadId); try{ if(S.page==='jobs' && !S.jobDetailId && typeof renderPipeline==='function') renderPipeline(); }catch(_){} }
+  return true;
+}
+
 function acceptJobQuote(leadId, quoteId){
   const lead=getLead(leadId); const q=getQuotes().find(x=>x.id===quoteId); if(!lead||!q) return;
   const _accIds=getAcceptedQuoteIds(lead);
   if(_accIds.includes(quoteId)){
-    // Undo: un-mark THIS scope (others stay accepted — 2026-08-18g). Revert the
-    // quote's status to 'delivered' IF we set it to approved on accept (don't
-    // touch a customer-driven accept). With scopes remaining, Job Value re-sums.
-    const arr=getLeads(); const i=arr.findIndex(l=>l.id===leadId);
-    if(i>=0){
-      arr[i].acceptedQuoteIds=_accIds.filter(x=>x!==quoteId);
-      _syncAcceptedPointer(arr[i]);
-      arr[i].updatedAt=new Date().toISOString(); saveLeads(arr);
-    }
-    try{ if(q.status==='approved' && !q.customerActionAt && !q.external){ upsertQuote({...getQuote(quoteId), status:'delivered', updatedAt:new Date().toISOString()}); } }catch(_){}
-    const _rest=getAcceptedQuotes(getLead(leadId));
-    if(_rest.length===1) setJobValueFromQuote(leadId, _quoteJobNet(_rest[0]), _rest[0].id);
-    else if(_rest.length>1) setJobValue(leadId, _rest.reduce((s,x)=>s+_quoteJobNet(x),0), {source:'quote-sum'});
-    renderJobDetail(leadId); return;
+    // Toggle-off keeps working for every existing caller, but now does the
+    // complete undo (28d), with its confirm.
+    unacceptJobQuote(leadId, quoteId);
+    return;
   }
   // Another scope already accepted → Add (additive scopes, Isaac Scott) or
   // Replace (a re-quote of the same work). confirm() can't offer three ways,
@@ -14035,7 +14093,7 @@ function _manualApproveQuote(leadId, on) {
     if (!confirm('Un-approve this job?\n\nThis also un-accepts '
       + acc.map(q => '$' + _quoteNet(q).toLocaleString() + ' (' + q.id + ')').join(', ')
       + ' and clears the Job Value.')) return false;
-    acc.forEach(q => { try { acceptJobQuote(leadId, q.id); } catch(_){} });   // acceptJobQuote toggles
+    acc.forEach(q => { try { unacceptJobQuote(leadId, q.id, { silent:true, noRender:true }); } catch(_){} });
     // Belt and braces: acceptJobQuote's undo path leaves the milestone alone
     // when the accept came from the customer, so clear it explicitly.
     _setMilestone(leadId, 'quoteApproved', false);
@@ -15134,7 +15192,9 @@ function renderJobDetail(id) {
     </button>
     <div class="jd-meta">
       <div class="jd-id">${id}${lead.createdAt?`<span style="font-weight:400;color:var(--text-muted);font-size:11px;margin-left:8px">· Received ${mdy(lead.createdAt)}</span>`:''}</div>
-      <div class="jd-name">${custName}</div>
+      <div class="jd-name">${cust
+        ? `<span onclick="openCustomerFromJob('${cust.id}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px" title="Open ${escHtml(custName)}'s customer page — all their jobs">${custName}</span>`
+        : custName}</div>
       <div class="jd-chips">
         ${typeChip(lead.jobType)}${lead.source==='Qmerit'?`<span onclick="showQmeritInfo('${id}')" style="cursor:pointer" title="View Qmerit program details">${sourceChip(lead.source)}</span>`:sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
         ${lead.inspectionRequired?`<span class="chip chip-flag">⚠ In-person Inspection</span>`:''}
