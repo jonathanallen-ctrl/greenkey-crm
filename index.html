@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -31113,7 +31113,9 @@ function startPipelineQuotePolling() {
 // ═════════════════════════════════════════════════════════════
 // Engine + PDF builder ported verbatim from loadcalc_draft/loadcalc.html
 // (GKLoadCalc IIFE — verified to reproduce GreenKey_EV_Load_Calc.xlsx:
-// 150A / 2,000 ft² / 40A → 105.7 A demand, PASS, #6 Cu). The modal posts an
+// 150A / 2,000 ft² / 40A → 105.7 A demand, PASS, #6 Cu — that figure is now
+// `r.literal`; the verdict figure carries heating/cooling at 100%, 115.7 A on
+// the same inputs. See the 28e note inside calc()). The modal posts an
 // Anthropic-format transcript (panel photo in the first user message) to the
 // Worker's /loadcalc/estimate; when Claude replies done:true the inputs feed
 // GKLoadCalc.calc → PASS/FAIL panel → Save files the PDF AND the panel photo
@@ -31138,33 +31140,119 @@ const GKLoadCalc = (function () {
     service:150,voltage:240,area:2000,smallApp:2,evAmps:40,evVolts:240,loads:DEFAULT_LOADS.map(l=>({...l}))};}
   function _resolveVa(l,inp){if(l.dynamic==='lighting')return 3*(+inp.area||0);if(l.dynamic==='smallapp')return 1500*(+inp.smallApp||0);return +l.va||0;}
   function conductorFor(b){return b<=20?'#12 AWG':b<=30?'#10 AWG':b<=40?'#8 AWG':b<=50?'#6 AWG':b<=60?'#4 AWG':b<=90?'#3 AWG':'#1 AWG';}
+  // ── Heating / cooling classification (2026-08-29, crm-2026-08-28e) ──
+  // 220.83(A) read literally lets EVERYTHING — including 24 kW of strip heat —
+  // into the 40% pool; it is a 1974 "squeeze" provision and the loads it
+  // discounts hardest (electric heat, tankless water heaters) are exactly the
+  // ones that don't diversify. A 1,690 ft² house with two heat pumps + strip
+  // heat + a 28.8 kW tankless "PASSED" a 200 A service at 183 A this way while
+  // the honest number was 241 A. So the engine now computes BOTH: the literal
+  // 220.83(A) figure (kept, labeled) and a strict figure with heating/cooling
+  // OUT of the pool at 100% per 220.82(C) (compressors 100%, supplemental /
+  // strip heat 65%). The strict figure drives PASS/FAIL. A load row may carry
+  // hvac:'compressor' | 'supplemental' | false explicitly; otherwise the label
+  // decides. Nothing else about the calc changes.
+  const HVAC_RE=/heat ?pump|air ?handler|air[- ]?cond|\bA\/?C\b|furnace|strip|supplemental|aux(iliary)? heat|backup heat|emergency heat|electric heat|space heat|baseboard|mini[- ]?split|condens|compressor|\bHVAC\b|resistance heat/i;
+  const SUPP_RE=/air ?handler|strip|supplemental|aux(iliary)? heat|backup heat|emergency heat|resistance|baseboard|space heat|furnace/i;
+  function classifyHvac(l){
+    if(l.hvac===false) return null;
+    if(l.hvac==='compressor'||l.hvac==='supplemental') return l.hvac;
+    if(l.key==='ac') return 'compressor';
+    const t=String(l.label||'');
+    if(!HVAC_RE.test(t)) return null;
+    return SUPP_RE.test(t)?'supplemental':'compressor';
+  }
   function calc(inp){
     const V=+inp.voltage||240;
-    const rows=inp.loads.filter(l=>l.on).map(l=>({label:l.label,basis:l.basis,va:_resolveVa(l,inp)}));
+    const rows=inp.loads.filter(l=>l.on).map(l=>({label:l.label,basis:l.basis,va:_resolveVa(l,inp),hvac:classifyHvac(l)}));
     const existing=rows.reduce((a,r)=>a+r.va,0);
     const evVA=(+inp.evAmps||0)*(+inp.evVolts||V);
     const connected=existing+evVA;
+    // literal 220.83(A): everything in the pool
     const first8=Math.min(8000,connected), remainder=Math.max(0,connected-8000)*0.4;
-    const demandVA=first8+remainder, demandA=demandVA/V;
-    const service=+inp.service||0, pct=service?demandA/service*100:0, spare=service-demandA, pass=demandA<=service;
-    const mca=(+inp.evAmps||0)*1.25, breaker=STD_BREAKERS.find(s=>mca<=s)||110, conductor=conductorFor(breaker);
-    const scenario=a=>{const c=existing+a*(+inp.evVolts||V);const d=(Math.min(8000,c)+Math.max(0,c-8000)*0.4)/V;
+    const literalVA=first8+remainder, literalA=literalVA/V;
+    // strict: heating/cooling at 100% (220.82(C) treatment), rest in the pool
+    const hvacRows=rows.filter(r=>r.hvac);
+    const hvacComp=hvacRows.filter(r=>r.hvac==='compressor').reduce((a,r)=>a+r.va,0);
+    const hvacSupp=hvacRows.filter(r=>r.hvac==='supplemental').reduce((a,r)=>a+r.va,0);
+    const hvacVA=hvacComp+Math.round(hvacSupp*0.65);
+    const generalExisting=existing-hvacComp-hvacSupp;
+    const pool=generalExisting+evVA;
+    const pFirst8=Math.min(8000,pool), pRemainder=Math.max(0,pool-8000)*0.4;
+    const demandVA=pFirst8+pRemainder+hvacVA, demandA=demandVA/V;
+    const service=+inp.service||0;
+    // ── EMS mode (2026-08-29, crm-2026-08-28f) — NEC 750.30 / 220.70 / 625.42 ──
+    // A listed energy-management system with CTs on the service caps the
+    // charger, so the charger comes OUT of the service calc. GreenKey's sizing
+    // rule (Jon, from a tripped 100 A feeder at limit 80 + 48 A charger):
+    //   EMS limit + charger max ≤ breaker rating
+    // so the worst case during the EMS's reaction lag (house at the limit,
+    // charger still at full rate) equals the rating, never above it. The house
+    // alone still has to fit: verdict uses the literal 220.83(A) house figure
+    // (the permit path); the strict house figure is reported as the reason the
+    // charger will pause at winter peaks, with the charging window stated.
+    const ems=inp.ems&&inp.ems.on?{
+      on:true,
+      limitA:+inp.ems.limitA||Math.floor(service*0.8/5)*5,
+      chargerA:+inp.ems.chargerA||40,
+      windowEnd:String(inp.ems.windowEnd||'5:00 AM')
+    }:null;
+    let emsR=null;
+    if(ems){
+      const hGen=generalExisting, hLitVA=Math.min(8000,existing)+Math.max(0,existing-8000)*0.4;
+      const hStrictVA=Math.min(8000,hGen)+Math.max(0,hGen-8000)*0.4+hvacVA;
+      const houseLiteralA=hLitVA/V, houseStrictA=hStrictVA/V;
+      const sumOk=(ems.limitA+ems.chargerA)<=service;
+      const limitOk=ems.limitA<=service;
+      const housePass=houseLiteralA<=service;
+      emsR={...ems,houseLiteralA:+houseLiteralA.toFixed(1),houseStrictA:+houseStrictA.toFixed(1),
+        housePct:service?+(houseLiteralA/service*100).toFixed(1):0,
+        sumOk,limitOk,housePass,pass:sumOk&&limitOk&&housePass,
+        strictOverLimit:houseStrictA>ems.limitA,
+        headroomA:+(ems.limitA-houseStrictA).toFixed(1)};
+    }
+    const vA=emsR?emsR.houseLiteralA:demandA, vVA=emsR?Math.round(emsR.houseLiteralA*V):demandVA;
+    const pct=service?vA/service*100:0, spare=service-vA, pass=emsR?emsR.pass:(demandA<=service);
+    const literalPass=literalA<=service;
+    const evForSizing=emsR?emsR.chargerA:(+inp.evAmps||0);
+    const mca=evForSizing*1.25, breaker=STD_BREAKERS.find(s=>mca<=s)||110, conductor=conductorFor(breaker);
+    const scenario=a=>{const c=generalExisting+a*(+inp.evVolts||V);const d=(Math.min(8000,c)+Math.max(0,c-8000)*0.4+hvacVA)/V;
       const b=STD_BREAKERS.find(s=>a*1.25<=s)||110;return{amps:a,breaker:b,demandA:+d.toFixed(1),pct:service?+(d/service*100).toFixed(0):0,pass:d<=service};};
-    return{rows,existing,evVA,connected,first8,remainder,demandVA:Math.round(demandVA),demandA:+demandA.toFixed(1),
+    return{rows,existing,evVA,connected,ems:emsR,
+      // strict (drives the verdict unless EMS mode)
+      first8:pFirst8,remainder:pRemainder,pool,hvacVA,hvacComp,hvacSupp,hvacRows,generalExisting,
+      strictDemandVA:Math.round(demandVA),strictDemandA:+demandA.toFixed(1),
+      demandVA:vVA,demandA:+vA.toFixed(1),
+      // literal 220.83(A) (shown for reference)
+      literal:{first8,remainder:Math.round(remainder),demandVA:Math.round(literalVA),demandA:+literalA.toFixed(1),pct:service?+(literalA/service*100).toFixed(1):0,pass:literalPass},
+      onlyLiteralPasses:(!emsR&&!pass&&literalPass),
       service,pct:+pct.toFixed(1),spare:+spare.toFixed(1),pass,mca:+mca.toFixed(1),breaker,conductor,
-      scenarios:[32,40,48].map(scenario),voltage:V,evAmps:+inp.evAmps||0,evVolts:+inp.evVolts||V};
+      scenarios:emsR?[]:[32,40,48].map(scenario),voltage:V,evAmps:emsR?emsR.chargerA:(+inp.evAmps||0),evVolts:+inp.evVolts||V};
   }
   function summaryText(r,inp){const svc=r.service,ev=r.evAmps;
+    if(r.ems){const e=r.ems;
+      if(!e.sumOk) return `EMS sizing does not work on this service: the ${e.limitA}-amp limit plus a ${e.chargerA}-amp charger is ${e.limitA+e.chargerA} amps, over the ${svc}-amp service. Lower the limit or the charger until the two add to ${svc} or less.`;
+      if(!e.housePass) return `Even with the charger managed, your home alone calculates at about ${Math.round(e.houseLiteralA)} amps on a ${svc}-amp service. A service upgrade is required before adding the charger.`;
+      return `With an energy management system installed, the charger is limited so the home's total draw stays under ${e.limitA} amps, and your ${svc}-amp service has capacity: the home alone calculates at about ${Math.round(e.houseLiteralA)} amps (${e.housePct}%). The charger is set to a maximum of ${e.chargerA} amps and charging is scheduled to end by ${e.windowEnd}.`
+        +(e.strictOverLimit?` On the coldest nights, when electric heat, hot water, and laundry run together, the home itself can approach ${Math.round(e.houseStrictA)} amps — the system will slow or pause charging during those periods and resume automatically.`:'');
+    }
+    if(r.onlyLiteralPasses) return `Your existing ${svc}-amp service calculates at about ${Math.round(r.demandA)} amps with the ${ev}-amp charger added once heating and cooling are counted at full value — ${r.pct}% of capacity, which exceeds the panel. (A literal NEC 220.83(A) reading, which discounts electric heat, comes to ${Math.round(r.literal.demandA)} amps; GreenKey does not rely on that figure where electric heat or a tankless water heater is present.) To move forward we'd either upsize the service or use a charger with load management.`;
     if(r.pass)return `Good news — your existing ${svc}-amp electrical service has room for the ${ev}-amp EV charger. Under the NEC calculation your home's total demand comes to about ${Math.round(r.demandA)} amps, which is ${r.pct}% of the panel's capacity, leaving roughly ${Math.round(r.spare)} amps of headroom. No service upgrade is required to add this charger.`;
     return `Your existing ${svc}-amp service is calculated at about ${Math.round(r.demandA)} amps of demand with the ${ev}-amp charger added — ${r.pct}% of capacity, which exceeds the panel. To move forward we'd either upsize the service or install a listed energy-management (load-sharing) device per NEC 625.42, which lets the charger share capacity with large loads and usually avoids a full service upgrade. We'll walk you through both options.`;
   }
   const NOTES=[
-    'Method: NEC 220.83(A) — 100% of the first 8 kVA of connected load + 40% of the remainder. Used when the added load is not air-conditioning or space heating (an EV charger is neither).',
+    'Method: NEC 220.83(A) — 100% of the first 8 kVA of connected load + 40% of the remainder for general loads. Heating and cooling equipment is carried OUTSIDE the 40% pool at 100% (compressors) and 65% (supplemental / strip heat), per NEC 220.82(C). A literal 220.83(A) figure (heating in the pool) is shown for reference; GreenKey does not rely on it where electric heat or a tankless water heater is present.',
     'Appliance VA are typical nameplate estimates. Replace with actual nameplates for a stamped/permit calculation.',
     'Preferred alternative for tight services: NEC 220.87 — size existing load from the utility’s 12-month peak demand × 125%. It usually shows more headroom.',
     'An EV charger is a continuous load: circuit conductors and breaker are sized at 125% (NEC 625.41). A 40 A charger therefore needs a 50 A circuit / #6 Cu.',
     'Confirm two adjacent open spaces on the bus and a listed breaker for this loadcenter before install.',
     'If a service fails the calc, NEC 625.42 energy-management (load-sharing) can avoid a service upgrade.'
+  ];
+  const EMS_NOTES=[
+    'Energy management: NEC 750.30 / 220.70 / 625.42 — a listed EMS with current transformers on the service conductors limits the charger so the total load cannot exceed the EMS setpoint; the charger is excluded from the service calculation.',
+    'GreenKey EMS sizing rule: EMS limit + charger maximum must not exceed the service rating, so that the system\'s reaction time can never allow the service to be overloaded.',
+    'Charging is scheduled to end before the morning heating and hot-water peak. Charging slows or pauses automatically when the home\'s own load approaches the limit and resumes when it falls.',
+    'The main breaker should be inspected for condition before an EMS installation on a service that runs near its rating.'
   ];
   function buildPdf(jsPDFCtor,r,inp,aiAssumptions){
     const doc=new jsPDFCtor({unit:'pt',format:'letter'});
@@ -31178,8 +31266,8 @@ const GKLoadCalc = (function () {
     doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(214,226,198);
     doc.text('ELECTRICAL SERVICE LOAD CALCULATION',M,58);
     doc.setFillColor(...LIME);doc.roundedRect(W-M-118,24,118,26,5,5,'F');
-    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(...FOREST2);doc.text('NEC 220.83',W-M-59,37,{align:'center'});
-    doc.setFont('helvetica','normal');doc.setFontSize(7);doc.text('Added load - existing dwelling',W-M-59,46,{align:'center'});
+    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(...FOREST2);doc.text(r.ems?'NEC 220.83 / 750.30':'NEC 220.83 / 220.82(C)',W-M-59,37,{align:'center'});
+    doc.setFont('helvetica','normal');doc.setFontSize(7);doc.text(r.ems?'EMS-managed charger':'Added load - existing dwelling',W-M-59,46,{align:'center'});
     y=92;
     const meta=[['PROJECT / ADDRESS',inp.project||'-'],['PREPARED BY',inp.preparedBy||'GreenKey'],['DATE',inp.date],['SERVICE',`${r.service} A / ${r.voltage} V`]];
     const colW=(W-2*M)/4;
@@ -31190,8 +31278,10 @@ const GKLoadCalc = (function () {
     doc.setFillColor(...MIST);doc.roundedRect(M,y,W-2*M,heroH,7,7,'F');
     doc.setFillColor(...resColor);doc.roundedRect(M+12,y+12,150,58,6,6,'F');
     doc.setFont('helvetica','bold');doc.setFontSize(28);doc.setTextColor(...(r.pass?FOREST2:WHITE));doc.text(r.pass?'PASS':'FAIL',M+87,y+40,{align:'center'});
-    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(r.pass?'Service has capacity':'Upgrade or EMS req.',M+87,y+57,{align:'center'});
-    const stats=[['CALCULATED DEMAND',`${Math.round(r.demandA)} A`],['% OF SERVICE',`${r.pct}%`],['SPARE CAPACITY',`${Math.round(r.spare)} A`]];
+    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(r.pass?(r.ems?'With EMS-managed charger':'Service has capacity'):(r.ems?'EMS sizing fails':'Upgrade or EMS req.'),M+87,y+57,{align:'center'});
+    const stats=r.ems
+      ?[['HOME DEMAND (NO EV)',`${Math.round(r.demandA)} A`],['EMS LIMIT',`${r.ems.limitA} A`],['CHARGER MAX',`${r.ems.chargerA} A`]]
+      :[['CALCULATED DEMAND',`${Math.round(r.demandA)} A`],['% OF SERVICE',`${r.pct}%`],['SPARE CAPACITY',`${Math.round(r.spare)} A`]];
     const sx0=M+178,sColW=(W-M-sx0)/3;
     stats.forEach((s,i)=>{const x=sx0+i*sColW;doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);doc.text(s[0],x,y+20);
       doc.setFont('helvetica','bold');doc.setFontSize(20);doc.setTextColor(...FOREST);doc.text(s[1],x,y+42);});
@@ -31211,29 +31301,53 @@ const GKLoadCalc = (function () {
     doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);doc.text('LOAD',M,y);doc.text('BASIS',M+190,y);doc.text('VA',W-M,y,{align:'right'});
     y+=4;doc.setDrawColor(...LINE);doc.setLineWidth(0.5);doc.line(M,y,W-M,y);y+=12;
     r.rows.forEach(row=>{doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...INK);doc.text(row.label,M,y);
-      doc.setTextColor(...MUTE);doc.setFontSize(8);doc.text(row.basis,M+190,y);doc.setFontSize(9);doc.setTextColor(...INK);
+      doc.setTextColor(...MUTE);doc.setFontSize(8);doc.text(String(row.basis||'')+(row.hvac?(row.hvac==='supplemental'?'  [heat - 65%]':'  [HVAC - 100%]'):''),M+190,y);doc.setFontSize(9);doc.setTextColor(...INK);
       doc.text(money(row.va),W-M,y,{align:'right'});y+=12.5;});
     doc.setDrawColor(...LINE);doc.line(M,y-2,W-M,y-2);y+=12;
     const totRow=(label,val,bold,color)=>{doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(9);doc.setTextColor(...(color||INK));
       doc.text(label,M,y);doc.text(money(val)+' VA',W-M,y,{align:'right'});y+=13;};
     totRow('Subtotal - existing loads (no EV)',r.existing,false,MUTE);
-    totRow(`EV charger - ${r.evAmps} A x ${r.evVolts} V continuous`,r.evVA,false,INK);
+    if(r.ems){ doc.setFont('helvetica','italic');doc.setFontSize(8.5);doc.setTextColor(...MUTE);doc.text(`EV charger - ${r.ems.chargerA} A max, EMS-managed - excluded from the service calculation (NEC 750.30)`,M,y);y+=13; }
+    else totRow(`EV charger - ${r.evAmps} A x ${r.evVolts} V continuous`,r.evVA,false,INK);
     y+=3;doc.setDrawColor(...FOREST);doc.setLineWidth(0.75);doc.line(M,y-11,W-M,y-11);
-    totRow('CONNECTED TOTAL',r.connected,true,FOREST);y+=4;
+    totRow('CONNECTED TOTAL',r.ems?r.existing:r.connected,true,FOREST);y+=4;
     const midX=W/2+6,yTop=y;
     doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...FOREST);doc.text('CALCULATED DEMAND',M,y);
     doc.setDrawColor(...LIME);doc.setLineWidth(1.2);doc.line(M,y+6,M+30,y+6);let ly=y+20;
     const dRow=(l,v)=>{doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...BODY);doc.text(l,M,ly);
       doc.setTextColor(...INK);doc.setFont('helvetica','bold');doc.text(v,midX-12,ly,{align:'right'});ly+=13.5;};
-    dRow('First 8,000 VA @ 100%',money(r.first8)+' VA');dRow('Remainder @ 40%',money(Math.round(r.remainder))+' VA');
+    if(r.ems){
+      dRow('Home only - first 8,000 VA @ 100%',money(Math.min(8000,r.existing))+' VA');dRow('Home only - remainder @ 40%',money(Math.round(Math.max(0,r.existing-8000)*0.4))+' VA');
+      dRow('Home demand (NEC 220.83(A))',money(r.demandVA)+' VA');dRow(`/ ${r.voltage} V =`,Math.round(r.demandA)+' A');
+      if(r.hvacVA>0){ doc.setFont('helvetica','italic');doc.setFontSize(7.5);doc.setTextColor(...MUTE);
+        doc.text(doc.splitTextToSize(`With heating/cooling at 100%: ${Math.round(r.ems.houseStrictA)} A - ${r.ems.strictOverLimit?'above the EMS limit at winter peaks; charger pauses':'within the EMS limit'}.`,midX-M-16),M,ly);ly+=20; }
+    } else {
+    dRow('General loads - first 8,000 VA @ 100%',money(r.first8)+' VA');dRow('General loads - remainder @ 40%',money(Math.round(r.remainder))+' VA');
+    if(r.hvacVA>0){ dRow('Heating/cooling @ 100% (strip heat 65%)',money(r.hvacVA)+' VA'); }
     dRow('Calculated demand',money(r.demandVA)+' VA');dRow(`/ ${r.voltage} V =`,Math.round(r.demandA)+' A');
+    if(r.hvacVA>0){ doc.setFont('helvetica','italic');doc.setFontSize(7.5);doc.setTextColor(...MUTE);
+      doc.text(doc.splitTextToSize(`Literal 220.83(A) (heating in the 40% pool): ${Math.round(r.literal.demandA)} A - ${r.literal.pass?'passes':'fails'}. Not relied on.`,midX-M-16),M,ly);ly+=20; }
+    }
     doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(...FOREST);doc.text('EV CIRCUIT SIZING',midX,yTop);
     doc.setDrawColor(...LIME);doc.setLineWidth(1.2);doc.line(midX,yTop+6,midX+30,yTop+6);let ry=yTop+20;
     const cRow=(l,v)=>{doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...BODY);doc.text(l,midX,ry);
       doc.setTextColor(...INK);doc.setFont('helvetica','bold');doc.text(v,W-M,ry,{align:'right'});ry+=13.5;};
     cRow('Min circuit ampacity (x1.25)',r.mca+' A');cRow('Breaker (next standard size)',r.breaker+' A');
-    cRow('Copper conductor (75C)',r.conductor);cRow('Charger',`${r.evAmps} A @ ${r.evVolts} V`);
+    cRow('Copper conductor (75C)',r.conductor);cRow('Charger',`${r.evAmps} A @ ${r.evVolts} V${r.ems?' (EMS max)':''}`);
     y=Math.max(ly,ry)+6;
+    if(r.ems){
+      const e=r.ems;
+      sectionHead('ENERGY MANAGEMENT SYSTEM');
+      const eRow=(l,v,ok)=>{doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...INK);doc.text(l,M,y);
+        doc.setFont('helvetica','bold');doc.setTextColor(...(ok===false?FAIL:ok===true?[76,133,27]:INK));doc.text(v,W-M,y,{align:'right'});y+=13;};
+      eRow('EMS limit (CTs on the service conductors)',`${e.limitA} A`,e.limitOk);
+      eRow('Charger maximum (EMS setpoint)',`${e.chargerA} A`);
+      eRow(`Limit + charger max vs. ${r.service} A service`,`${e.limitA+e.chargerA} A - ${e.sumOk?'OK':'OVER'}`,e.sumOk);
+      eRow('Home demand, NEC 220.83(A)',`${Math.round(e.houseLiteralA)} A - ${e.housePass?'OK':'OVER'}`,e.housePass);
+      if(r.hvacVA>0) eRow('Home demand with heating at 100% (winter peak)',`${Math.round(e.houseStrictA)} A${e.strictOverLimit?' - charger pauses':''}`,e.strictOverLimit?undefined:true);
+      eRow('Charging window ends',e.windowEnd);
+      y+=6;
+    } else {
     sectionHead('SCENARIO COMPARISON');
     const sc=[M,M+130,M+235,M+355,W-M];
     doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.setTextColor(...MUTE);
@@ -31243,9 +31357,10 @@ const GKLoadCalc = (function () {
       doc.text(`${s.amps} A charger`,sc[0],y);doc.text(`${s.breaker} A`,sc[1],y);doc.text(`${Math.round(s.demandA)} A`,sc[2],y);doc.text(`${s.pct}%`,sc[3],y);
       doc.setFont('helvetica','bold');doc.setTextColor(...(s.pass?[76,133,27]:FAIL));doc.text(s.pass?'PASS':'FAIL',sc[4],y,{align:'right'});y+=12.5;});
     y+=6;
+    }
     if(y>PH-132){doc.addPage();y=54;}
     sectionHead('ASSUMPTIONS & NOTES');
-    const notes=(aiAssumptions&&aiAssumptions.length?aiAssumptions:[]).concat(NOTES);
+    const notes=(aiAssumptions&&aiAssumptions.length?aiAssumptions:[]).concat(r.ems?EMS_NOTES:[]).concat(NOTES);
     doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...BODY);
     notes.forEach(n=>{if(y>PH-58){doc.addPage();y=54;}const lines=doc.splitTextToSize(n,W-2*M-12);
       doc.setFillColor(...LIME);doc.circle(M+2,y-2.5,1.4,'F');doc.text(lines,M+10,y);y+=lines.length*9.3+2.5;});
@@ -31259,7 +31374,7 @@ const GKLoadCalc = (function () {
   }
   function filename(inp){const who=(inp.project||'Customer').replace(/[^\w]+/g,'_').replace(/^_|_$/g,'').slice(0,40)||'Customer';
     return `GreenKey_LoadCalc_${who}_${inp.date}.pdf`;}
-  return{defaultInputs,DEFAULT_LOADS,calc,summaryText,NOTES,buildPdf,filename,conductorFor};
+  return{defaultInputs,DEFAULT_LOADS,calc,summaryText,NOTES,EMS_NOTES,buildPdf,filename,conductorFor};
 })();
 
 // ── Load Calc modal state ──
@@ -31633,12 +31748,23 @@ function _lcBuildInputs() {
       if (val === false) { if (existing) existing.on = false; }
       else if (val && typeof val === 'object') {
         if (existing) { existing.on = val.on !== false; if (+val.va > 0) { existing.va = +val.va; existing.dynamic = null; } if (val.basis) existing.basis = String(val.basis); }
-        else inp.loads.push({ key, label: String(val.label || key), basis: String(val.basis || 'nameplate'), va: +val.va || 0, on: val.on !== false });
+        else inp.loads.push({ key, label: String(val.label || key), basis: String(val.basis || 'nameplate'), va: +val.va || 0, on: val.on !== false, hvac: (val.hvac === 'compressor' || val.hvac === 'supplemental' || val.hvac === false) ? val.hvac : undefined });
       }
     }
   }
   inp._aiAssumptions = Array.isArray(_lcResult && _lcResult.assumptions) ? _lcResult.assumptions.map(String) : [];
+  // EMS mode lives on the result so it survives resume + rides into the PDF.
+  if (_lcResult && _lcResult.ems && _lcResult.ems.on) inp.ems = { ..._lcResult.ems };
   return inp;
+}
+// EMS controls under the result (28f). Defaults: limit = 80% of service (to 5 A), charger 40 A, window 5:00 AM.
+function _lcSetEms(patch) {
+  if (!_lcResult) return;
+  const inp = _lcBuildInputs();
+  const cur = _lcResult.ems || { on: false, limitA: Math.floor((+inp.service || 200) * 0.8 / 5) * 5, chargerA: 40, windowEnd: '5:00 AM' };
+  _lcResult.ems = { ...cur, ...patch };
+  _lcSaveSession();
+  _lcRenderResult();
 }
 
 function _lcRenderResult() {
@@ -31646,15 +31772,34 @@ function _lcRenderResult() {
   const r = GKLoadCalc.calc(inp);
   const el = document.getElementById('lc-result');
   const col = r.pass ? 'var(--green)' : '#c94a3a';
+  const e = r.ems;
+  const emsDefaults = _lcResult && _lcResult.ems ? _lcResult.ems : { on:false, limitA: Math.floor((+inp.service||200)*0.8/5)*5, chargerA: 40, windowEnd: '5:00 AM' };
+  const emsBar =
+    '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:8px;padding:8px 10px;border:1px dashed var(--border);border-radius:var(--r)">' +
+      '<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ' + (emsDefaults.on ? 'checked' : '') + ' onchange="_lcSetEms({on:this.checked})"> <strong>EMS mode</strong> (Emporia / load-managed charger, NEC 750.30)</label>' +
+      (emsDefaults.on ? (
+        '<label>Limit <input type="number" value="' + emsDefaults.limitA + '" style="width:64px" onchange="_lcSetEms({limitA:+this.value})"> A</label>' +
+        '<label>Charger max <input type="number" value="' + emsDefaults.chargerA + '" style="width:56px" onchange="_lcSetEms({chargerA:+this.value})"> A</label>' +
+        '<label>Charging ends <input type="text" value="' + String(emsDefaults.windowEnd||'').replace(/"/g,'&quot;') + '" style="width:80px" onchange="_lcSetEms({windowEnd:this.value})"></label>' +
+        '<span style="color:var(--text-muted)">Rule: limit + charger max ≤ service</span>'
+      ) : '') +
+    '</div>';
+  const emsText = e ? (
+      r.service + ' A service — <strong>home alone ' + Math.round(e.houseLiteralA) + ' A (' + e.housePct + '%)</strong> under 220.83(A)' +
+      (r.hvacVA > 0 ? '; ' + Math.round(e.houseStrictA) + ' A with heating at 100%' + (e.strictOverLimit ? ' — <strong>above the ' + e.limitA + ' A limit at winter peaks; charger pauses</strong>' : '') : '') + '. ' +
+      'Limit ' + e.limitA + ' + charger ' + e.chargerA + ' = ' + (e.limitA + e.chargerA) + ' A ' + (e.sumOk ? '✓' : '<strong style="color:#c94a3a">OVER the service — lower one</strong>') + '. ' +
+      'EV circuit: <strong>' + r.breaker + ' A breaker / ' + r.conductor + '</strong> for a ' + e.chargerA + ' A max charger; charging ends ' + e.windowEnd + '.'
+    ) : null;
   el.innerHTML =
     '<div style="display:flex;gap:12px;align-items:center;border:1px solid ' + col + ';border-radius:var(--r);padding:10px 14px">' +
-      '<div style="font-size:20px;font-weight:800;color:' + col + '">' + (r.pass ? 'PASS' : 'FAIL') + '</div>' +
-      '<div style="font-size:12px;line-height:1.5;color:var(--text-primary)">' +
-        r.service + ' A service — calculated demand <strong>' + Math.round(r.demandA) + ' A (' + r.pct + '%)</strong>, spare ' + Math.round(r.spare) + ' A. ' +
+      '<div style="font-size:20px;font-weight:800;color:' + col + '">' + (r.pass ? 'PASS' : 'FAIL') + (e ? '<div style="font-size:9px;font-weight:600;color:var(--text-muted)">EMS</div>' : '') + '</div>' +
+      '<div style="font-size:12px;line-height:1.5;color:var(--text-primary)">' + (emsText ? emsText : (
+        r.service + ' A service — calculated demand <strong>' + Math.round(r.demandA) + ' A (' + r.pct + '%)</strong>, spare ' + Math.round(r.spare) + ' A' +
+        (r.hvacVA > 0 ? ' (heating/cooling ' + Math.round(r.hvacVA).toLocaleString() + ' VA carried at 100%; literal 220.83(A) would read ' + Math.round(r.literal.demandA) + ' A' + (r.onlyLiteralPasses ? ' — <strong>passes only under that reading; not relied on</strong>' : '') + ')' : '') + '. ' +
         'EV circuit: <strong>' + r.breaker + ' A breaker / ' + r.conductor + '</strong> for the ' + r.evAmps + ' A charger.' +
-        (r.pass ? '' : ' Options: service upgrade or NEC 625.42 load-management.') +
+        (r.pass ? '' : ' Options: service upgrade or NEC 625.42 load-management.'))) +
       '</div>' +
-    '</div>' +
+    '</div>' + emsBar +
     ((inp._aiAssumptions || []).length ? '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">AI assumptions: ' + inp._aiAssumptions.map(a => String(a).replace(/</g,'&lt;')).join(' · ') + '</div>' : '');
   el.style.display = '';
   document.getElementById('lc-save-btn').style.display = '';
