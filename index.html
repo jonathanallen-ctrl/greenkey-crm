@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4131,7 +4131,7 @@ function renderCustomersPage() {
     return;
   }
   wrap.innerHTML = `<div class="cust-grid">${custs.map(c=>{
-    const jc = leads.filter(l=>l.customerId===c.id).length;
+    const jc = leads.filter(l=>l.customerId===c.id || (l.customerId && (getCustomer(l.customerId)||{}).id===c.id)).length;
     const addr = [c.street,c.city,c.state].filter(Boolean).join(', ')||'No address';
     const isCom = c.propertyType==='commercial';
     const biz = isCom && c.businessName ? c.businessName : '';
@@ -4157,10 +4157,39 @@ function renderCustomersPage() {
 // openCustomerDetail only swaps views inside the Customers page, so navigate
 // first — the same cross-page lesson as openLeadDetail / openJobDetail (15b).
 function openCustomerFromJob(custId) {
-  if (!custId || typeof getCustomer !== 'function' || !getCustomer(custId)) { if (typeof toast==='function') toast('No customer record linked to this job', 'warning'); return; }
-  if (S.page === 'customers') { openCustomerDetail(custId); return; }
+  const c = (custId && typeof getCustomer === 'function') ? getCustomer(custId) : null;
+  if (!c) { if (typeof toast==='function') toast('No customer record linked to this job', 'warning'); return; }
+  const target = c.id;   // follow a merge pointer to the surviving record
+  if (S.page === 'customers') { openCustomerDetail(target); return; }
   navigate('customers');
-  setTimeout(() => { try { openCustomerDetail(custId); } catch(e){ console.warn('[GK] openCustomerFromJob:', e); } }, 60);
+  // showPage('customers') resets to the list; open the detail after it, and
+  // re-assert once more in case a deferred list render lands on top (28g).
+  const open = () => { try { if (S.custView !== target) openCustomerDetail(target); } catch(e){ console.warn('[GK] openCustomerFromJob:', e); } };
+  setTimeout(open, 60); setTimeout(open, 300);
+}
+// Every job that belongs to this person (28g). Straight id match, PLUS jobs
+// whose customerId points at a duplicate that was merged into this record,
+// PLUS jobs with no resolvable customer whose phone / email / name matches —
+// the Customers page used to filter on raw customerId only, so a person with
+// two customer records (or an older job created without the link) showed one
+// job while the rest lived under a name nobody could get to.
+function _leadsForCustomer(custId) {
+  const c = getCustomer(custId); if (!c) return [];
+  const digits = v => String(v || '').replace(/\D/g, '').slice(-10);
+  const cPhone = digits(c.phone), cEmail = String(c.email || '').trim().toLowerCase();
+  const cName = (typeof custFullName === 'function' ? custFullName(c) : '').trim().toLowerCase();
+  const seen = new Set(); const out = [];
+  getLeads().forEach(l => {
+    if (!l || seen.has(l.id)) return;
+    let hit = false;
+    if (l.customerId) { const r = getCustomer(l.customerId); hit = !!(r && r.id === c.id); }
+    if (!hit && !(l.customerId && getCustomer(l.customerId))) {
+      const lp = digits(l.phone || l.customerPhone), le = String(l.email || l.customerEmail || '').trim().toLowerCase(), ln = String(l.customerName || '').trim().toLowerCase();
+      hit = (cPhone && lp === cPhone) || (cEmail && le === cEmail) || (cName && cName !== 'unknown' && ln === cName);
+    }
+    if (hit) { seen.add(l.id); out.push(l); }
+  });
+  return out;
 }
 
 function openCustomerDetail(custId) {
@@ -4190,7 +4219,7 @@ function renderCustomerDetail(custId) {
   }
   const wrap = document.getElementById('cust-detail-view');
   if (!wrap) return;
-  const leads = getLeads().filter(l=>l.customerId===custId);
+  const leads = _leadsForCustomer(custId);
   leads.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   const addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')||'—';
   const isCom = c.propertyType==='commercial';
