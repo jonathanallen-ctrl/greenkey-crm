@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -7982,17 +7982,17 @@ function resetScopeToAuto(qid) {
   if (sEl) sEl.value = autoScope(getQuote(qid));
   toast('Scope regenerated from quote inputs', 'success');
 }
-function resetInclusionsToAuto(qid) {
+function resetInclusionsToAuto(qid, elId) {
   const q = getQuote(qid); if (!q) return;
   upsertQuote({ ...q, inclusions: '' });
-  const iEl = document.getElementById('qq-inc');
+  const iEl = document.getElementById(elId || 'qq-inc');
   if (iEl) iEl.value = autoInclusions(getQuote(qid));
   toast('Inclusions regenerated', 'success');
 }
-function resetExclusionsToAuto(qid) {
+function resetExclusionsToAuto(qid, elId) {
   const q = getQuote(qid); if (!q) return;
   upsertQuote({ ...q, exclusions: '' });
-  const eEl = document.getElementById('qq-exc');
+  const eEl = document.getElementById(elId || 'qq-exc');
   if (eEl) eEl.value = autoExclusions(getQuote(qid));
   toast('Exclusions regenerated', 'success');
 }
@@ -8779,8 +8779,22 @@ function _autoScopePrimary(q){
   return `${s1} ${s2}${s3}${mount} All work is performed to NEC and local code.`;
 }
 
+// 28c: a detailed quote can stack scopes (headers in q.lines from
+// SCOPE_TEMPLATES). Each stacked scope contributes its own lines, keyed by the
+// header label, so an "EV + Service Upgrade" quote lists both sets.
+function _quoteScopeKeys(q){
+  const keys = new Set();
+  if (q && q.jobType) keys.add(q.jobType);
+  const byLabel = {};
+  if (typeof SCOPE_TEMPLATES === 'object') Object.keys(SCOPE_TEMPLATES).forEach(k => { byLabel[(SCOPE_TEMPLATES[k].label||'').toLowerCase()] = k; });
+  (q && Array.isArray(q.lines) ? q.lines : []).forEach(l => {
+    if (l && l.header && l.label) { const k = byLabel[String(l.label).toLowerCase()]; if (k) keys.add(k === 'ev-charger' ? 'ev-residential' : k); }
+  });
+  return keys;
+}
 function autoInclusions(q){
   const lines = ['• All labor and materials','• Cleanup and job site restoration'];
+  const _keys = _quoteScopeKeys(q);
   // Permit-required types include "Permit application and inspection coordination"
   // — except EV swap / existing-circuit install types, which need no permit.
   const t = getJobType(q.jobType);
@@ -8809,6 +8823,26 @@ function autoInclusions(q){
   }
   if (q.jobType === 'hvac-circuit' && q.qq?.hvacDisconnect && q.qq.hvacDisconnect !== 'none') {
     lines.push('• Disconnect at the HVAC equipment');
+  }
+  // 28c: service-work defaults (Jonathan, 2026-08-29: "It is time consuming to
+  // come up with them after the fact"). A starting point, edited on the quote.
+  if (_keys.has('service-upgrade') || _keys.has('new-service')) {
+    lines.push('• New meter base, service-entrance conductors, and main panel with main breaker');
+    lines.push('• Grounding electrode system and bonding to current code');
+    lines.push('• Re-termination of all existing branch circuits to the new panel');
+    lines.push('• Utility disconnect / reconnect scheduling and coordination');
+  }
+  if (_keys.has('subpanel')) {
+    lines.push('• Subpanel with main breaker, sized feeder breaker in the main panel, and 4-wire feeder');
+    lines.push('• Grounding and bonding at the subpanel per code');
+  }
+  if (_keys.has('panel-replacement') && q.jobType !== 'panel-replacement') {
+    lines.push('• Re-termination of all existing branch circuits to the new panel');
+    lines.push('• Panel hardware, main breaker, and ground bar kit');
+  }
+  if (_keys.has('ev-residential') && q.jobType !== 'ev-residential') {
+    lines.push('• Dedicated 240 V EV circuit with charger mounting, connection, and setup');
+    lines.push('• Setup and product training');
   }
   // Append per-additional-task inclusion lines
   if (Array.isArray(q.additionalTasks) && q.additionalTasks.length > 0) {
@@ -8855,7 +8889,11 @@ function autoExclusions(q){
   } else if (q.jobType === 'battery-system' || q.jobType === 'v2h-system') {
     lines.push('• Battery / V2H equipment (customer or program-supplied unless line-itemed below)');
   } else if (q.jobType === 'new-service' || q.jobType === 'service-upgrade') {
-    lines.push('• Utility-side coordination charges (paid by homeowner directly to the utility)');
+    lines.push('• Utility-side work and any utility charges (paid by homeowner directly to the utility)');
+    lines.push('• Repair or replacement of existing branch-circuit wiring found defective when re-terminated (quoted separately if needed)');
+    lines.push('• Temporary power during the utility outage');
+  } else if (q.jobType === 'subpanel') {
+    lines.push('• Branch circuits from the new subpanel beyond those described above');
   } else if (q.jobType === 'energy-management') {
     lines.push('• Energy management hardware (customer or program-supplied unless line-itemed below)');
     lines.push('• Any work outside the device install (panel changes, new circuits, etc.) — separate scope');
@@ -8872,6 +8910,11 @@ function autoExclusions(q){
   }
   if (['pedestal-existing','pedestal-newpad','pedestal-pad'].includes(q.qq?.mountType)) {
     lines.push('• The pedestal itself — quoted separately, as pricing varies by make and some are customer-supplied');
+  }
+  const _xk = _quoteScopeKeys(q);
+  if (_xk.has('ev-residential') && q.jobType !== 'ev-residential') lines.unshift('• EV charger / EVSE unit (customer supplied)');
+  if ((_xk.has('service-upgrade') || _xk.has('new-service')) && !['service-upgrade','new-service'].includes(q.jobType)) {
+    lines.push('• Utility-side work and any utility charges (paid by homeowner directly to the utility)');
   }
   lines.push('• Drywall or wall repair','• Any electrical work not described above');
   if ((q.qq?.runSegs||[]).some(s => s.type && s.type.includes('trench'))) {
@@ -9118,11 +9161,15 @@ function renderDetailedQuoteForm(q){
       </div>
       <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:6px">This text goes directly on the customer quote — edit freely before sending. If the job's Scope of Work is empty, it will be filled in automatically.</div>
       <textarea class="fta" id="dq-scope" rows="4" style="min-height:100px" oninput="onDQScopeChange('${q.id}')">${q.scope||lead?.scopeOfWork||''}</textarea>
-      <div style="margin-top:10px"><div class="scope-lbl">Inclusions</div>
-        <textarea class="fta" id="dq-inc" rows="3" style="min-height:72px" oninput="onDQIncChange('${q.id}')">${q.inclusions||''}</textarea>
+      <div style="margin-top:10px"><div class="scope-lbl" style="display:flex;align-items:center;gap:8px">Inclusions
+          ${q.inclusions ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetInclusionsToAuto('${q.id}','dq-inc')" title="Throw away the edited text and regenerate from the job type and scopes">↻ Reset to auto</button>` : ''}
+        </div>
+        <textarea class="fta" id="dq-inc" rows="3" style="min-height:72px" oninput="onDQIncChange('${q.id}')">${q.inclusions||autoInclusions(q)}</textarea>
       </div>
-      <div style="margin-top:10px"><div class="scope-lbl">Exclusions</div>
-        <textarea class="fta" id="dq-exc" rows="2" style="min-height:60px" oninput="onDQExcChange('${q.id}')">${q.exclusions||''}</textarea>
+      <div style="margin-top:10px"><div class="scope-lbl" style="display:flex;align-items:center;gap:8px">Exclusions
+          ${q.exclusions ? `<button class="btn btn-g" style="padding:3px 10px;font-size:11px;font-weight:400" onclick="resetExclusionsToAuto('${q.id}','dq-exc')" title="Throw away the edited text and regenerate from the job type and scopes">↻ Reset to auto</button>` : ''}
+        </div>
+        <textarea class="fta" id="dq-exc" rows="2" style="min-height:60px" oninput="onDQExcChange('${q.id}')">${q.exclusions||autoExclusions(q)}</textarea>
       </div>
       <div style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border)">
         <div class="scope-lbl" style="display:flex;align-items:center;gap:8px">
@@ -12068,19 +12115,24 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   // inclusions/exclusions — measured, never clipped (2026-08-18n). The old
   // block advanced y by a flat 52pt no matter how long the text was, so long
   // lists overprinted the footer or fell off the page entirely.
-  if(q.inclusions||q.exclusions){
+  // 28c: detailed quotes never persisted the auto text (the form showed
+  // nothing, so Save stored nothing) and the PDF printed no Inclusions or
+  // Exclusions at all. Resolve exactly the way the form does, same as _pdfScope.
+  const _pdfInc = q.inclusions || (typeof autoInclusions === 'function' ? autoInclusions(q) : '');
+  const _pdfExc = q.exclusions || (typeof autoExclusions === 'function' ? autoExclusions(q) : '');
+  if(_pdfInc||_pdfExc){
     const col=(W-88)/2;
-    const il=q.inclusions?doc.splitTextToSize(q.inclusions,col):[];
-    const el=q.exclusions?doc.splitTextToSize(q.exclusions,col):[];
+    const il=_pdfInc?doc.splitTextToSize(_pdfInc,col):[];
+    const el=_pdfExc?doc.splitTextToSize(_pdfExc,col):[];
     const _ieH = 13 + Math.max(il.length, el.length)*10 + 8;
     if (_ieH <= PH - 70 - 54) {
       _b(_ieH);   // two columns side by side, moved whole to a fresh page if needed
-      if(q.inclusions){
+      if(_pdfInc){
         doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GREEN);doc.text('INCLUSIONS',36,y);
         doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
         doc.text(il,36,y+11);
       }
-      if(q.exclusions){
+      if(_pdfExc){
         doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('EXCLUSIONS',36+col+16,y);
         doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
         doc.text(el,36+col+16,y+11);
@@ -12088,15 +12140,15 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
       y+=_ieH;
     } else {
       // Longer than a page — run each full-width, flowing across pages.
-      if(q.inclusions){
+      if(_pdfInc){
         _b(40);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GREEN);doc.text('INCLUSIONS',36,y);y+=11;
         doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
-        _fl(doc.splitTextToSize(q.inclusions,W-72),36,10);y+=8;
+        _fl(doc.splitTextToSize(_pdfInc,W-72),36,10);y+=8;
       }
-      if(q.exclusions){
+      if(_pdfExc){
         _b(40);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('EXCLUSIONS',36,y);y+=11;
         doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
-        _fl(doc.splitTextToSize(q.exclusions,W-72),36,10);y+=8;
+        _fl(doc.splitTextToSize(_pdfExc,W-72),36,10);y+=8;
       }
     }
   }
