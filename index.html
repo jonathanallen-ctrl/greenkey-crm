@@ -790,16 +790,13 @@
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Appointment Type</div>
       <select id="sched-type" onchange="onSchedTypeChange()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
-        <option value="installation">Installation / Job Day</option>
-        <option value="walkdown">Walkdown / Site Visit (pre-quote)</option>
-        <option value="phone-call">Phone Call / Video Walkdown</option>
-        <option value="troubleshoot">Troubleshooting / Service Call</option>
-        <option value="maintenance">Maintenance Visit</option>
-        <option value="inspection">Final Inspection</option>
-        <option value="quote-review">Quote Review with Customer</option>
-        <option value="material-pickup">Material Pickup</option>
-        <option value="follow-up">Follow-Up Visit</option>
-        <option value="other">Other / Custom</option>
+        <option value="installation">Installation</option>
+        <option value="charger-swap">Charger Swap</option>
+        <option value="walkdown">Site Visit</option>
+        <option value="phone-call">Phone/Video Walkdown</option>
+        <option value="troubleshoot">Service Call</option>
+        <option value="inspection">Onsite Inspection</option>
+        <option value="other">Custom</option>
       </select>
     </div>
     <div style="margin-bottom:12px">
@@ -1289,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28m</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28n</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -32538,19 +32535,26 @@ const _SCHED_PLATFORM_SOURCES = ['Qmerit','Electrum','Treehouse','AF1'];
 // appointments[] yet. Nothing is rewritten until something is actually
 // scheduled, so no mass write, no sync storm, and old records stay readable.
 
+// Jon's 7 (2026-09-02: "there are too many") — this map drives every
+// visit-type dropdown, so its keys AND ORDER are the offered list.
 const APPT_LABELS = {
-  installation:      'Installation / Job Day',
-  walkdown:          'Walkdown / Site Visit',
-  'phone-call':      'Phone / Video Walkdown',
-  troubleshoot:      'Troubleshooting / Service Call',
+  installation:   'Installation',
+  'charger-swap': 'Charger Swap',
+  walkdown:       'Site Visit',
+  'phone-call':   'Phone/Video Walkdown',
+  troubleshoot:   'Service Call',
+  inspection:     'Onsite Inspection',
+  other:          'Custom'
+};
+// Retired visit types — kept ONLY so appointments booked before 2026-09-02
+// still label correctly; never offered in dropdowns.
+const APPT_LABELS_LEGACY = {
   maintenance:       'Maintenance Visit',
-  inspection:        'Final Inspection',
   'quote-review':    'Quote Review',
   'material-pickup': 'Material Pickup',
-  'follow-up':       'Follow-Up Visit',
-  other:             'Other / Custom'
+  'follow-up':       'Follow-Up Visit'
 };
-function _apptLabel(t) { return APPT_LABELS[t] || t || 'Appointment'; }
+function _apptLabel(t) { return APPT_LABELS[t] || APPT_LABELS_LEGACY[t] || t || 'Appointment'; }
 function _apptHours(t) { return _SCHED_TYPE_DEFAULT_HOURS[t] || 1; }
 function _apptIsBooked(a) { return !!(a && a.date); }
 // Remote types never consume a van, so they must not affect routing or the
@@ -32999,6 +33003,7 @@ function scheduleInOutlook(leadId, apptId) {
 // Start when the modal opens or the type changes. User can override the End.
 const _SCHED_TYPE_DEFAULT_HOURS = {
   installation:    3,     // was 8 — Jonathan 2026-07-21: installs block 3 h
+  'charger-swap':  1.5,   // swap on the existing circuit — under 2 h with drive-away room (2026-09-02)
   walkdown:        0.5,   // was 1 — Jonathan 2026-07-21: walkdowns are 30 min
   'phone-call':    0.5,   // phone call / video walkdown — remote, 30 min (2026-07-27)
   troubleshoot:    1.5,  // service-call fee covers the first hour; 1.5 blocks drive-away room (2026-07-22)
@@ -33241,6 +33246,18 @@ function _buildSchedContent(lead, cust, quote, type) {
       const chargerLineFU = _schedChargerSummary(lead);
       if (chargerLineFU) sections.push(chargerLineFU);
       sections.push('Document anything done in the CRM job notes after the visit.');
+      if (contactLine) sections.push(contactLine);
+      break;
+    }
+    case 'charger-swap': {
+      subject = `${lastName} Charger Swap - ${source}`;
+      sections.push('Charger swap — remove the existing unit, install the replacement on the existing circuit.');
+      const swapChargerLine = _schedChargerSummary(lead);
+      if (swapChargerLine) sections.push(swapChargerLine);
+      if (desc) sections.push('Notes:\n' + desc);
+      if (recentNote) sections.push(recentNote);
+      sections.push('Verify breaker size and wire gauge match the new charger\'s rating before energizing. Photo the old unit\'s dataplate and the finished install.');
+      if (paymentLine) sections.push(paymentLine);
       if (contactLine) sections.push(contactLine);
       break;
     }

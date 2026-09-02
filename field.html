@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-08-28 field-28';
+const BUILD = '2026-09-02 field-30';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -169,7 +169,8 @@ function apptsOf(l){
   return arr.concat([{id:'appt-legacy-install',type:'installation',date:im.date,time:im.time||''}]);
 }
 function apptLabel(t){
-  var M={installation:'Installation',walkdown:'Walkdown','phone-call':'Phone / Video',troubleshoot:'Service Call',maintenance:'Maintenance',inspection:'Final Inspection','quote-review':'Quote Review','material-pickup':'Material Pickup','follow-up':'Follow-Up',other:'Visit'};
+  // Jon's 7 visit types (2026-09-02) + retired labels for old bookings.
+  var M={installation:'Installation','charger-swap':'Charger Swap',walkdown:'Site Visit','phone-call':'Phone/Video Walkdown',troubleshoot:'Service Call',inspection:'Onsite Inspection',other:'Visit',maintenance:'Maintenance','quote-review':'Quote Review','material-pickup':'Material Pickup','follow-up':'Follow-Up'};
   return M[t]||'Visit';
 }
 function isWalkdownAppt(a){ return !!a && WALKDOWN_TYPES.indexOf(a.type)>=0; }
@@ -885,6 +886,7 @@ function renderWalkdown(id){
     + (tel?'<a class="btn green" href="'+tel+'">📞 Call</a>':'')
     + (maps?'<a class="btn ghost" href="'+maps+'" target="_blank" rel="noopener">🧭 Navigate</a>':'')
     + '</div>'
+    + _smsCardHTML(l)
     + '<div class="card"><div class="lab" style="margin-bottom:8px">Site electrical — for the estimate</div>'
     +   pick('wd-service','Service size', w.serviceSize||s.serviceSize, WD_SERVICE, 'e.g. 320A meter-main')
     +   pick('wd-panel','Panel make / model', w.panelMake||s.panelBrand, WD_PANEL, 'e.g. Bryant BR — read it off the label')
@@ -1152,18 +1154,7 @@ function renderDetail(id){
   // Customer texts card — one thread per customer, sent from the business
   // number via the worker (number-agnostic: the 770-2210 flip changes nothing
   // here). The office sees the same thread in the CRM, attributed per sender.
-  const smsCard = phone ? ('<div class="card"><div class="lab">Customer texts</div>'
-    + '<button class="btn green" onclick="sendOnMyWay(\''+esc(l.id)+'\')">🚐 Text \u201cOn my way\u201d</button>'
-    + '<div style="height:8px"></div>'
-    + '<button class="btn ghost" id="fld-sms-toggle" onclick="toggleFldThread(\''+esc(l.id)+'\')">💬 Open conversation</button>'
-    + '<div id="fld-sms-box" style="display:none">'
-    +   '<div id="fld-sms-thread" style="max-height:320px;overflow-y:auto;background:#0d1117;border:1px solid #1d222c;border-radius:10px;padding:8px;margin-top:10px;-webkit-overflow-scrolling:touch"></div>'
-    +   '<div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">'
-    +     '<textarea id="fld-sms-reply" class="smsbox" rows="3" placeholder="Text the customer…" autocomplete="off" autocapitalize="sentences" oninput="_smsGrow()"></textarea>'
-    +     '<button class="btn green" style="width:auto;flex:0 0 auto;padding:11px 16px" onclick="sendFldReply(\''+esc(l.id)+'\')">Send</button>'
-    +   '</div>'
-    +   '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.45">Sends from the GreenKey business number. The office sees this conversation in the CRM too.</div>'
-    + '</div></div>') : '';
+  const smsCard = _smsCardHTML(l);
   $app().innerHTML = header('Job', true)
     + '<div class="wrap">'
     + '<div class="jname" style="font-size:20px">'+esc(custName(l))+'</div>'
@@ -1510,6 +1501,22 @@ function _smsGrow(){
     t.style.height=t.scrollHeight+'px';                                // max-height clamps
   });
 }
+function _smsCardHTML(l){
+  var phone=leadPhone(l);
+  if(!phone) return '';
+  return '<div class="card"><div class="lab">Customer texts</div>'
+    + '<button class="btn green" onclick="sendOnMyWay(\''+esc(l.id)+'\')">🚐 Text \u201cOn my way\u201d</button>'
+    + '<div style="height:8px"></div>'
+    + '<button class="btn ghost" id="fld-sms-toggle" onclick="toggleFldThread(\''+esc(l.id)+'\')">💬 Open conversation</button>'
+    + '<div id="fld-sms-box" style="display:none">'
+    +   '<div id="fld-sms-thread" style="max-height:320px;overflow-y:auto;background:#0d1117;border:1px solid #1d222c;border-radius:10px;padding:8px;margin-top:10px;-webkit-overflow-scrolling:touch"></div>'
+    +   '<div style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">'
+    +     '<textarea id="fld-sms-reply" class="smsbox" rows="3" placeholder="Text the customer…" autocomplete="off" autocapitalize="sentences" oninput="_smsGrow()"></textarea>'
+    +     '<button class="btn green" style="width:auto;flex:0 0 auto;padding:11px 16px" onclick="sendFldReply(\''+esc(l.id)+'\')">Send</button>'
+    +   '</div>'
+    +   '<div class="muted" style="font-size:12px;margin-top:8px;line-height:1.45">Sends from the GreenKey business number. The office sees this conversation in the CRM too.</div>'
+    + '</div></div>';
+}
 async function sendFldReply(jobId){
   const inp=document.getElementById('fld-sms-reply'); if(!inp) return;
   const msg=(inp.value||'').trim(); if(!msg) return;
@@ -1518,7 +1525,7 @@ async function sendFldReply(jobId){
   catch(e){ alert('Could not send: '+(e.message||e)); }
   inp.disabled=false; inp.focus();
 }
-async function sendOnMyWay(jobId){
+function sendOnMyWay(jobId){
   const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
   const phone=leadPhone(l);
   if(!phone){ alert('No phone number on file for this customer — add one in the CRM first.'); return; }
@@ -1526,14 +1533,16 @@ async function sendOnMyWay(jobId){
   let tech='your GreenKey technician';
   try{ const a=_msal.getAllAccounts()[0]; if(a&&a.name) tech=a.name.split(/\s+/)[0]+' with GreenKey'; }catch(e){}
   const draft='Hi '+first+', this is '+tech+' — I\u2019m on my way to you now. See you soon!';
-  const msg=prompt('Send this text to '+custName(l)+'?', draft);
-  if(msg===null || !msg.trim()) return;
-  loading('Sending…');
-  let _ok=false;
-  try{ await _sendFldSMS(jobId,msg.trim(),'field_onmyway'); _ok=true; }
-  catch(e){ alert('Could not send: '+(e.message||e)); }
-  renderDetail(jobId);
-  if(_ok) alert('✓ Sent. Replies show under “Customer texts” on this job.');
+  // 2026-09-02 (Jonathan): the old prompt() box was effectively uneditable on a
+  // phone. Drop the draft into the real conversation textarea instead — edit a
+  // couple of words, tap Send. Nothing goes out until Send is tapped.
+  const box=document.getElementById('fld-sms-box');
+  if(box && box.style.display==='none'){ try{ toggleFldThread(jobId); }catch(e){} }
+  const inp=document.getElementById('fld-sms-reply');
+  if(!inp){ alert('Could not open the conversation box — try 💬 Open conversation.'); return; }
+  inp.value=draft;
+  try{ _smsGrow(); }catch(e){}
+  try{ inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); inp.scrollIntoView({block:'center',behavior:'smooth'}); }catch(e){}
 }
 
 // OFFICIAL bank-issued Zelle QR (decodes to enroll.zellepay.com payment token
