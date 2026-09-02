@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28l</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28m</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -19113,7 +19113,7 @@ async function sendInspectorSMS(btn){
   finally{ if(btn){ btn.disabled=false; btn.textContent='Send'; } }
 }
 function textInspectorForJob(leadId){
-  const lead=getLead(leadId); if(!lead) return; const ahjs=getAHJs(); const j=(lead.jurisdiction||lead.siteCity||'').toLowerCase();
+  const lead=getLead(leadId); if(!lead) return; const ahjs=getAHJs(); const j=String((typeof getLeadJurisdiction==='function'&&(getLeadJurisdiction(lead).name||''))||lead.jurisdiction||lead.siteCity||'').toLowerCase();
   let ahj = j ? ahjs.find(a=>{ const an=(a.name||'').toLowerCase(); return an.includes(j) || j.includes(an.replace(/ county| city/,'').trim()); }) : null;
   const insps = ahj ? inspectorsForAHJ(ahj.id) : [];
   if(ahj && insps.length===1){ openInspectorSMS(insps[0].id, leadId); return; }
@@ -19181,7 +19181,7 @@ function _inspTodayJobs(){
     return !!(ms.finalInspScheduled?.done && md===iso);
   });
 }
-function _permitListSection(title, jobs, metaFn, emptyText){
+function _permitListSection(title, jobs, metaFn, emptyText, extraBtnFn){
   const rows=jobs.map(l=>{
     const c=l.customerId?getCustomer(l.customerId):null;
     const nm=c?custFullName(c):(l.customerName||'Unknown');
@@ -19202,6 +19202,7 @@ function _permitListSection(title, jobs, metaFn, emptyText){
       </div>
       ${meta?`<span class="chip ${meta.cls||''}" style="flex-shrink:0">${escHtml(meta.txt)}</span>`:''}
       ${ahjBtn}
+      ${extraBtnFn?extraBtnFn(l):''}
       ${stageChip(l.stage)}
     </div>`;
   }).join('');
@@ -19218,7 +19219,10 @@ function renderPermitWorkLists(){
   const today=_inspTodayJobs().sort((a,b)=>String(_inspDateISO(a.inspection||{})).localeCompare(String(_inspDateISO(b.inspection||{}))));
   return _permitListSection('🗂 Needs a Permit', needPermit, l=>({txt:(getLeadJurisdiction(l).source==='mailing-city'?'jurisdiction unverified':''),cls:'chip-flag'}).txt?{txt:'jurisdiction unverified',cls:'chip-flag'}:null, 'Every won, permit-required job has its permit applied for.')
     + _permitListSection('🔍 Needs Inspection', needInsp, _inspNeededMeta, 'Nothing installed is waiting on an inspection to be booked.')
-    + _permitListSection('📅 Today\'s Inspections', today, l=>({txt:'📅 '+mdy(String((l.inspection&&l.inspection.pickedDate)||l.milestones?.finalInspScheduled?.date||'')),cls:'chip-ok'}), 'No inspections on the books for today.');
+    + _permitListSection('📅 Today\'s Inspections', today, l=>({txt:'📅 '+mdy(String((l.inspection&&l.inspection.pickedDate)||l.milestones?.finalInspScheduled?.date||'')),cls:'chip-ok'}), 'No inspections on the books for today.',
+        // 2026-09-02 (Jonathan): straight to the inspector texting screen from
+        // the bar — pick inspector, job pre-loaded, attach pics, send.
+        l=>`<button class="btn btn-p" style="padding:3px 10px;font-size:11px;flex-shrink:0" onclick="event.stopPropagation();textInspectorForJob('${l.id}')" title="Text this AHJ's inspector — this job is pre-loaded so you can attach its photos">💬 Inspector</button>`);
 }
 
 function renderPermittingPage() {
@@ -19226,27 +19230,21 @@ function renderPermittingPage() {
   if (!pg) return;
   const isAdmin = S.user?.role === 'admin';
 
-  const tabs = `<div class="ptabs" style="margin-bottom:20px">
-    <button class="ptab${_permitTab==='active'?' active':''}" onclick="_permitTab='active';renderPermittingPage()">Active Permits</button>
-    <button class="ptab${_permitTab==='directory'?' active':''}" onclick="_permitTab='directory';renderPermittingPage()">AHJ Directory</button>
-  </div>`;
-
+  // ONE page, no tabs (2026-09-02, Jonathan): AHJ tiles on top, the three
+  // work lists directly under them. The old Active Permits table is retired —
+  // "Everything is covered just fine by the top three." (renderActivePermits
+  // is kept below, unused, in case he wants it back.)
   const addBtn = isAdmin
     ? `<button class="btn btn-p" style="padding:6px 14px;font-size:13px" onclick="openAHJForm(null)">+ Add Jurisdiction</button>`
     : '';
 
-  let body = '';
-  if (_permitTab === 'active') {
-    try { body = renderPermitWorkLists(); } catch(e){ console.warn('[GK] permit work lists failed:', e); body=''; }
-    body += renderActivePermits();
-  } else {
-    body = renderAHJDirectory(isAdmin);
-  }
+  let lists = '';
+  try { lists = renderPermitWorkLists(); } catch(e){ console.warn('[GK] permit work lists failed:', e); lists=''; }
 
-  pg.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:10px">
-    <div>${tabs}</div>
-    ${_permitTab==='directory' ? addBtn : ''}
-  </div>${body}`;
+  pg.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+    <div style="font-weight:600;font-size:14px">AHJ Directory</div>
+    ${addBtn}
+  </div>${renderAHJDirectory(isAdmin)}<div style="height:18px"></div>${lists}`;
 }
 
 function renderActivePermits() {
