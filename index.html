@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28g</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -3808,6 +3808,13 @@ function _nameKey(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 // for when it uses the job number instead of name."
 // Order: linked customer record → the lead's own first/last → legacy
 // customerName → business name → '' (callers decide the last-resort fallback).
+// Short site address for job pickers (28h — inspectors ask by ADDRESS, so
+// every "select a job" list shows it and can be searched by it).
+function leadAddrShort(l){
+  if(!l) return '';
+  const st=(l.siteStreet||l.address||'').trim(), ci=(l.siteCity||'').trim();
+  return [st,ci].filter(Boolean).join(', ');
+}
 function leadDisplayName(l){
   if(!l) return '';
   try{
@@ -6015,22 +6022,23 @@ function filterLeadSelect(term){
   const filtered=!q?leads:leads.filter(l=>{
     const c=custs.find(x=>x.id===l.customerId);
     const name=c?custFullName(c):(l.customerName||'');
-    return l.id.toLowerCase().includes(q)||name.toLowerCase().includes(q)||(qKey&&_nameKey(name).includes(qKey))||(l.siteCity||'').toLowerCase().includes(q);
+    return l.id.toLowerCase().includes(q)||name.toLowerCase().includes(q)||(qKey&&_nameKey(name).includes(qKey))||(l.siteCity||'').toLowerCase().includes(q)||leadAddrShort(l).toLowerCase().includes(q);
   });
   sel.innerHTML=filtered.map(l=>{
     const c=custs.find(x=>x.id===l.customerId);
-    return `<option value="${l.id}">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;
+    const ad=leadAddrShort(l);
+    return `<option value="${l.id}">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):' (No address)'}</option>`;
   }).join('');
 }
 
 function _leadSearchUI(leads,custs,selectedId=''){
   return `
     <div style="position:relative;margin-bottom:6px">
-      <input class="fi" type="text" id="qt-lead-search" placeholder="Search by name, city, or job ID…" oninput="filterLeadSelect(this.value)" autocomplete="off" style="padding-left:32px">
+      <input class="fi" type="text" id="qt-lead-search" placeholder="Search by name, address, city, or job ID…" oninput="filterLeadSelect(this.value)" autocomplete="off" style="padding-left:32px">
       <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.4" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
     </div>
     <select class="fsel" id="qt-lead-sel" size="6" style="height:150px;overflow-y:auto">
-      ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);return`<option value="${l.id}"${l.id===selectedId?' selected':''}>${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')} (${l.siteCity||'No city'})</option>`;}).join('')}
+      ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);const ad=leadAddrShort(l);return`<option value="${l.id}"${l.id===selectedId?' selected':''}>${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):' (No address)'}</option>`;}).join('')}
     </select>
     <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${leads.length} active jobs</div>`;
 }
@@ -16471,7 +16479,8 @@ function renderFilesPage() {
     const c   = custs.find(x => x.id === l.customerId);
     const nm  = c ? custFullName(c) : (l.customerName||'Unknown');
     const arc = l.stage === 'archived' ? ' (archived)' : '';
-    return `<option value="${l.id}"${l.id===fm.jobId?' selected':''}>${l.id} — ${nm} (${l.siteCity||''})${arc}</option>`;
+    const ad = leadAddrShort(l);
+    return `<option value="${l.id}"${l.id===fm.jobId?' selected':''}>${l.id} — ${nm}${ad?' — '+escHtml(ad):''}${arc}</option>`;
   }).join('');
 
   const backBtn = fm.jobId ? `<button class="det-back" onclick="fmBackToJob()" style="margin-bottom:14px">
@@ -18886,7 +18895,7 @@ function _inspTogglePicker(forceOpen){
   const p=document.getElementById('insp-picker'); if(!p) return; const open = forceOpen || p.style.display==='none'; p.style.display = open?'block':'none';
   if(open){
     const jobs=_awaitingInspectionJobs();
-    const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(nm)} — ${escHtml(l.id)}</option>`; }).join('');
+    const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); const ad=leadAddrShort(l); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(ad?ad+' — ':'')}${escHtml(nm)} — ${escHtml(l.id)}</option>`; }).join('');
     p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection. Tap a photo to attach it · tap 🔍 to view full size before sending.</div>
       <select class="fsel" id="insp-pick-job" style="width:100%;margin-bottom:8px" onchange="_inspSetPickJob(this.value)"><option value="">— Select a job —</option>${opts}</select>
       <div id="insp-pick-addr"></div>
@@ -19111,6 +19120,98 @@ function textInspectorForJob(leadId){
 // ── PERMITTING PAGE RENDER ──
 let _permitTab = 'directory'; // 'active' | 'directory' — default to the AHJ Directory
 
+// ── PERMITTING WORK LISTS (2026-08-29, crm-2026-08-28i — Jonathan) ────────
+// Three action lists at the top of Active Permits, in his order:
+//   1. Needs a Permit — accepted work on a permit-required job type where
+//      "Permit applied" was never checked. Watches the milestone, not the
+//      stage, per the three-lists lesson (Today list / chase list / photo list).
+//   2. Needs Inspection — install done (reuses _awaitingInspectionJobs) but no
+//      inspection actually ON THE BOOKS; the meta says exactly where it stands
+//      (nothing sent / request sent / customer picked a day — BOOK IT / call
+//      them / link expired).
+//   3. Today's Inspections — inspection.status 'scheduled' with today's date
+//      (falls back to the finalInspScheduled milestone date).
+function _permitNeededJobs(){
+  const _DONE=['invoiced','archived','not-won'];
+  return getLeads().filter(l=>{
+    if(!l || l.deleted || _DONE.includes(l.stage)) return false;
+    const ms=l.milestones||{};
+    if(ms.permitApplied?.done || ms.permitReceived?.done || l.stage==='permit-applied') return false;
+    if(ms.finalInspPassed?.done) return false;
+    // Real work only: an accepted quote, or a stage that means the job is won.
+    const acc=(typeof getAcceptedQuoteIds==='function')?getAcceptedQuoteIds(l):[];
+    const won=acc.length>0 || ['quote-approved','charger-confirmed','scheduled','installation','punch-list','waiting','post-install-docs','final-inspection'].includes(l.stage);
+    if(!won) return false;
+    // Job types that never need a permit (and EV existing-circuit/swap installs).
+    const jt=(typeof getJobType==='function')?getJobType(l.jobType):null;
+    if(jt && jt.noPermit) return false;
+    if(l.jobType==='ev-residential' && acc.length){
+      const qs=(typeof getAcceptedQuotes==='function')?getAcceptedQuotes(l):[];
+      if(qs.length && qs.every(q=>q && q.qq && q.qq.evInstallType && q.qq.evInstallType!=='full')) return false;
+    }
+    return true;
+  });
+}
+function _inspNeededJobs(){
+  return _awaitingInspectionJobs().filter(l=>!(l.inspection && l.inspection.status==='scheduled'));
+}
+function _inspNeededMeta(l){
+  const i=l.inspection||null;
+  if(!i || !i.status) return {txt:'nothing sent yet', cls:'chip-flag'};
+  if(i.status==='picked')  return {txt:'customer picked '+mdy(String(i.pickedDate||''))+' — book with the county', cls:'chip-warn'};
+  if(i.status==='call_me') return {txt:'customer asked for a call', cls:'chip-warn'};
+  if(i.status==='expired') return {txt:'link expired — resend or call', cls:'chip-flag'};
+  return {txt:'request sent'+(i.sentAt?' '+mdy(String(i.sentAt)):'')+' — waiting on customer', cls:'chip-warn'};
+}
+function _inspTodayJobs(){
+  const today=new Date(); const iso=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  return getLeads().filter(l=>{
+    if(!l || l.deleted || l.stage==='archived') return false;
+    const ms=l.milestones||{};
+    if(ms.finalInspPassed?.done) return false;
+    if(l.inspection && l.inspection.status==='scheduled' && typeof _inspDateISO==='function' && _inspDateISO(l.inspection)===iso) return true;
+    const md=String(ms.finalInspScheduled?.date||'').slice(0,10);
+    return !!(ms.finalInspScheduled?.done && md===iso);
+  });
+}
+function _permitListSection(title, jobs, metaFn, emptyText){
+  const rows=jobs.map(l=>{
+    const c=l.customerId?getCustomer(l.customerId):null;
+    const nm=c?custFullName(c):(l.customerName||'Unknown');
+    const ad=(typeof leadAddrShort==='function')?leadAddrShort(l):'';
+    const jur=getLeadJurisdiction(l).name||'';
+    const ahj=jur?getAHJs().find(a=>{const an=String(a.name||'').toLowerCase(), jn=jur.toLowerCase(); return an.includes(jn)||jn.includes(an);}):null;
+    // Portal button when the AHJ has one; tap-to-call only as the fallback
+    // (Jonathan, 2026-08-29: "a button that goes to the permit portal when
+    // there is one available. Tap to call... when there is not.").
+    let ahjBtn='';
+    if(ahj&&ahj.url) ahjBtn=`<a href="${escHtml(ahj.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="btn btn-g" style="padding:3px 10px;font-size:11px;flex-shrink:0;text-decoration:none" title="Open the ${escHtml(ahj.name)} permit portal${ahj.platform?' ('+escHtml(ahj.platform)+')':''}">🌐 Portal</a>`;
+    else if(ahj&&ahj.phone) ahjBtn=`<a href="tel:${escHtml(String(ahj.phone).replace(/[^\d+]/g,''))}" onclick="event.stopPropagation()" class="btn btn-g" style="padding:3px 10px;font-size:11px;flex-shrink:0;text-decoration:none" title="Call ${escHtml(ahj.name)} — no online portal on file">☎ Call</a>`;
+    const meta=metaFn?metaFn(l):null;
+    return `<div onclick="openLeadDetail('${l.id}')" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer;flex-wrap:wrap">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:13px;font-weight:600">${escHtml(ad||nm)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(ad?nm+' · ':'')}<span style="font-family:var(--mono)">${escHtml(l.id)}</span>${jur?' · '+escHtml(jur):''}</div>
+      </div>
+      ${meta?`<span class="chip ${meta.cls||''}" style="flex-shrink:0">${escHtml(meta.txt)}</span>`:''}
+      ${ahjBtn}
+      ${stageChip(l.stage)}
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="ch"><div class="ct">${title} <span style="font-weight:400;color:var(--text-muted)">(${jobs.length})</span></div></div>
+    ${jobs.length?rows:`<div style="padding:14px;font-size:12.5px;color:var(--text-muted)">${emptyText}</div>`}
+  </div>`;
+}
+function renderPermitWorkLists(){
+  const needPermit=_permitNeededJobs().sort((a,b)=>new Date(a.stageAt||a.createdAt||0)-new Date(b.stageAt||b.createdAt||0));
+  const needInsp=_inspNeededJobs();
+  const today=_inspTodayJobs().sort((a,b)=>String(_inspDateISO(a.inspection||{})).localeCompare(String(_inspDateISO(b.inspection||{}))));
+  return _permitListSection('🗂 Needs a Permit', needPermit, l=>({txt:(getLeadJurisdiction(l).source==='mailing-city'?'jurisdiction unverified':''),cls:'chip-flag'}).txt?{txt:'jurisdiction unverified',cls:'chip-flag'}:null, 'Every won, permit-required job has its permit applied for.')
+    + _permitListSection('🔍 Needs Inspection', needInsp, _inspNeededMeta, 'Nothing installed is waiting on an inspection to be booked.')
+    + _permitListSection('📅 Today\'s Inspections', today, l=>({txt:'📅 '+mdy(String((l.inspection&&l.inspection.pickedDate)||l.milestones?.finalInspScheduled?.date||'')),cls:'chip-ok'}), 'No inspections on the books for today.');
+}
+
 function renderPermittingPage() {
   const pg = document.getElementById('page-permitting');
   if (!pg) return;
@@ -19127,7 +19228,8 @@ function renderPermittingPage() {
 
   let body = '';
   if (_permitTab === 'active') {
-    body = renderActivePermits();
+    try { body = renderPermitWorkLists(); } catch(e){ console.warn('[GK] permit work lists failed:', e); body=''; }
+    body += renderActivePermits();
   } else {
     body = renderAHJDirectory(isAdmin);
   }
