@@ -1289,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28l</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6027,7 +6027,7 @@ function filterLeadSelect(term){
   sel.innerHTML=filtered.map(l=>{
     const c=custs.find(x=>x.id===l.customerId);
     const ad=leadAddrShort(l);
-    return `<option value="${l.id}">${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):' (No address)'}</option>`;
+    return `<option value="${l.id}">${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):''} — ${l.id}${ad?'':' (No address)'}</option>`;
   }).join('');
 }
 
@@ -6038,7 +6038,7 @@ function _leadSearchUI(leads,custs,selectedId=''){
       <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.4" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
     </div>
     <select class="fsel" id="qt-lead-sel" size="6" style="height:150px;overflow-y:auto">
-      ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);const ad=leadAddrShort(l);return`<option value="${l.id}"${l.id===selectedId?' selected':''}>${l.id} — ${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):' (No address)'}</option>`;}).join('')}
+      ${leads.map(l=>{const c=custs.find(x=>x.id===l.customerId);const ad=leadAddrShort(l);return`<option value="${l.id}"${l.id===selectedId?' selected':''}>${c?custFullName(c):(l.customerName||'Unknown')}${ad?' — '+escHtml(ad):''} — ${l.id}${ad?'':' (No address)'}</option>`;}).join('')}
     </select>
     <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${leads.length} active jobs</div>`;
 }
@@ -16480,7 +16480,7 @@ function renderFilesPage() {
     const nm  = c ? custFullName(c) : (l.customerName||'Unknown');
     const arc = l.stage === 'archived' ? ' (archived)' : '';
     const ad = leadAddrShort(l);
-    return `<option value="${l.id}"${l.id===fm.jobId?' selected':''}>${l.id} — ${nm}${ad?' — '+escHtml(ad):''}${arc}</option>`;
+    return `<option value="${l.id}"${l.id===fm.jobId?' selected':''}>${nm}${ad?' — '+escHtml(ad):''} — ${l.id}${arc}</option>`;
   }).join('');
 
   const backBtn = fm.jobId ? `<button class="det-back" onclick="fmBackToJob()" style="margin-bottom:14px">
@@ -18703,7 +18703,7 @@ const DEFAULT_AHJS = [
   { id:'ahj-001', name:'Chesterfield County', state:'VA', portalType:'online',
     url:'https://aca-prod.accela.com/CHESTERFIELD/',
     platform:'Accela Citizen Access',
-    fee:250, phone:'', email:'',
+    fee:250, phone:'(804) 751-4990', email:'BIPermitsAndFees@chesterfield.gov',
     notes:'Enterprise Land Management (ELM) system. Submit permit docs as PDFs. Track progress and request inspections online.' },
   { id:'ahj-002', name:'Henrico County', state:'VA', portalType:'online',
     url:'https://henrico.us/build',
@@ -18713,7 +18713,7 @@ const DEFAULT_AHJS = [
   { id:'ahj-003', name:'City of Richmond', state:'VA', portalType:'online',
     url:'https://energov.richmondgov.com/energov_prod/selfservice#/home',
     platform:'eNergov Citizen Self Service',
-    fee:250, phone:'', email:'CSSHelp@rva.gov',
+    fee:250, phone:'(804) 646-6149', email:'CSSHelp@rva.gov',
     notes:'Submit permits, pay fees, and schedule inspections online. Guest access available for tracking.' },
   { id:'ahj-004', name:'Albemarle County', state:'VA', portalType:'online',
     url:'https://www.albemarle.org/?navid=145',
@@ -18736,11 +18736,15 @@ const DEFAULT_AHJS = [
     fee:250, phone:'(540) 967-3430', email:'buildingpermits@louisacounty.gov',
     notes:'No online portal. Submit via mail, drop-off, or email. Online inspection requests available for contractors.' },
   { id:'ahj-008', name:'Stafford County', state:'VA', portalType:'online',
-    url:'', platform:'', fee:500, phone:'', email:'',
-    notes:'$500 permit fee. In-person inspection required. ⚠ Add portal URL.' },
-  { id:'ahj-009', name:'Spotsylvania County', state:'VA', portalType:'online',
-    url:'', platform:'', fee:500, phone:'', email:'',
-    notes:'$500 permit fee. In-person inspection required. ⚠ Add portal URL.' },
+    url:'https://progress.staffordcountyva.gov/', platform:'ePLANS', fee:500, phone:'(540) 658-8650', email:'',
+    notes:'$500 permit fee. In-person inspection required. Apply/pay/status via ePLANS; inspections also via Hello Stafford (hello.stafford.va.us).' },
+  { id:'ahj-009', name:'Spotsylvania County', state:'VA', portalType:'paper',
+    url:'https://etrakit.spotsylvania.va.us/etrakit/', platform:'eTRAKiT (inspections/status only)', fee:500, phone:'(540) 507-7222', email:'',
+    notes:'$500 permit fee. In-person inspection required. No online permit SUBMISSION — electronic submission guidelines / email for small permits; eTRAKiT is for inspection requests and status.' },
+  { id:'ahj-010', name:'Powhatan County', state:'VA', portalType:'paper',
+    url:'https://www.powhatanva.gov/201/Building-Inspections', platform:'Phone / Email / In person',
+    fee:250, phone:'(804) 598-5622', email:'',
+    notes:'No online portal. Building Inspections: 3834 Old Buckingham Rd Suite F. Applications processed 9 AM–3 PM; inspections requested by 3 PM are typically performed the next business day.' },
 ];
 
 function getAHJs() {
@@ -18895,7 +18899,7 @@ function _inspTogglePicker(forceOpen){
   const p=document.getElementById('insp-picker'); if(!p) return; const open = forceOpen || p.style.display==='none'; p.style.display = open?'block':'none';
   if(open){
     const jobs=_awaitingInspectionJobs();
-    const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); const ad=leadAddrShort(l); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(ad?ad+' — ':'')}${escHtml(nm)} — ${escHtml(l.id)}</option>`; }).join('');
+    const opts=jobs.map(l=>{ const c=l.customerId?getCustomer(l.customerId):null; const nm=c?custFullName(c):(l.customerName||l.id); const ad=leadAddrShort(l); return `<option value="${l.id}"${l.id===_inspPickJob?' selected':''}>${escHtml(nm)} — ${escHtml(ad?ad+' — ':'')}${escHtml(l.id)}</option>`; }).join('');
     p.innerHTML=`<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">Pick a job awaiting inspection. Tap a photo to attach it · tap 🔍 to view full size before sending.</div>
       <select class="fsel" id="insp-pick-job" style="width:100%;margin-bottom:8px" onchange="_inspSetPickJob(this.value)"><option value="">— Select a job —</option>${opts}</select>
       <div id="insp-pick-addr"></div>
@@ -18954,7 +18958,10 @@ function _inspPreviewPhotoById(fileId){
 // The scheduled-date door is KEPT for jobs still at `scheduled`/`installation`,
 // which genuinely have not been installed yet — and it now also accepts a dated
 // installation APPOINTMENT, which is the form Sherri's bookings actually take.
-const _INSP_PAST_INSTALL = ['post-install-docs', 'final-inspection'];
+// 'punch-list' included 2026-09-02 (Jon): a FAILED inspection moves the job to
+// punch list, and those jobs still need photos sent to the inspector — they are
+// the ones that need it most.
+const _INSP_PAST_INSTALL = ['post-install-docs', 'final-inspection', 'punch-list'];
 function _awaitingInspectionJobs(){
   const _hasInstallDate = l => {
     const ms = l.milestones || {};
@@ -19190,8 +19197,8 @@ function _permitListSection(title, jobs, metaFn, emptyText){
     const meta=metaFn?metaFn(l):null;
     return `<div onclick="openLeadDetail('${l.id}')" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer;flex-wrap:wrap">
       <div style="min-width:0;flex:1">
-        <div style="font-size:13px;font-weight:600">${escHtml(ad||nm)}</div>
-        <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(ad?nm+' · ':'')}<span style="font-family:var(--mono)">${escHtml(l.id)}</span>${jur?' · '+escHtml(jur):''}</div>
+        <div style="font-size:13px;font-weight:600">${escHtml(nm)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escHtml(ad?ad+' · ':'')}<span style="font-family:var(--mono)">${escHtml(l.id)}</span>${jur?' · '+escHtml(jur):''}</div>
       </div>
       ${meta?`<span class="chip ${meta.cls||''}" style="flex-shrink:0">${escHtml(meta.txt)}</span>`:''}
       ${ahjBtn}
@@ -19200,7 +19207,9 @@ function _permitListSection(title, jobs, metaFn, emptyText){
   }).join('');
   return `<div class="card" style="margin-bottom:16px">
     <div class="ch"><div class="ct">${title} <span style="font-weight:400;color:var(--text-muted)">(${jobs.length})</span></div></div>
+    <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
     ${jobs.length?rows:`<div style="padding:14px;font-size:12.5px;color:var(--text-muted)">${emptyText}</div>`}
+    </div>
   </div>`;
 }
 function renderPermitWorkLists(){
