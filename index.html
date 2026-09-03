@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28p</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28q</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1568,6 +1568,7 @@
 
       <!-- PERMITTING -->
       <div class="page" id="page-permitting"></div>
+      <div class="page" id="page-vanstock"></div>
 
       <!-- SCHEDULER -->
       <div class="page" id="page-scheduler"></div>
@@ -2641,6 +2642,7 @@ const NAV_DEF = [
     {page:'customers',label:'Customers',roles:['admin','sales'],icon:'user'},
     {page:'quotes',label:'Quotes',roles:['admin','tech','sales'],icon:'file'},
     {page:'tech',label:'Tech Mode',roles:['admin','tech'],icon:'brief'},
+    {page:'vanstock',label:'Van Stock',roles:['admin','tech'],icon:'brief'},
     // External module: Commercial Site Plan Studio (separate file for perf
     // isolation). Opens in a new tab; not an SPA page.
     {url:'./proposal.html',label:'Commercial',roles:['admin','sales'],icon:'chart',ext:true},
@@ -2852,6 +2854,7 @@ function showPage(page) {
   else if (page==='tasks') renderTasksPage();
   else if (page==='files') { renderFilesPage(); }
   else if (page==='permitting') renderPermittingPage();
+  else if (page==='vanstock') renderVanStockPage();
   else if (page==='scheduler') renderSchedulerPage();
   else if (page==='payments') renderPaymentsPage();   // return target is sticky (2026-08-15b)
   else if (page==='reports') renderReportsPage();
@@ -2913,7 +2916,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Van Stock','Text Templates','Email Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Text Templates','Email Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2968,7 +2971,6 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Materials Library':null,
-  'Van Stock':null,
   'Tech Mode':null,
   'Backups & Export':null,
   'Charger Support':null,
@@ -3273,8 +3275,6 @@ function showSec(el, sec) {
   if (el) el.classList.add('active');
   if (sec==='Materials Library') {
     document.getElementById('spanel').innerHTML = renderMaterialsLibrary();
-  } else if (sec==='Van Stock') {
-    document.getElementById('spanel').innerHTML = renderVanStockSettings();
   } else if (sec==='Tech Mode') {
     document.getElementById('spanel').innerHTML = renderTechModeSettings();
   } else if (sec==='Backups & Export') {
@@ -12371,7 +12371,7 @@ function vsItems(){ return getVanStock().filter(r=>r&&r.kind==='item'&&!r.delete
 function vsAllLists(){ return getVanStock().filter(r=>r&&r.kind==='list'&&!r.deleted).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))); }
 function vsConfig(){ return getVanStock().find(r=>r&&r.kind==='config')||{id:'vs-config',kind:'config',adminOnly:false}; }
 function _vsUpsert(rec){ const arr=getVanStock(); const i=arr.findIndex(r=>r&&r.id===rec.id); rec.updatedAt=new Date().toISOString(); if(i>=0) arr[i]=Object.assign({},arr[i],rec); else arr.push(rec); saveVanStock(arr); }
-function _vsRefresh(){ if(typeof showSec==='function') showSec(document.querySelector('.sni.active'),'Van Stock'); }
+function _vsRefresh(){ if(typeof renderVanStockPage==='function') renderVanStockPage(); }
 function vsCrmAddItem(){
   const name=(document.getElementById('vs-add-name')?.value||'').trim();
   const cat=(document.getElementById('vs-add-cat')?.value||'').trim()||'Other';
@@ -12391,6 +12391,23 @@ function vsCrmCopyList(id){
 }
 let _vsOpenList=null;
 function vsCrmToggleList(id){ _vsOpenList=(_vsOpenList===id?null:id); _vsRefresh(); }
+let _vsEditId=null;
+function vsCrmEdit(id){ _vsEditId=id; _vsRefresh(); }
+function vsCrmCancelEdit(){ _vsEditId=null; _vsRefresh(); }
+function vsCrmSaveEdit(id){
+  const name=(document.getElementById('vs-ed-name')?.value||'').trim();
+  const cat=(document.getElementById('vs-ed-cat')?.value||'').trim()||'Other';
+  const qty=parseInt(document.getElementById('vs-ed-qty')?.value,10)||1;
+  if(!name){ toast('The item needs a name','warning'); return; }
+  _vsUpsert({id, kind:'item', name, cat, qty});
+  _vsEditId=null; _vsRefresh();
+}
+// Own left-nav page (2026-09-02, 28q — Jon: settings is for settings, this is
+// production work). Same content the 28p Settings panel carried.
+function renderVanStockPage(){
+  const pg=document.getElementById('page-vanstock'); if(!pg) return;
+  pg.innerHTML='<div class="card" style="padding:20px;max-width:860px">'+renderVanStockSettings()+'</div>';
+}
 function renderVanStockSettings(){
   const isAdmin=S.user?.role==='admin';
   const cfg=vsConfig(); const items=vsItems(); const lists=vsAllLists().slice(0,12);
@@ -12412,7 +12429,7 @@ function renderVanStockSettings(){
         </div></div>`:''}
     </div>`;
   }).join(''):`<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No restock lists yet — they appear here when a tech walks the van in the field app (🚐 Van, top of My Jobs).</div>`;
-  return `<div class="stitle">Van Stock</div>
+  return `<div class="stitle">🚐 Van Stock</div>
     <div class="sdesc">Monday clean &amp; stock. One standard master checklist for every van — techs walk it in the field app (🚐 Van button), flag what's short, and the flags become a restock list they can call in and check off at the counter. Lists sync back here.</div>
     ${isAdmin?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12.5px;color:var(--text-secondary)">
       <input type="checkbox" id="vs-lock" ${cfg.adminOnly?'checked':''} onchange="vsCrmLock(this.checked)" style="accent-color:var(--blue)">
@@ -12430,10 +12447,17 @@ function renderVanStockSettings(){
     </div>
     ${items.length?cats.map(cat=>`<div style="margin-bottom:10px">
       <div class="fsec-title">${escHtml(cat)}</div>
-      ${items.filter(i=>(i.cat||'Other')===cat).map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+      ${items.filter(i=>(i.cat||'Other')===cat).map(i=>_vsEditId===i.id?`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;flex-wrap:wrap">
+        <input class="fi" id="vs-ed-name" value="${escHtml(i.name)}" style="flex:2;min-width:170px;padding:4px 8px">
+        <input class="fi" id="vs-ed-cat" value="${escHtml(i.cat||'Other')}" list="vs-cats" style="flex:1;min-width:100px;padding:4px 8px">
+        <input class="fi" id="vs-ed-qty" value="${escHtml(String(i.qty||1))}" inputmode="numeric" style="width:56px;text-align:center;padding:4px">
+        <button class="btn btn-p" style="padding:3px 10px;font-size:11.5px" onclick="vsCrmSaveEdit('${i.id}')">Save</button>
+        <button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="vsCrmCancelEdit()">Cancel</button>
+      </div>`:`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <span style="flex:1">${escHtml(i.name)}</span>
         <span style="font-size:11px;color:var(--text-muted)">keep</span>
         <input class="fi" value="${escHtml(String(i.qty||1))}" inputmode="numeric" style="width:56px;text-align:center;padding:4px" onchange="vsCrmQty('${i.id}',this.value)">
+        <span style="color:var(--text-secondary);cursor:pointer" title="Edit name, category, quantity" onclick="vsCrmEdit('${i.id}')">✎</span>
         <span style="color:var(--red);cursor:pointer" onclick="vsCrmDel('${i.id}')">✕</span>
       </div>`).join('')}
     </div>`).join(''):`<div style="font-size:12.5px;color:var(--text-muted)">Nothing yet — add Chase's list here, or he can build it straight from his phone (🚐 Van → ✎ Edit master list).</div>`}`;

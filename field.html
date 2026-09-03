@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-09-02 field-31';
+const BUILD = '2026-09-02 field-32';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -1338,10 +1338,20 @@ function renderVanMaster(){
   cats.forEach(function(cat){
     body+='<div class="muted" style="font-size:12px;font-weight:600;margin:10px 2px 4px;text-transform:uppercase;letter-spacing:.4px">'+esc(cat)+'</div>';
     items.filter(function(i){return (i.cat||'Other')===cat;}).forEach(function(it){
-      body+='<div class="card" style="padding:10px 12px;display:flex;align-items:center;gap:10px">'
-        +'<div style="flex:1;min-width:0;font-weight:600">'+esc(it.name)+'</div>'
-        +'<input class="srch" style="margin-top:0;width:64px;text-align:center;padding:7px 4px" value="'+esc(String(it.qty||1))+'" inputmode="numeric" onchange="vsmQty(\''+esc(it.id)+'\',this.value)">'
-        +'<button class="chip" style="color:#ff9a9a" onclick="vsmDel(\''+esc(it.id)+'\')">✕</button></div>';
+      if(_vsmEditId===it.id){
+        body+='<div class="card" style="padding:10px 12px;border-color:#e8b34a">'
+          +'<input id="vsm-ed-name" class="srch" style="margin-top:0" value="'+esc(it.name)+'">'
+          +'<input id="vsm-ed-cat" class="srch" style="margin-top:6px" value="'+esc(it.cat||'Other')+'" list="vsm-cats">'
+          +'<input id="vsm-ed-qty" class="srch" style="margin-top:6px;width:90px;text-align:center" value="'+esc(String(it.qty||1))+'" inputmode="numeric">'
+          +'<div style="display:flex;gap:8px;margin-top:8px"><button class="btn green" style="flex:1" onclick="vsmSaveEdit(\''+esc(it.id)+'\')">Save</button><button class="btn ghost" style="flex:1" onclick="vsmCancelEdit()">Cancel</button></div>'
+          +'</div>';
+      } else {
+        body+='<div class="card" style="padding:10px 12px;display:flex;align-items:center;gap:10px">'
+          +'<div style="flex:1;min-width:0;font-weight:600">'+esc(it.name)+'</div>'
+          +'<input class="srch" style="margin-top:0;width:64px;text-align:center;padding:7px 4px" value="'+esc(String(it.qty||1))+'" inputmode="numeric" onchange="vsmQty(\''+esc(it.id)+'\',this.value)">'
+          +'<button class="chip" onclick="vsmEdit(\''+esc(it.id)+'\')">✎</button>'
+          +'<button class="chip" style="color:#ff9a9a" onclick="vsmDel(\''+esc(it.id)+'\')">✕</button></div>';
+      }
     });
   });
   body+='<button class="btn ghost" style="margin-top:10px" onclick="openVanStock()">‹ Back to Van Stock</button>';
@@ -1357,6 +1367,17 @@ function vsmAdd(){
   renderVanMaster();
 }
 function vsmQty(id,v){ vsUpsert({id:id, kind:'item', qty:parseInt(v,10)||1}); }
+let _vsmEditId=null;
+function vsmEdit(id){ _vsmEditId=id; renderVanMaster(); }
+function vsmCancelEdit(){ _vsmEditId=null; renderVanMaster(); }
+function vsmSaveEdit(id){
+  const name=(document.getElementById('vsm-ed-name').value||'').trim();
+  const cat=(document.getElementById('vsm-ed-cat').value||'').trim()||'Other';
+  const qty=parseInt(document.getElementById('vsm-ed-qty').value,10)||1;
+  if(!name){ alert('The item needs a name.'); return; }
+  vsUpsert({id:id, kind:'item', name:name, cat:cat, qty:qty});
+  _vsmEditId=null; renderVanMaster();
+}
 function vsmDel(id){ const it=vsItems().find(function(x){return x.id===id;}); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; vsUpsert({id:id, kind:'item', deleted:true}); renderVanMaster(); }
 
 function goJobs(){ _stopFldSms(); closeLightbox(); location.hash=''; renderJobs(); }
