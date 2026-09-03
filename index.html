@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28q</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28r</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -27378,6 +27378,9 @@ async function _bellPollOnce() {
           title: 'New text — ' + who,
           description: (m.body || '').replace(/\s+/g,' ').slice(0, 200),
           jobId: m.lead_id || null,
+          // 28r: keep the sender's number on the notice so an 'unrouted' text
+          // (no job yet) can open its own conversation from the bell.
+          phone: m.from_number || m.phone || null,
           at: m.created_at || new Date().toISOString()
         });
       } catch (_) {}
@@ -28392,6 +28395,31 @@ function markCallHandled(callId) {
 // Promote a caller into a real job. Any texts already exchanged with this number
 // are pulled onto the new job's thread by the worker's adoption sweep as soon as
 // the job's thread is opened — nothing has to be copied by hand.
+// ── UNKNOWN-TEXTER DRAWER (2026-09-03, crm-2026-08-28r — Jonathan) ─────────
+// A caller he asked to "text your info and pics to this number" lands in the
+// bell as an 'unrouted' text — and the bell used to acknowledge it into the
+// void ("I have no way to respond other than to manually create her"). Now the
+// notice opens THIS: the full back-and-forth with that number, a reply box,
+// and + Create job (prefilled with the number; the worker's adoption sweep
+// then pulls every stranded text + picture into the new job's thread the
+// first time it's opened).
+function openUnroutedThread(phoneRaw, name){
+  const digits=String(phoneRaw||'').replace(/\D/g,'').slice(-10);
+  if(digits.length!==10){ toast('No usable number on this notice','warning'); return; }
+  const pretty=(typeof _callPretty==='function')?_callPretty(digits):digits;
+  const body=`
+    <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:8px">Texts with <strong>${escHtml(pretty)}</strong> — no job on file yet. Reply here, or create the job and every message and picture from this number moves onto it automatically.</div>
+    <div id="callthread-${digits}" style="max-height:300px;overflow-y:auto;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:8px"><div style="font-size:12.5px;color:var(--text-muted)">Loading…</div></div>
+    <div style="display:flex;gap:6px;align-items:flex-end">
+      <textarea id="callreply-${digits}" rows="2" placeholder="Text ${escHtml(pretty)}…" style="flex:1;padding:7px 9px;font-size:12.5px;font-family:inherit;line-height:1.5;border:1px solid var(--border);border-radius:6px;background:var(--bg-surface);color:var(--text-primary);resize:vertical"></textarea>
+      <button class="btn btn-p" style="padding:8px 14px" onclick="sendCallReply('${digits}','${digits}')">Send</button>
+    </div>
+    <div style="margin-top:4px"><button class="btn btn-g" style="padding:3px 10px;font-size:11.5px" onclick="_callsInsertSiteInfo('${digits}')">📋 Insert site-info request</button></div>`;
+  openDrawer('💬 '+(name?escHtml(name)+' — ':'')+escHtml(pretty), body,
+    `<button class="btn btn-g" onclick="closeDrawer()">Close</button>
+     <button class="btn btn-p" onclick="closeDrawer();createJobFromCall('${digits}','${escHtml(String(name||'').replace(/'/g,''))}',null)">＋ Create job</button>`);
+  loadCallThread(digits);
+}
 function createJobFromCall(digits, name, callId) {
   // Creating a job IS dealing with the call, so it clears the follow-up. This is
   // a deliberate click, not an inference — which is the line Jonathan drew when
@@ -30225,11 +30253,25 @@ function _bellSelectNotif(id, jobId) {
   // machine yet" and the reply was unreachable from the bell (Jonathan,
   // 2026-08-28). _bellOpenLead already knows how to route them.
   if (jobId && /^insp-/.test(jobId)) { _bellOpenLead(jobId); return; }
-  if (jobId && typeof getLead === 'function' && getLead(jobId)) { _bellOpenLead(jobId); }
-  else {
-    if (typeof toggleSmsBell === 'function') toggleSmsBell();
-    if (typeof toast === 'function') toast(jobId ? 'Acknowledged — the linked job hasn\'t synced to this machine yet' : 'Acknowledged — no job is linked to this notice (unmatched number)', 'success');
-  }
+  if (jobId && typeof getLead === 'function' && getLead(jobId)) { _bellOpenLead(jobId); return; }
+  // 28r: a text from a number with no job used to dead-end in a toast. If the
+  // notice carries (or its title contains) the number, open the conversation —
+  // read it, reply, or + Create job right there. Works from the acknowledged
+  // pile too, so nothing is buried anymore.
+  try {
+    const n = getNotification(id);
+    if (n && n.type === 'cust-sms') {
+      const ph = n.phone || (String(n.title||'').replace(/[^\d]/g,'').slice(-10).length===10 ? String(n.title||'').replace(/[^\d]/g,'') : '');
+      if (ph && String(ph).replace(/\D/g,'').slice(-10).length === 10) {
+        if (typeof toggleSmsBell === 'function') toggleSmsBell();
+        const nm = /^New text — (.+)$/.exec(n.title||'');
+        openUnroutedThread(ph, nm && !/^[+\d()\s-]+$/.test(nm[1]) ? nm[1] : '');
+        return;
+      }
+    }
+  } catch(_) {}
+  if (typeof toggleSmsBell === 'function') toggleSmsBell();
+  if (typeof toast === 'function') toast(jobId ? 'Acknowledged — the linked job hasn\'t synced to this machine yet' : 'Acknowledged — no job is linked to this notice (unmatched number)', 'success');
 }
 
 // Open an inspector's text window by inspector id. Used by the bell, the
