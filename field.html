@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-09-02 field-30';
+const BUILD = '2026-09-02 field-31';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -402,6 +402,9 @@ async function syncFromSP(){
   // same SharePoint list this loop already walks) — they were simply thrown away
   // instead of persisted. Adding them costs ZERO extra network calls.
   ['gk_leads','gk_customers','gk_quotes','gk_ahjs','gk_inspectors'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
+  // gk_vanstock (field-31) merges instead of overwriting — this phone may hold
+  // an unpushed restock list; newest-per-record wins, same rule the CRM applies.
+  if(got['gk_vanstock']){ try{ saveVS(_vsMerge(getVS(), JSON.parse(got['gk_vanstock']))); }catch(e){ console.warn('[field] vanstock merge', e); } }
 }
 // field-19 — WHICH PHOTOS A TECH MAY DELETE.
 // Only files the field app itself uploaded, which are named "<shot>__<epoch>_<name>"
@@ -752,7 +755,7 @@ function renderLogin(){
 // inside the job and was easy to miss); the view name shrinks to a right label.
 function header(title, back){
   return '<div class="top"><div class="ttl"><div class="brand">Green<span class="b2">Key</span> Field <span class="muted" style="font-weight:500">'+esc(BUILD)+'</span></div>'
-    + '<div><button class="chip" onclick="refresh()" style="margin-right:6px">↻</button><button class="chip" onclick="signOut()">Sign out</button></div></div>'
+    + '<div>'+(back?'':'<button class="chip" onclick="openVanStock()" style="margin-right:6px">🚐 Van</button>')+'<button class="chip" onclick="refresh()" style="margin-right:6px">↻</button><button class="chip" onclick="signOut()">Sign out</button></div></div>'
     + (back
        ? '<div class="h1row"><h1 class="hback" onclick="goJobs()">‹ My Jobs</h1><span class="hlab">'+esc(title)+'</span></div>'
        : '<h1>'+esc(title)+'</h1>')
@@ -1200,9 +1203,172 @@ function renderDetail(id){
   _pqPaint(l.id);
   window.scrollTo(0,0);
 }
+
+// ── VAN STOCK (2026-09-02, field-31 — Jonathan) ─────────────────────────────
+// Monday clean & stock. ONE standard master checklist (Chase maintains it —
+// editable by anyone until vs-config.adminOnly is flipped in the CRM). Walk
+// the van, flag what's short or needs replacing, and the flags become a
+// restock list the tech can call in to the distributor and check off at the
+// counter. Everything lives in gk_vanstock — a flat array of records merged
+// by id+updatedAt (deletes are `deleted:true` tombstones), synced through the
+// same SharePoint row store as every other key.
+function getVS(){ try{ return JSON.parse(localStorage.getItem('gk_vanstock')||'[]'); }catch(e){ return []; } }
+function saveVS(arr){ localStorage.setItem('gk_vanstock', JSON.stringify(arr)); }
+function _vsMerge(localArr, spArr){
+  const map=new Map(); (spArr||[]).forEach(function(r){ if(r&&r.id) map.set(r.id,r); });
+  (localArr||[]).forEach(function(r){ if(!r||!r.id) return; const ex=map.get(r.id);
+    if(!ex || String(r.updatedAt||'')>String(ex.updatedAt||'')) map.set(r.id,r); });
+  return [...map.values()];
+}
+function vsItems(){ return getVS().filter(function(r){return r&&r.kind==='item'&&!r.deleted;}).sort(function(a,b){ return String(a.cat||'').localeCompare(String(b.cat||''))||String(a.name||'').localeCompare(String(b.name||'')); }); }
+function vsLists(){ return getVS().filter(function(r){return r&&r.kind==='list'&&!r.deleted;}).sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); }); }
+function vsConfig(){ return getVS().find(function(r){return r&&r.kind==='config';})||{adminOnly:false}; }
+function vsUpsert(rec){ const arr=getVS(); const i=arr.findIndex(function(r){return r&&r.id===rec.id;}); rec.updatedAt=new Date().toISOString(); if(i>=0) arr[i]=Object.assign({},arr[i],rec); else arr.push(rec); saveVS(arr); _vsPushSoon(); }
+let _vsPushTimer=null;
+function _vsPushSoon(){ clearTimeout(_vsPushTimer); _vsPushTimer=setTimeout(function(){ pushVanStock().catch(function(e){ console.warn('[field] vanstock push', e); }); }, 1500); }
+async function pushVanStock(){
+  if(!_spList) return;
+  let itemId=null, spVal=null, next='/sites/'+_spSite+'/lists/'+_spList+'/items?$expand=fields&$top=200';
+  while(next){ const res=await graphFetch(next); for(const it of (res.value||[])){ if(it.fields&&it.fields.Title==='gk_vanstock'){ itemId=it.id; spVal=it.fields.DataValue; } } next=res['@odata.nextLink']||null; }
+  let merged=getVS();
+  if(spVal){ try{ merged=_vsMerge(getVS(), JSON.parse(spVal)); }catch(e){} }
+  saveVS(merged);
+  const val=JSON.stringify(merged);
+  if(itemId) await graphPatch('/sites/'+_spSite+'/lists/'+_spList+'/items/'+itemId+'/fields', { DataValue: val });
+  else { const r=await fetch('https://graph.microsoft.com/v1.0/sites/'+_spSite+'/lists/'+_spList+'/items',{method:'POST',headers:{Authorization:'Bearer '+_gToken,'Content-Type':'application/json'},body:JSON.stringify({fields:{Title:'gk_vanstock',DataValue:val}})}); if(!r.ok) throw new Error('POST '+r.status); }
+}
+function _vsTechName(){ try{ const a=_msal.getAllAccounts()[0]; if(a&&a.name) return a.name; }catch(e){} return 'tech'; }
+let _vsFlags={};
+function openVanStock(){ location.hash='#vs'; renderVanStock(); }
+function renderVanStock(){
+  const items=vsItems(); const cfg=vsConfig();
+  const open=vsLists().filter(function(l){return !l.closedAt;});
+  const flagged=Object.keys(_vsFlags).length;
+  const cats=[...new Set(items.map(function(i){return i.cat||'Other';}))];
+  let body='';
+  if(open.length) body+='<div class="sec">Open restock lists ('+open.length+')</div>'+open.map(function(L){ return '<a class="card" onclick="openVanList(\''+esc(L.id)+'\')"><div class="jrow"><div style="flex:1;min-width:0"><div class="jname">'+esc(mdy(String(L.createdAt).slice(0,10)))+' — '+esc(L.by||'')+'</div><div class="muted" style="font-size:12.5px">'+L.items.length+' item'+(L.items.length===1?'':'s')+' · '+L.items.filter(function(i){return i.filled;}).length+' picked up</div></div><div class="chev">›</div></div></a>'; }).join('');
+  body+='<div class="sec" style="display:flex;align-items:center;justify-content:space-between">Walk the van'+(cfg.adminOnly?'':'<button class="chip" onclick="openVanMaster()">✎ Edit master list</button>')+'</div>';
+  if(!items.length) body+='<div class="empty">No master checklist yet.'+(cfg.adminOnly?'':' Tap “Edit master list” to add the first items.')+'</div>';
+  else body+='<div class="muted" style="font-size:12.5px;margin:0 2px 6px">Tap anything that’s short or needs replacing, set how many, then create the restock list.</div>';
+  cats.forEach(function(cat){
+    body+='<div class="muted" style="font-size:12px;font-weight:600;margin:10px 2px 4px;text-transform:uppercase;letter-spacing:.4px">'+esc(cat)+'</div>';
+    items.filter(function(i){return (i.cat||'Other')===cat;}).forEach(function(it){
+      const f=_vsFlags[it.id];
+      body+='<div class="card" style="padding:10px 12px'+(f?';border-color:#e8b34a':'')+'">'
+        +'<div style="display:flex;align-items:center;gap:10px" onclick="vsToggle(\''+esc(it.id)+'\')">'
+        +'<div style="flex:1;min-width:0"><div style="font-weight:600">'+esc(it.name)+'</div><div class="muted" style="font-size:12px">keep '+esc(String(it.qty||1))+' on van</div></div>'
+        +'<div style="font-size:20px">'+(f?'🚩':'○')+'</div></div>'
+        +(f?('<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap" onclick="event.stopPropagation()">'
+          +'<button class="chip" onclick="vsQty(\''+esc(it.id)+'\',-1)">−</button><span style="font-weight:700;min-width:26px;text-align:center">'+f.need+'</span><button class="chip" onclick="vsQty(\''+esc(it.id)+'\',1)">＋</button>'
+          +'<button class="chip" style="'+(f.repl?'background:#e8b34a;color:#0d1117':'')+'" onclick="vsRepl(\''+esc(it.id)+'\')">🔧 Replace</button>'
+          +'<input class="srch" style="margin-top:0;flex:1;min-width:110px;padding:7px 9px;font-size:13px" placeholder="note (brand, size…)" value="'+esc(f.note||'')+'" oninput="_vsFlags[\''+esc(it.id)+'\'].note=this.value">'
+          +'</div>'):'')
+        +'</div>';
+    });
+  });
+  $app().innerHTML=header('Van Stock', true)+'<div class="wrap">'+body+'<div style="height:70px"></div></div>'
+    +(flagged?'<div style="position:fixed;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:#0d1117;border-top:1px solid #1d222c;z-index:5"><button class="btn green" onclick="vsCreateList()">Create restock list ('+flagged+')</button></div>':'');
+  window.scrollTo(0,0);
+}
+function vsToggle(id){ if(_vsFlags[id]) delete _vsFlags[id]; else _vsFlags[id]={need:1,repl:false,note:''}; renderVanStock(); }
+function vsQty(id,d){ const f=_vsFlags[id]; if(!f) return; f.need=Math.max(1,(f.need||1)+d); renderVanStock(); }
+function vsRepl(id){ const f=_vsFlags[id]; if(!f) return; f.repl=!f.repl; renderVanStock(); }
+function vsCreateList(){
+  const items=vsItems(); const rows=[];
+  Object.keys(_vsFlags).forEach(function(id){ const it=items.find(function(x){return x.id===id;}); const f=_vsFlags[id]; if(it&&f) rows.push({name:it.name,cat:it.cat||'Other',need:f.need||1,repl:!!f.repl,note:(f.note||'').trim(),filled:false}); });
+  if(!rows.length) return;
+  const L={id:'vsl-'+Date.now(),kind:'list',createdAt:new Date().toISOString(),by:_vsTechName(),items:rows};
+  vsUpsert(L); _vsFlags={};
+  openVanList(L.id);
+}
+function openVanList(id){ location.hash='#vsl='+encodeURIComponent(id); renderVanList(id); }
+function _vsListText(L){
+  return 'GreenKey restock — '+mdy(String(L.createdAt).slice(0,10))+' ('+(L.by||'')+')\n'
+    + L.items.map(function(i){ return '• '+i.need+'× '+i.name+(i.repl?' (REPLACE)':'')+(i.note?(' — '+i.note):''); }).join('\n');
+}
+function renderVanList(id){
+  const L=vsLists().find(function(x){return x.id===id;});
+  if(!L){ $app().innerHTML=header('Restock', true)+'<div class="wrap"><div class="empty">List not found.</div></div>'; return; }
+  const doneN=L.items.filter(function(i){return i.filled;}).length;
+  const rows=L.items.map(function(i,idx){
+    return '<div class="card" style="padding:10px 12px;display:flex;align-items:center;gap:10px'+(i.filled?';opacity:.55':'')+'" onclick="vsFill(\''+esc(L.id)+'\','+idx+')">'
+      +'<div style="font-size:20px">'+(i.filled?'✅':'⬜')+'</div>'
+      +'<div style="flex:1;min-width:0"><div style="font-weight:600'+(i.filled?';text-decoration:line-through':'')+'">'+i.need+'× '+esc(i.name)+(i.repl?' <span class="chip amber">replace</span>':'')+'</div>'
+      +(i.note?'<div class="muted" style="font-size:12px">'+esc(i.note)+'</div>':'')+'</div></div>';
+  }).join('');
+  $app().innerHTML=header('Restock', true)+'<div class="wrap">'
+    +'<div class="jname" style="font-size:18px">'+esc(mdy(String(L.createdAt).slice(0,10)))+' — '+esc(L.by||'')+'</div>'
+    +'<div class="muted" style="font-size:13px;margin-bottom:8px">'+doneN+' of '+L.items.length+' picked up'+(L.closedAt?' · closed':'')+'</div>'
+    +'<div class="row2" style="margin-bottom:8px">'
+    +'<button class="btn ghost" onclick="vsCopy(\''+esc(L.id)+'\')">📋 Copy list</button>'
+    +(L.closedAt?'':'<button class="btn green" onclick="vsClose(\''+esc(L.id)+'\')">✅ Close list</button>')
+    +'</div>'
+    +rows
+    +'<button class="btn ghost" style="margin-top:10px" onclick="openVanStock()">‹ Back to Van Stock</button>'
+    +'</div>';
+  window.scrollTo(0,0);
+}
+function vsFill(listId, idx){
+  const arr=getVS(); const L=arr.find(function(r){return r&&r.id===listId;}); if(!L||!L.items||!L.items[idx]) return;
+  L.items[idx].filled=!L.items[idx].filled; L.updatedAt=new Date().toISOString();
+  saveVS(arr); _vsPushSoon(); renderVanList(listId);
+}
+function vsCopy(listId){
+  const L=vsLists().find(function(x){return x.id===listId;}); if(!L) return;
+  const t=_vsListText(L);
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function(){ alert('Copied.'); },function(){ prompt('Copy the list:', t); });
+  else prompt('Copy the list:', t);
+}
+function vsClose(listId){
+  if(!confirm('Close this restock list? Do this once everything is picked up (or ordered).')) return;
+  vsUpsert({id:listId, kind:'list', closedAt:new Date().toISOString()});
+  renderVanList(listId);
+}
+function openVanMaster(){ location.hash='#vsm'; renderVanMaster(); }
+function renderVanMaster(){
+  const cfg=vsConfig();
+  if(cfg.adminOnly){ $app().innerHTML=header('Master List', true)+'<div class="wrap"><div class="empty">The master list is locked to the office — ask Jonathan to change it in the CRM.</div></div>'; return; }
+  const items=vsItems(); const cats=[...new Set(items.map(function(i){return i.cat||'Other';}))];
+  let body='<div class="card"><div class="lab">Add an item</div>'
+    +'<input id="vsm-name" class="srch" style="margin-top:0" placeholder="Item (e.g. #12 THHN black, 500 ft)">'
+    +'<input id="vsm-cat" class="srch" style="margin-top:6px" placeholder="Category (e.g. Wire, Tools, Breakers)" list="vsm-cats">'
+    +'<datalist id="vsm-cats">'+cats.map(function(c){return '<option value="'+esc(c)+'">';}).join('')+'</datalist>'
+    +'<input id="vsm-qty" class="srch" style="margin-top:6px" placeholder="Keep on van (qty)" inputmode="numeric">'
+    +'<button class="btn green" style="margin-top:8px" onclick="vsmAdd()">＋ Add to master list</button></div>';
+  cats.forEach(function(cat){
+    body+='<div class="muted" style="font-size:12px;font-weight:600;margin:10px 2px 4px;text-transform:uppercase;letter-spacing:.4px">'+esc(cat)+'</div>';
+    items.filter(function(i){return (i.cat||'Other')===cat;}).forEach(function(it){
+      body+='<div class="card" style="padding:10px 12px;display:flex;align-items:center;gap:10px">'
+        +'<div style="flex:1;min-width:0;font-weight:600">'+esc(it.name)+'</div>'
+        +'<input class="srch" style="margin-top:0;width:64px;text-align:center;padding:7px 4px" value="'+esc(String(it.qty||1))+'" inputmode="numeric" onchange="vsmQty(\''+esc(it.id)+'\',this.value)">'
+        +'<button class="chip" style="color:#ff9a9a" onclick="vsmDel(\''+esc(it.id)+'\')">✕</button></div>';
+    });
+  });
+  body+='<button class="btn ghost" style="margin-top:10px" onclick="openVanStock()">‹ Back to Van Stock</button>';
+  $app().innerHTML=header('Master List', true)+'<div class="wrap">'+body+'</div>';
+  window.scrollTo(0,0);
+}
+function vsmAdd(){
+  const name=(document.getElementById('vsm-name').value||'').trim();
+  const cat=(document.getElementById('vsm-cat').value||'').trim()||'Other';
+  const qty=parseInt(document.getElementById('vsm-qty').value,10)||1;
+  if(!name){ alert('Type the item first.'); return; }
+  vsUpsert({id:'vsi-'+Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:'item', name:name, cat:cat, qty:qty});
+  renderVanMaster();
+}
+function vsmQty(id,v){ vsUpsert({id:id, kind:'item', qty:parseInt(v,10)||1}); }
+function vsmDel(id){ const it=vsItems().find(function(x){return x.id===id;}); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; vsUpsert({id:id, kind:'item', deleted:true}); renderVanMaster(); }
+
 function goJobs(){ _stopFldSms(); closeLightbox(); location.hash=''; renderJobs(); }
 async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
-function route(){ const m=/#job=([^&]+)/.exec(location.hash); if(m) renderDetail(decodeURIComponent(m[1])); else renderJobs(); }
+function route(){
+  const m=/#job=([^&]+)/.exec(location.hash); if(m){ renderDetail(decodeURIComponent(m[1])); return; }
+  const w=/#wd=([^&]+)/.exec(location.hash); if(w){ renderWalkdown(decodeURIComponent(w[1])); return; }
+  const vl=/#vsl=([^&]+)/.exec(location.hash); if(vl){ renderVanList(decodeURIComponent(vl[1])); return; }
+  if(/#vsm/.test(location.hash)){ renderVanMaster(); return; }
+  if(/#vs/.test(location.hash)){ renderVanStock(); return; }
+  renderJobs();
+}
 window.addEventListener('hashchange', route);
 
 // ---------- writes (Phase 2): photo upload + mark complete ----------

@@ -1060,7 +1060,7 @@
             </button>
           </div>
         </div>
-        <textarea id="em-body" style="width:100%;min-height:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55;white-space:pre"></textarea>
+        <textarea id="em-body" style="width:100%;min-height:340px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.55;white-space:pre-wrap;overflow-wrap:break-word"></textarea>
       </div>
       <div style="margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28n</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28p</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2913,7 +2913,7 @@ function closeSidebar() {
 // ── SETTINGS ──
 function buildSettingsNav(user) {
   const secs = user.role==='admin'
-    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Text Templates','Email Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
+    ? ['Labor Rates','Quick Quote Pricing','Fees & Permits','Jurisdictions','Qmerit','Materials Library','Van Stock','Text Templates','Email Templates','Tech Mode','Scheduling','Skills','Charger Support','Users & Access','Backups & Export','Account']
     : ['Account'];
   const nav = document.getElementById('snav2');
   nav.innerHTML = secs.map((s,i)=>`<div class="sni${i===0?' active':''}" onclick="showSec(this,'${s}')">${s}</div>`).join('');
@@ -2968,6 +2968,7 @@ const SECS = {
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
 
   'Materials Library':null,
+  'Van Stock':null,
   'Tech Mode':null,
   'Backups & Export':null,
   'Charger Support':null,
@@ -3272,6 +3273,8 @@ function showSec(el, sec) {
   if (el) el.classList.add('active');
   if (sec==='Materials Library') {
     document.getElementById('spanel').innerHTML = renderMaterialsLibrary();
+  } else if (sec==='Van Stock') {
+    document.getElementById('spanel').innerHTML = renderVanStockSettings();
   } else if (sec==='Tech Mode') {
     document.getElementById('spanel').innerHTML = renderTechModeSettings();
   } else if (sec==='Backups & Export') {
@@ -11882,7 +11885,7 @@ function renderEmailTemplateSettings() {
         ${hasSubject ? `<input id="etpl-subject-${k}" type="text" value="${escHtml(t.subject || '')}" placeholder="Subject"
           style="width:100%;margin-bottom:6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--font);font-size:12.5px;color:var(--text-primary);outline:none">` : ''}
         <textarea id="etpl-body-${k}" rows="${isBig ? 14 : 4}" spellcheck="false"
-          style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.5;white-space:pre">${escHtml(t.body || '')}</textarea>
+          style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.5;white-space:pre-wrap;overflow-wrap:break-word">${escHtml(t.body || '')}</textarea>
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn btn-p" style="padding:4px 12px;font-size:11.5px" onclick="saveEmailTemplate('${k}')">Save</button>
           ${isModified ? `<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="resetEmailTemplate('${k}')" title="Discard your edits and restore the stock wording">↩ Reset to stock</button>` : ''}
@@ -12350,6 +12353,92 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
 }
 
 // ── MATERIALS LIBRARY (SETTINGS) ──
+// ── VAN STOCK (2026-09-02, crm-2026-08-28p — Jonathan) ──────────────────────
+// Monday clean & stock. ONE standard master checklist for every van (Chase's
+// tool/material lists, made living). The FIELD app is where it's walked: flag
+// what's short, create a restock list, call it in, check items off at the
+// counter. This panel is the office view: edit the master list, review the
+// Monday lists, and (when the time comes) flip editing to office-only.
+// Storage `gk_vanstock`: flat array merged by id+updatedAt like every other
+// record key (deletes are `deleted:true` tombstones — union-merge lesson):
+//   {id:'vsi-…', kind:'item', cat, name, qty, deleted?, updatedAt}
+//   {id:'vsl-…', kind:'list', createdAt, by, items:[{name,cat,need,repl,note,filled}], closedAt?, updatedAt}
+//   {id:'vs-config', kind:'config', adminOnly, updatedAt}
+const VSK='gk_vanstock';
+function getVanStock(){ try{ return JSON.parse(localStorage.getItem(VSK)||'[]'); }catch(e){ return []; } }
+function saveVanStock(arr){ localStorage.setItem(VSK, JSON.stringify(arr)); if(typeof queueSPSync==='function') queueSPSync(); }
+function vsItems(){ return getVanStock().filter(r=>r&&r.kind==='item'&&!r.deleted).sort((a,b)=>String(a.cat||'').localeCompare(String(b.cat||''))||String(a.name||'').localeCompare(String(b.name||''))); }
+function vsAllLists(){ return getVanStock().filter(r=>r&&r.kind==='list'&&!r.deleted).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))); }
+function vsConfig(){ return getVanStock().find(r=>r&&r.kind==='config')||{id:'vs-config',kind:'config',adminOnly:false}; }
+function _vsUpsert(rec){ const arr=getVanStock(); const i=arr.findIndex(r=>r&&r.id===rec.id); rec.updatedAt=new Date().toISOString(); if(i>=0) arr[i]=Object.assign({},arr[i],rec); else arr.push(rec); saveVanStock(arr); }
+function _vsRefresh(){ if(typeof showSec==='function') showSec(document.querySelector('.sni.active'),'Van Stock'); }
+function vsCrmAddItem(){
+  const name=(document.getElementById('vs-add-name')?.value||'').trim();
+  const cat=(document.getElementById('vs-add-cat')?.value||'').trim()||'Other';
+  const qty=parseInt(document.getElementById('vs-add-qty')?.value,10)||1;
+  if(!name){ toast('Type the item name first','warning'); return; }
+  _vsUpsert({id:'vsi-'+Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:'item', name, cat, qty});
+  _vsRefresh();
+}
+function vsCrmQty(id,v){ _vsUpsert({id, kind:'item', qty:parseInt(v,10)||1}); }
+function vsCrmDel(id){ const it=vsItems().find(x=>x.id===id); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; _vsUpsert({id, kind:'item', deleted:true}); _vsRefresh(); }
+function vsCrmLock(on){ _vsUpsert({id:'vs-config', kind:'config', adminOnly:!!on}); toast(on?'Master list locked — only the office can edit it now.':'Master list unlocked — techs can edit it from the field app.','success'); _vsRefresh(); }
+function vsCrmDelList(id){ if(!confirm('Delete this restock list?')) return; _vsUpsert({id, kind:'list', deleted:true}); _vsRefresh(); }
+function vsCrmCopyList(id){
+  const L=vsAllLists().find(x=>x.id===id); if(!L) return;
+  const t='GreenKey restock — '+mdy(String(L.createdAt).slice(0,10))+' ('+(L.by||'')+')\n'+L.items.map(i=>'• '+i.need+'× '+i.name+(i.repl?' (REPLACE)':'')+(i.note?(' — '+i.note):'')).join('\n');
+  navigator.clipboard&&navigator.clipboard.writeText ? navigator.clipboard.writeText(t).then(()=>toast('Copied','success'),()=>prompt('Copy:',t)) : prompt('Copy:',t);
+}
+let _vsOpenList=null;
+function vsCrmToggleList(id){ _vsOpenList=(_vsOpenList===id?null:id); _vsRefresh(); }
+function renderVanStockSettings(){
+  const isAdmin=S.user?.role==='admin';
+  const cfg=vsConfig(); const items=vsItems(); const lists=vsAllLists().slice(0,12);
+  const cats=[...new Set(items.map(i=>i.cat||'Other'))];
+  const listHtml=lists.length?lists.map(L=>{
+    const doneN=L.items.filter(i=>i.filled).length; const open=_vsOpenList===L.id;
+    return `<div class="card" style="margin-bottom:8px;padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="vsCrmToggleList('${L.id}')">
+        <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">${mdy(String(L.createdAt).slice(0,10))} — ${escHtml(L.by||'')}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${L.items.length} item${L.items.length===1?'':'s'} · ${doneN} picked up</div></div>
+        <span class="chip ${L.closedAt?'':'chip-flag'}" style="flex-shrink:0">${L.closedAt?'closed':'open'}</span>
+        <span style="color:var(--text-muted)">${open?'▾':'▸'}</span>
+      </div>
+      ${open?`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+        ${L.items.map(i=>`<div style="display:flex;gap:8px;padding:3px 0;font-size:12.5px"><span>${i.filled?'✅':'⬜'}</span><span style="flex:1">${i.need}× ${escHtml(i.name)}${i.repl?' <span class="chip chip-flag" style="font-size:10px">replace</span>':''}${i.note?(' <span style="color:var(--text-muted)">— '+escHtml(i.note)+'</span>'):''}</span></div>`).join('')}
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px" onclick="vsCrmCopyList('${L.id}')">📋 Copy</button>
+          ${isAdmin?`<button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;color:var(--red)" onclick="vsCrmDelList('${L.id}')">Delete</button>`:''}
+        </div></div>`:''}
+    </div>`;
+  }).join(''):`<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No restock lists yet — they appear here when a tech walks the van in the field app (🚐 Van, top of My Jobs).</div>`;
+  return `<div class="stitle">Van Stock</div>
+    <div class="sdesc">Monday clean &amp; stock. One standard master checklist for every van — techs walk it in the field app (🚐 Van button), flag what's short, and the flags become a restock list they can call in and check off at the counter. Lists sync back here.</div>
+    ${isAdmin?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12.5px;color:var(--text-secondary)">
+      <input type="checkbox" id="vs-lock" ${cfg.adminOnly?'checked':''} onchange="vsCrmLock(this.checked)" style="accent-color:var(--blue)">
+      <label for="vs-lock" style="cursor:pointer">Lock the master list — only the office can edit it (techs can still walk it and make restock lists)</label>
+    </div>`:''}
+    <div class="fsec-title">Restock lists</div>
+    ${listHtml}
+    <div class="fsec-title" style="margin-top:16px">Master checklist (${items.length})</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <input class="fi" id="vs-add-name" placeholder="Item (e.g. #12 THHN black, 500 ft)" style="flex:2;min-width:180px">
+      <input class="fi" id="vs-add-cat" placeholder="Category" list="vs-cats" style="flex:1;min-width:110px">
+      <datalist id="vs-cats">${cats.map(c=>`<option value="${escHtml(c)}">`).join('')}</datalist>
+      <input class="fi" id="vs-add-qty" placeholder="Qty" inputmode="numeric" style="width:70px">
+      <button class="btn btn-p" onclick="vsCrmAddItem()">＋ Add</button>
+    </div>
+    ${items.length?cats.map(cat=>`<div style="margin-bottom:10px">
+      <div class="fsec-title">${escHtml(cat)}</div>
+      ${items.filter(i=>(i.cat||'Other')===cat).map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span style="flex:1">${escHtml(i.name)}</span>
+        <span style="font-size:11px;color:var(--text-muted)">keep</span>
+        <input class="fi" value="${escHtml(String(i.qty||1))}" inputmode="numeric" style="width:56px;text-align:center;padding:4px" onchange="vsCrmQty('${i.id}',this.value)">
+        <span style="color:var(--red);cursor:pointer" onclick="vsCrmDel('${i.id}')">✕</span>
+      </div>`).join('')}
+    </div>`).join(''):`<div style="font-size:12.5px;color:var(--text-muted)">Nothing yet — add Chase's list here, or he can build it straight from his phone (🚐 Van → ✎ Edit master list).</div>`}`;
+}
+
 function renderMaterialsLibrary(){
   initMaterials();
   const mats=getMaterials();
@@ -24033,7 +24122,7 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
-const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK, CALLK];
+const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK, CALLK, 'gk_vanstock'];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
 // iOS Safari (and especially installed iOS PWAs) block MSAL's cross-origin
@@ -24428,7 +24517,7 @@ async function _spEnsureDrive() {
 // gk_calls is a MERGE key: both Jonathan's and Sherri's machines import calls
 // from the worker independently, so a destructive replace would lose whichever
 // side polled second. Rows carry id + updatedAt like every other merged array.
-const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments', 'gk_calls'];
+const MERGE_KEYS = ['gk_leads', 'gk_customers', 'gk_quotes', 'gk_tasks', 'gk_notifications', 'gk_materials', 'gk_inspectors', 'gk_unmatched_payments', 'gk_calls', 'gk_vanstock'];
 // ── Payment VOIDS (2026-08-28, crm-2026-08-28b) ──────────────────────────
 // The merge below UNIONS payment ledgers by id (25e), which is right for money
 // that was added — and wrong for money that was deliberately REMOVED: the
