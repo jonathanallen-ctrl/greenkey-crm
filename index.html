@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28s</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28t</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -29901,10 +29901,12 @@ function _importWebLead(row) {
   // The immutable audit row (with IP/UA) was written server-side at submit.
   if (row.consent_sms) {
     try {
+      const _isTextLead = String(row.source||'').toLowerCase()==='sms-ai';
       setConsentSms(custId, {
-        status: CONSENT_STATUSES.WEB_FORM,
-        source: 'web_form',
-        notes: 'Checked TCPA consent box on ' + (row.page || 'greenkey-usa.com') + ' web form',
+        status: _isTextLead ? CONSENT_STATUSES.INBOUND_INQUIRY : CONSENT_STATUSES.WEB_FORM,
+        source: _isTextLead ? 'inbound_inquiry' : 'web_form',
+        notes: _isTextLead ? 'Customer initiated contact by texting the business number (AI intake)'
+                           : 'Checked TCPA consent box on ' + (row.page || 'greenkey-usa.com') + ' web form',
         evidence: {
           consentText: row.consent_text || '',
           page: row.page || '',
@@ -29940,7 +29942,7 @@ function _importWebLead(row) {
     customerLastName: ln,
     customerEmail: email,
     customerPhone: phone,
-    source: 'Website',
+    source: (String(row.source||'').toLowerCase()==='sms-ai') ? 'Text' : 'Website',
     jobType,
     workKind: (String(row.service_type||'').toLowerCase()==='repair') ? 'repair' : 'install',
     propertyType: (String(row.service_type||'').toLowerCase()==='commercial') ? 'commercial' : 'residential',
@@ -29968,19 +29970,22 @@ function _importWebLead(row) {
   const formLabel = row.source === 'residential'   ? 'Residential EV form'
                   : row.source === 'commercial'    ? 'Commercial form'
                   : row.source === 'phone-intake'  ? 'Phone call — details sent by the customer'
+                  : row.source === 'sms-ai'        ? 'Texted the business number — job created by AI intake'
                   : 'Contact form';
   upsertNotification({
     id: 'web-lead-' + row.id,
     type: 'web-lead',
     // A phone-intake lead is someone Jonathan already SPOKE to — calling that
     // "New website lead" would badly misrepresent where it came from.
-    title: row.source === 'phone-intake' ? 'Details received after a call' : 'New website lead',
+    title: row.source === 'phone-intake' ? 'Details received after a call'
+         : row.source === 'sms-ai'        ? 'New job from a text'
+         : 'New website lead',
     description: name + ' — ' + formLabel + (phone ? (' · ' + phone) : ''),
     jobId: leadId
   });
   try {
     if (typeof _activityOsNotify === 'function') {
-      _activityOsNotify([{ id: 'web-lead-' + row.id, title: 'New website lead', description: name + ' — ' + formLabel, jobId: leadId }]);
+      _activityOsNotify([{ id: 'web-lead-' + row.id, title: row.source==='sms-ai' ? 'New job from a text' : 'New website lead', description: name + ' — ' + formLabel, jobId: leadId }]);
     }
   } catch (_) {}
   try { if (typeof updateLeadsBadge === 'function') updateLeadsBadge(); } catch (_) {}
