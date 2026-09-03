@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28r</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28s</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -27571,7 +27571,13 @@ function _activityOsNotify(notifs) {
           icon: typeof GK_LOGO_B64 !== 'undefined' ? GK_LOGO_B64 : undefined,
           tag: n.id
         });
-        note.onclick = () => { try { window.focus(); if (n.jobId) _bellOpenLead(n.jobId); } catch(_){} note.close(); };
+        note.onclick = () => { try {
+          window.focus();
+          const _resolvable = n.jobId && (/^insp-/.test(n.jobId) || (typeof getLead === 'function' && getLead(n.jobId)));
+          if (_resolvable) _bellOpenLead(n.jobId);
+          else if (typeof openUnroutedThread === 'function' && n.phone) openUnroutedThread(n.phone, '');
+          else if (n.jobId) _bellOpenLead(n.jobId);
+        } catch(_){} note.close(); };
       } catch(_){}
     });
   };
@@ -30084,7 +30090,11 @@ function _bellFireNotifications(messages) {
       // Clicking the notification focuses the tab and opens the lead.
       n.onclick = () => {
         window.focus();
-        if (m.lead_id && typeof _bellOpenLead === 'function') _bellOpenLead(m.lead_id);
+        const _lid = m.lead_id;
+        const _resolvable = _lid && (/^insp-/.test(_lid) || (typeof getLead === 'function' && getLead(_lid)));
+        if (_resolvable && typeof _bellOpenLead === 'function') _bellOpenLead(_lid);
+        else if (typeof openUnroutedThread === 'function' && (m.from_number || m.phone)) openUnroutedThread(m.from_number || m.phone, '');
+        else if (_lid && typeof _bellOpenLead === 'function') _bellOpenLead(_lid);
         n.close();
       };
     } catch(_) { /* notification blocked — badge already covers it */ }
@@ -30155,7 +30165,7 @@ function _bellRenderAckedList(list) {
     const meta = _bellTypeMeta(n.type);
     const when = _bellRelativeTime(n.at || n.createdAt);
     const by = Object.values(n.ackedBy||{}).map(v => (v && v.name) || '').filter(Boolean).join(', ');
-    return `<div style="padding:10px 12px;border-bottom:1px solid var(--border);border-left:3px solid ${meta.accent};opacity:.72;cursor:${n.jobId?'pointer':'default'}" ${n.jobId?`onclick="_bellOpenLead('${n.jobId}')"`:''} title="${n.jobId?'Open the job':''}">
+    return `<div style="padding:10px 12px;border-bottom:1px solid var(--border);border-left:3px solid ${meta.accent};opacity:.72;cursor:${(n.jobId||n.type==='cust-sms')?'pointer':'default'}" ${(n.jobId||n.type==='cust-sms')?`onclick="_bellSelectNotif('${n.id}','${n.jobId||''}')"`:''} title="${n.jobId?'Open the job':(n.type==='cust-sms'?'Open the conversation':'')}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0">
           <div style="font-size:12.5px;font-weight:600;color:var(--text-primary)">${meta.ico} ${escHtml(n.title||'')}</div>
