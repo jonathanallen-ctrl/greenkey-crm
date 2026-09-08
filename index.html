@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28u</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28y</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -3939,6 +3939,45 @@ function renderPipeline() {
   else renderPipeList(leads);
 }
 
+// Scheduling-column status chip (28y). Reads lead.scheduling.confirmations —
+// written by BOTH senders of the "Please confirm your appointment" email (the
+// Scheduler's day confirmations and the Schedule-in-Outlook window) — plus the
+// install milestone for a booking that went out without a confirm email.
+//   Offered  (amber) — request sent, no reply yet   ← the one Jon was missing
+//   Confirmed (green) — customer clicked Confirm (or was marked manually)
+//   Reschedule requested (red) — customer asked for another day
+//   Booked, no confirm sent (grey) — Outlook event exists, customer not asked
+function _schedShortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T12:00:00');
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString('en-US', {weekday:'short'}) + ' ' + (d.getMonth()+1) + '/' + d.getDate();
+}
+function schedOfferChip(l) {
+  const confs = (l.scheduling && l.scheduling.confirmations) || {};
+  const im = (l.milestones && l.milestones.installScheduled) || {};
+  let date = im.date && confs[im.date] ? im.date : '';
+  if (!date) {
+    // Latest request sent, by sentAt — the one the customer is looking at.
+    const keys = Object.keys(confs).sort((a,b)=>new Date(confs[b].sentAt||0)-new Date(confs[a].sentAt||0));
+    date = keys[0] || '';
+  }
+  const c = date ? confs[date] : null;
+  const chip = (txt, bg, fg, title) =>
+    `<span class="chip" style="background:${bg};color:${fg};border:1px solid ${fg}55;font-weight:600" title="${escHtml(title)}">${txt}</span>`;
+  if (c) {
+    const lbl = _schedShortDate(date);
+    if (c.status === 'confirmed')
+      return chip('✓ Confirmed ' + lbl, 'rgba(46,204,113,.12)', '#2ecc71', 'Customer confirmed ' + formatSchedDate(date) + (c.manual ? ' (recorded manually)' : ''));
+    if (c.status === 'reschedule_requested')
+      return chip('↻ Reschedule requested', 'rgba(231,76,60,.12)', '#e74c3c', 'Customer asked for a different day than ' + formatSchedDate(date) + (c.note ? ' — "' + c.note + '"' : ''));
+    return chip('📅 Offered ' + lbl + ' · awaiting reply', 'rgba(255,200,97,.14)', '#ffc861', 'Confirmation request sent ' + (c.sentAt ? mdy(c.sentAt) : '') + ' for ' + formatSchedDate(date) + ' — no reply yet. Do NOT offer this slot to anyone else.');
+  }
+  if (im.date)
+    return chip('📅 Booked ' + _schedShortDate(im.date) + ' · no confirm sent', 'rgba(150,160,180,.14)', '#9aa5b8', 'Install is on the calendar for ' + formatSchedDate(im.date) + ' but the customer was not sent a confirmation request.');
+  return '';
+}
+
 function renderKanban(leads) {
   const _liveScroll = _pipeRestorePending ? null : _pipeCaptureScroll();
   const custs = getCustomers();
@@ -3947,7 +3986,13 @@ function renderKanban(leads) {
   if (!wrap) return;
   wrap.className = 'kanban';
   wrap.innerHTML = STAGES.filter(s=>s.id!=='archived' && s.id!=='not-won').map(stage=>{
-    const cards = leads.filter(l=>l.stage===stage.id);
+    // Oldest-first within every column (2026-09-08, Jonathan + Sherri
+    // scheduling): the job that has waited longest in a stage sits at the
+    // top, so Quote Approved / Awaiting Permit / Awaiting Charger / Scheduling
+    // get worked in fairness order. Key = the same stamp the card's "days"
+    // chip shows (stageAt, falling back to createdAt). Display-only.
+    const cards = leads.filter(l=>l.stage===stage.id)
+      .slice().sort((a,b)=>new Date(a.stageAt||a.createdAt||0)-new Date(b.stageAt||b.createdAt||0));
     const cardHtml = cards.length ? cards.map(l=>{
       const c = custs.find(x=>x.id===l.customerId);
       const name = c ? custFullName(c) : (l.customerName||'No customer');
@@ -3967,6 +4012,10 @@ function renderKanban(leads) {
           techChip = `<span class="chip" style="background:rgba(255,200,97,.12);color:#ffc861;border:1px solid rgba(255,200,97,.35)" title="Tech tapped Arrived${_fms.techArrived.date?(' '+_fms.techArrived.date):''}${_fms.techArrived.time?(' at '+_fms.techArrived.time):''}">🚐 On site${_fms.techArrived.time?(' '+_fms.techArrived.time):''}</span>`;
         }
       }
+      // 2026-09-08 (28y, Jon): in the Scheduling column you could not tell who
+      // had already been OFFERED a date — two customers got the same full day.
+      // One chip, read from the same record the Install desk uses.
+      const offerChip = (stage.id === 'scheduled') ? schedOfferChip(l) : '';
       const _niK = STAGES.findIndex(s=>s.id===stage.id)+1; const isLast = !STAGES[_niK] || STAGES[_niK].id==='not-won' || STAGES[_niK].id==='archived';
       return `<div class="kcard" draggable="true" data-lead-id="${l.id}"
         ondragstart="kcardDragStart(event,'${l.id}')"
@@ -3975,7 +4024,7 @@ function renderKanban(leads) {
         <div class="kcard-id">${l.id}</div>
         <div class="kcard-name">${name}</div>
         <div class="kcard-addr">${addr}</div>
-        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${techChip}${actChip}${(() => {
+        <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${offerChip}${techChip}${actChip}${(() => {
           const _po = (typeof openPunchCount === 'function') ? openPunchCount(l) : 0;
           return _po ? `<span class="chip" style="background:rgba(243,156,18,.14);color:#f39c12;border:1px solid rgba(243,156,18,.35)" title="Open punch items — work GreenKey still owes on this job">🔧 ${_po} open</span>` : '';
         })()}</div>
@@ -11517,6 +11566,7 @@ Here's exactly how the process works once you're ready to go:
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
      Permit approval typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 {orderSteps}
 
 Total timeline from start to finish: typically 2–4 weeks.
@@ -11556,6 +11606,7 @@ Here's how the process works:
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
      Permit approval typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   3. WE GET YOU SCHEDULED
      Once the permit is in hand, we'll reach out to get you on the calendar
@@ -11627,6 +11678,7 @@ WHAT HAPPENS NEXT
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
      Permit approval typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   3. EQUIPMENT ORDER & DELIVERY
      We order the equipment and coordinate delivery to your property.
@@ -11722,6 +11774,7 @@ WHAT HAPPENS NEXT
 
   2. WE APPLY FOR YOUR PERMIT
      We submit your electrical permit application to the local jurisdiction.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   3. WE DO THE PHYSICAL WORK
      About 90% of the install is completed and we get the AHJ service inspection.
@@ -11754,6 +11807,7 @@ Here's what to expect from here:
 
   2. WE APPLY FOR YOUR PERMIT
      Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   3. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
@@ -11783,6 +11837,7 @@ Here's what to expect from here:
 
   2. WE APPLY FOR YOUR PERMIT
      Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   3. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
@@ -11808,6 +11863,7 @@ WHAT HAPPENS NEXT
 
   1. WE APPLY FOR YOUR PERMIT
      We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
+     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
 
   2. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
@@ -12024,6 +12080,14 @@ function _buildUtilityCoordinatedEmail({ q, custFirst, projectPhrase, total, add
 // N of M when multi-page) on every page at the end.
 function _pdfMakeBrk(doc, PH, state){ const FOOT=70; return (need)=>{ if(state.y + need > PH - FOOT){ doc.addPage(); state.y = 54; } }; }
 function _pdfMakeFlow(doc, brk, state){ return (lines, x, lh)=>{ for(const ln of (lines||[])){ brk(lh); doc.text(ln, x, state.y); state.y += lh; } }; }
+// ── PERMIT-FEE TERM (2026-09-08, Jonathan) ─────────────────────────────────
+// "We've lost on this several times": a customer approves, we pull the permit,
+// they walk. One sentence, ONE place, printed on the quote PDF (TERMS block),
+// repeated in every quote-email "we apply for your permit" step, and shown on
+// the worker's accept page under the Confirm button (the contractual moment).
+// Worded so it is harmless on no-permit jobs ("if a permit is required").
+const QUOTE_PERMIT_TERM = 'If a permit is required, we apply for it once you accept. If the project is cancelled after the permit application has been submitted, the permit fee is non-refundable and will be invoiced to you.';
+
 function _pdfFooterAll(doc, W, PH, LGRAY, GRAY, line2){
   const pages = doc.getNumberOfPages();
   for (let p = 1; p <= pages; p++){
@@ -12202,6 +12266,14 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
         _fl(doc.splitTextToSize(_pdfExc,W-72),36,10);y+=8;
       }
     }
+  }
+  // TERMS (2026-09-08) — the permit-fee term, printed on every quote.
+  {
+    const _tl = doc.splitTextToSize(QUOTE_PERMIT_TERM, W-72);
+    _b(14 + _tl.length*10 + 8);
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);doc.text('TERMS',36,y);y+=11;
+    doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...DARK);
+    _fl(_tl,36,10);y+=8;
   }
   // footer — every page, with Page N of M when it runs long (2026-08-18n)
   _pdfFooterAll(doc,W,PH,LGRAY,GRAY,'This quote is valid for 30 days. Pricing subject to change after expiration.');
@@ -33118,12 +33190,24 @@ function getApptsOnDate(dateStr, techId) {
 let _schedLeadId = null;
 // Which appointment the open modal is fulfilling (null = create a new one).
 let _schedApptId = null;
+let _schedApptAdopted = false; // 28x: _schedApptId was inferred (open install), not passed in
 
 function scheduleInOutlook(leadId, apptId) {
   const lead = getLead(leadId);
   if (!lead) { toast('Job not found', 'error'); return; }
   // apptId set = we're booking (or rebooking) a specific requested appointment,
   // so the type comes from IT, not from the stage-based guess below.
+  // 2026-09-08 (28x, Jon — Cho and Tindel each on the calendar TWICE): the
+  // generic Schedule button opens this with NO apptId, so a job that already
+  // had a booked install got a brand-new appointment row and a brand-new
+  // Outlook event beside the old one. The "replace, don't duplicate" machinery
+  // only ran from the Reschedule button. Now: no apptId + the job already has
+  // an open install → treat it as a rebooking of THAT install.
+  _schedApptAdopted = false;
+  if (!apptId) {
+    const _openInst = getAppts(lead).find(a => a && a.type === 'installation' && !a.completedAt);
+    if (_openInst && !['lead-received','info-gathering','estimating'].includes(lead.stage)) { apptId = _openInst.id; _schedApptAdopted = true; }
+  }
   _schedApptId = apptId || null;
   const _fulfil = apptId ? getAppts(lead).find(a => a.id === apptId) : null;
   // NOTE: the spec backstop is NOT here. It lives in openSchedInOutlook(), at
@@ -33149,7 +33233,7 @@ function scheduleInOutlook(leadId, apptId) {
     while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
     dateInp.value  = (_fulfil && _fulfil.date) ? _fulfil.date : d.toISOString().slice(0,10);
     startInp.value = (_fulfil && _fulfil.time) ? _fulfil.time : '08:30';
-    const dur = _SCHED_TYPE_DEFAULT_HOURS[defaultType] || 1;
+    const dur = _schedDefaultHours(defaultType, lead);
     // End is derived from the ACTUAL start, not a hardcoded 8:30 — otherwise
     // rebooking an existing 13:00 appointment produced an end time in the
     // morning, before its own start (2026-07-28).
@@ -33184,6 +33268,22 @@ const _SCHED_TYPE_DEFAULT_HOURS = {
   'follow-up':     1,
   other:           1
 };
+
+// 2026-09-08 (28x, Sherri): "Est. hours" set on the job never reached this
+// window — an Installation always defaulted to the flat 3 h above, so a 5-hour
+// job was booked as 3 and the calendar lied. For installs the duration now
+// comes from the job (getJobHours: the typed Est. hours override, else the
+// detailed quote's labour hours, else the crew-geometry model), rounded to the
+// quarter hour. Other types keep their table default. End stays overridable.
+function _schedDefaultHours(type, lead) {
+  if (type === 'installation' && lead && typeof getJobHours === 'function') {
+    try {
+      const h = parseFloat(getJobHours(lead));
+      if (Number.isFinite(h) && h > 0) return Math.max(0.5, Math.round(h * 4) / 4);
+    } catch (_) {}
+  }
+  return _SCHED_TYPE_DEFAULT_HOURS[type] || 1;
+}
 
 // Appointment types that happen REMOTELY — nobody drives anywhere. For these the
 // calendar "Location" must be how to reach the customer, not the site address:
@@ -33232,7 +33332,7 @@ function onSchedStartChange() {
   const endInp = document.getElementById('sched-end-input');
   if (startInp && endInp && startInp.value) {
     const [h, m] = startInp.value.split(':').map(Number);
-    const dur = _SCHED_TYPE_DEFAULT_HOURS[type] || 1;
+    const dur = _schedDefaultHours(type, _schedLeadId ? getLead(_schedLeadId) : null);
     const end = new Date(); end.setHours(h || 0, m || 0, 0, 0);
     end.setMinutes(end.getMinutes() + Math.round(dur * 60));
     endInp.value = String(end.getHours()).padStart(2,'0') + ':' + String(end.getMinutes()).padStart(2,'0');
@@ -33652,6 +33752,14 @@ async function openSchedInOutlook(_specOk) {
   // stamped, so the old event can be deleted once the new one exists. Falls
   // back to the install mirror for rows that predate ids on appointments[].
   let _prevEventId = '';
+  // 28x: an ADOPTED install row must not be overwritten by a different type —
+  // if Jon switched the window to Walkdown/Troubleshoot, that is a new visit.
+  if (_schedApptAdopted && _apptType !== 'installation') { _schedApptId = null; _schedApptAdopted = false; }
+  // 28x: same adoption as scheduleInOutlook(), for the case where the type was
+  // switched to Installation inside the window — never a second install row.
+  if (!_schedApptId && _apptType === 'installation') {
+    try { const _oi = getAppts(lead).find(a => a && a.type === 'installation' && !a.completedAt); if (_oi) _schedApptId = _oi.id; } catch(_) {}
+  }
   try {
     const _prev = _schedApptId ? getAppts(lead).find(a => a.id === _schedApptId) : null;
     _prevEventId = (_prev && _prev.outlookEventId) || '';
