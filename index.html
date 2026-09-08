@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28y</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ab</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2429,6 +2429,36 @@ function setupKanbanDnd() {
     });
   });
 }
+// 2026-09-08 (28ab, Jon): "When a customer confirms, I need that job to auto
+// move to Installation." Runs on EVERY path that flips a confirmation record
+// to 'confirmed' — the link-click polls (scheduler + job), the manual "they
+// replied another way" button, and the booking-time "already agreed" prompt.
+// Mutates the lead IN PLACE (callers hold the array and save it); returns true
+// if the stage changed. Only moves FORWARD from a column before Installation —
+// never touches a job already in Installation or later, nor Archived/Not Won.
+function _autoStageOnConfirm(leadObj, dateKey) {
+  try {
+    if (!leadObj) return false;
+    const _ix = id => STAGES.findIndex(x => x.id === id);
+    const cur = _ix(leadObj.stage), inst = _ix('installation');
+    if (inst < 0 || cur < 0 || cur >= inst) return false;
+    if (leadObj.stage === 'archived' || leadObj.stage === 'not-won') return false;
+    const from = (STAGES[cur] && STAGES[cur].label) || leadObj.stage;
+    leadObj.stage = 'installation';
+    leadObj.stageAt = new Date().toISOString();
+    leadObj.updatedAt = leadObj.stageAt;
+    leadObj.jobNotes = (leadObj.jobNotes || []).concat([{ id: 'note-autoinst-' + Date.now().toString(36),
+      text: 'Moved ' + from + ' → Installation automatically — customer confirmed the install' + (dateKey ? ' for ' + mdy(dateKey) : '') + '.',
+      authorName: 'CRM', timestamp: leadObj.stageAt }]);
+    return true;
+  } catch (_) { return false; }
+}
+// Post-save follow-through for _autoStageOnConfirm (info form + whichever page is open).
+function _afterAutoStage(leadId) {
+  try { if (typeof _regenLeadInfoForm === 'function') _regenLeadInfoForm(leadId); } catch(_){}
+  try { if (S.page === 'jobs' && typeof renderPipeline === 'function') renderPipeline(); } catch(_){}
+}
+
 function moveLeadToStage(leadId, stageId) {
   const arr = getLeads();
   const idx = arr.findIndex(l=>l.id===leadId);
@@ -3953,6 +3983,7 @@ function _schedShortDate(iso) {
   if (isNaN(d)) return iso;
   return d.toLocaleDateString('en-US', {weekday:'short'}) + ' ' + (d.getMonth()+1) + '/' + d.getDate();
 }
+function _kbStageIdx(id) { const i = STAGES.findIndex(s => s.id === id); return i < 0 ? 999 : i; }
 function schedOfferChip(l) {
   const confs = (l.scheduling && l.scheduling.confirmations) || {};
   const im = (l.milestones && l.milestones.installScheduled) || {};
@@ -4015,7 +4046,12 @@ function renderKanban(leads) {
       // 2026-09-08 (28y, Jon): in the Scheduling column you could not tell who
       // had already been OFFERED a date — two customers got the same full day.
       // One chip, read from the same record the Install desk uses.
-      const offerChip = (stage.id === 'scheduled') ? schedOfferChip(l) : '';
+      // 28aa (Jon, Corey Willis): a date can be offered BEFORE the job reaches
+      // Scheduling — same-day permits mean the schedule gets built from Quote
+      // Approved / Awaiting Permit / Awaiting Charger. Show the pill in every
+      // column up to and including Scheduling; it is silent unless there is a
+      // request or a booked date, so early columns stay clean.
+      const offerChip = (_kbStageIdx(stage.id) <= _kbStageIdx('scheduled')) ? schedOfferChip(l) : '';
       const _niK = STAGES.findIndex(s=>s.id===stage.id)+1; const isLast = !STAGES[_niK] || STAGES[_niK].id==='not-won' || STAGES[_niK].id==='archived';
       return `<div class="kcard" draggable="true" data-lead-id="${l.id}"
         ondragstart="kcardDragStart(event,'${l.id}')"
@@ -22894,7 +22930,7 @@ async function _hydrateSchedConfirmStatuses(force=false) {
     // Persist newly-arrived final statuses onto the lead so the badge survives
     // re-renders even if the worker is unreachable.
     const arr = getLeads();
-    let dirty = false;
+    let dirty = false; const _moved = [];
     for (const w of wanted) {
       const s = statuses[w.token];
       if (!s) continue;
@@ -22906,9 +22942,11 @@ async function _hydrateSchedConfirmStatuses(force=false) {
         conf.respondedAt = s.respondedAt;
         conf.note = s.note;
         dirty = true;
+        if (s.status === 'confirmed' && _autoStageOnConfirm(arr[idx], w.date)) _moved.push(w.leadId);
       }
     }
     if (dirty) saveLeads(arr);
+    _moved.forEach(_afterAutoStage);
   } catch (e) {
     console.warn('[GK] Confirmation status hydration failed:', e);
   }
@@ -28428,7 +28466,7 @@ async function _inspPollOnce() {
       if (!st || st.status === 'pending' || l.inspection.status !== 'pending') continue;
       const cust = l.customerId ? getCustomer(l.customerId) : null;
       const who = (cust && typeof custFullName === 'function') ? custFullName(cust) : (l.customerName || l.id);
-      const jur = l.jurisdiction || l.siteCity || 'the jurisdiction';
+      const jur = ((typeof getLeadJurisdiction === 'function') ? getLeadJurisdiction(l).name : (l.jurisdiction || l.siteCity)) || 'the jurisdiction';
       if (st.status === 'picked') {
         l.inspection.status = 'picked'; l.inspection.pickedDate = st.pickedDate;
         upsertTask({ id: 'insp-' + l.id, title: `Book inspection with ${jur} — ${who} picked ${st.pickedDate}`,
@@ -33247,6 +33285,22 @@ function scheduleInOutlook(leadId, apptId) {
   // Render subject/body for the chosen type and refresh calendar preview.
   _populateSchedFields(defaultType);
   _updateSchedCalendarPreview();
+  // 28z: if the AHJ was never geocoded for this job, do it now and refresh the
+  // body — but only while it is still exactly what we generated (never over an
+  // edit in progress).
+  try {
+    const _j0 = (typeof getLeadJurisdiction === 'function') ? getLeadJurisdiction(lead) : null;
+    if (_j0 && (_j0.source === 'mailing-city' || _j0.source === 'legacy') && typeof ensureLeadJurisdiction === 'function') {
+      const _bodyEl0 = document.getElementById('sched-body');
+      const _gen0 = _bodyEl0 ? _bodyEl0.value : null;
+      ensureLeadJurisdiction(leadId).then(name => {
+        if (!name || _schedLeadId !== leadId) return;
+        const _bodyEl1 = document.getElementById('sched-body');
+        if (_bodyEl1 && _gen0 !== null && _bodyEl1.value !== _gen0) return; // user edited — leave it
+        _populateSchedFields(document.getElementById('sched-type')?.value || defaultType);
+      }).catch(()=>{});
+    }
+  } catch (_) {}
 
   // Show the modal.
   const modal = document.getElementById('sched-modal');
@@ -33399,7 +33453,14 @@ function _buildSchedContent(lead, cust, quote, type) {
   const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState||'VA', lead.siteZip].filter(Boolean);
   const location  = addrParts.join(', ');
 
-  const permitLoc = lead.jurisdiction || lead.siteCity || '';
+  // 2026-09-08 (28z, Jon: "Schedule now is not using the results of the AHJ
+  // search"): this read the LEGACY field, then the mailing city — so a
+  // Chesterfield County job with a "Richmond, VA" address said "Richmond
+  // permit". Use the same order of truth as the job screen (manual override →
+  // geocoded county → legacy → mailing city) and label the mailing-city
+  // fallback so nobody trusts it.
+  const _jur = (typeof getLeadJurisdiction === 'function') ? getLeadJurisdiction(lead) : { name: (lead.jurisdiction || lead.siteCity || ''), source: 'legacy' };
+  const permitLoc = _jur.name ? (_jur.name + (_jur.source === 'mailing-city' ? ' (mailing city — AHJ not verified)' : '')) : '';
   const permitLine = permitLoc ? `${permitLoc} permit` : '';
 
   const contactLine = [fullName, phone, email].filter(Boolean).join('\n');
@@ -33881,6 +33942,7 @@ async function openSchedInOutlook(_specOk) {
     // sent, ask whether the customer already agreed (Jon's flow: agreed by
     // email/text) — OK writes a manual 'confirmed' record so the chip goes
     // straight to ✅ Confirmed; Cancel leaves a clean 📅 Scheduled.
+    let _autoMovedAtBook = false;
     if (_isInstall) {
       try {
         const _arr2 = getLeads(); const _i2 = _arr2.findIndex(l => l.id === lead.id);
@@ -33898,6 +33960,7 @@ async function openSchedInOutlook(_specOk) {
               _confs[date] = { status: 'confirmed', manual: true, sentAt: new Date().toISOString(),
                 respondedAt: new Date().toISOString(), confirmedBy: (S.user && S.user.name) || '',
                 outlookEventId: eventId || '', outlookCalId: (tgt && tgt.id) || '' };
+              if (_autoStageOnConfirm(_arr2[_i2], date)) _autoMovedAtBook = true;
             }
           }
           _arr2[_i2].updatedAt = new Date().toISOString();
@@ -33905,6 +33968,7 @@ async function openSchedInOutlook(_specOk) {
         }
       } catch (e) { console.warn('[GK] confirmation-state resolve failed (non-fatal):', e); }
     }
+    if (_autoMovedAtBook) { _afterAutoStage(lead.id); toast('Customer already agreed — moved to Installation.', 'success'); }
     toast(`Event created on ${calendarLabel}${_wantConfirm ? ' (tentative — sending confirmation request)' : ''} — it will sync to your Outlook app.`, 'success');
     closeSchedModal();
     // Only pop the event open in Outlook WEB if the device opted in (default OFF).
@@ -34021,7 +34085,7 @@ async function _pollJobSchedConfirm(leadId) {
     if (!r.ok) return;
     const { statuses } = await r.json();
     const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i < 0) return;
-    let dirty = false, changed = false;
+    let dirty = false, changed = false, _movedHere = false;
     for (const [d, c] of pending) {
       const s = statuses?.[c.token]; if (!s || s.status === c.status) continue;
       const conf = arr[i].scheduling.confirmations[d];
@@ -34029,8 +34093,10 @@ async function _pollJobSchedConfirm(leadId) {
       if (s.status === 'confirmed' && conf.outlookEventId) _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId);
       if (s.status === 'confirmed') toast('Customer confirmed the appointment.', 'success');
       else if (s.status === 'reschedule_requested') toast('Customer asked to reschedule' + (s.note ? ': ' + s.note : '') + '.', 'warning');
+      if (s.status === 'confirmed' && _autoStageOnConfirm(arr[i], d)) { _movedHere = true; toast('Moved to Installation.', 'success'); }
     }
     if (dirty) saveLeads(arr);
+    if (_movedHere) _afterAutoStage(leadId);
     if (changed) { try { if (typeof renderJobDetail === 'function' && S.jobDetailId === leadId) renderJobDetail(leadId); } catch(_){} }
   } catch (e) { console.warn('[GK] job confirmation poll failed:', e); }
 }
@@ -34057,9 +34123,11 @@ async function _manualConfirmSched(leadId, dateKey){
     text: 'Install ' + mdy(dateKey) + ' confirmed by the customer' + (String(how).trim() ? ' — ' + String(how).trim() : '') + ' (recorded manually, not via the email link).',
     authorName: (S.user && S.user.name) || 'CRM', timestamp: new Date().toISOString() }]);
   arr[i].updatedAt = new Date().toISOString();
+  const _movedM = _autoStageOnConfirm(arr[i], dateKey);
   saveLeads(arr);
+  if (_movedM) _afterAutoStage(leadId);
   if (conf.outlookEventId) { try { await _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId); } catch(_){} }
-  toast('Confirmed ✓ — the calendar block is now solid.', 'success');
+  toast('Confirmed ✓ — the calendar block is now solid.' + (_movedM ? ' Moved to Installation.' : ''), 'success');
   try { if (S.jobDetailId === leadId && typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
   try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch(_){}
 }
