@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ab</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ad</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -27402,6 +27402,8 @@ const _smsThreadFingerprint = {}; // leadId -> last-rendered fingerprint, preven
 const BELL_POLL_INTERVAL_MS = 30000;
 const BELL_LAST_SEEN_KEY    = 'gk_sms_bell_last_seen';
 const BELL_RECENT_CAP       = 30;          // most we'll show in the dropdown
+const BELL_LOOKBACK_MS      = 3*24*60*60*1000;   // 28ad: how far back a waking tab looks (was 30 min)
+const BELL_POLL_LIMIT       = 100;         // 28ad: messages per poll — the worker allows 200; a 3-day backlog must not be cut at 30
 let _bellPollTimer    = null;
 let _bellRecentCache  = [];                  // most-recent first
 let _bellOpen         = false;
@@ -27420,12 +27422,16 @@ function _bellSetLastSeen(iso) {
   localStorage.setItem(BELL_LAST_SEEN_KEY, iso);
 }
 function _bellSinceForPoll() {
-  // Pull anything newer than (last seen) OR (30 min ago) — whichever is
-  // older. The cap keeps a long-idle session from requesting weeks of
-  // history when the user finally wakes the tab.
+  // 2026-09-09 (28ad, Jon: "we received a few business texts last night but
+  // I'm not seeing them in the bell"). This capped the look-back at THIRTY
+  // MINUTES — so anything that arrived while every CRM tab was closed
+  // (overnight, a weekend) was never pulled, never persisted as a
+  // notification, and the bell stayed quiet. Look back to the last-seen
+  // stamp, capped at 3 days (a long weekend); the message limit below bounds
+  // the request size, not this window.
   const lastSeen = _bellGetLastSeen();
-  const thirtyMin = new Date(Date.now() - 30*60*1000).toISOString();
-  return lastSeen < thirtyMin ? thirtyMin : lastSeen;
+  const floor = new Date(Date.now() - BELL_LOOKBACK_MS).toISOString();
+  return lastSeen < floor ? floor : lastSeen;
 }
 
 async function _bellPollOnce() {
@@ -27435,7 +27441,7 @@ async function _bellPollOnce() {
     const token = await _acquireSMSToken();
     const since = _bellSinceForPoll();
     const resp = await fetch(
-      SMS_WORKER_URL.replace(/\/$/,'') + '/sms/recent?since=' + encodeURIComponent(since) + '&limit=' + BELL_RECENT_CAP,
+      SMS_WORKER_URL.replace(/\/$/,'') + '/sms/recent?since=' + encodeURIComponent(since) + '&limit=' + BELL_POLL_LIMIT,
       { headers: { 'Authorization': 'Bearer ' + token } }
     );
     if (!resp.ok) return;
@@ -31185,6 +31191,14 @@ async function hydrateQuoteStatusFromServer(qid) {
     if (!data || !data.action) return null;
 
     const q = getQuote(qid); if (!q) return null;
+    // 2026-09-08 (28ac, Jon — Paige Holbert): "I keep trying to unaccept the
+    // old quote but it won't stay unaccepted." Un-accept (28d) flips the quote
+    // back to 'delivered' — which makes it POLLABLE again, and the Worker still
+    // holds the customer's original click, so within 60 s this re-approved it,
+    // re-added it to acceptedQuoteIds and re-summed the Job Value. An office
+    // withdrawal (acceptUndoneAt) outranks any customer action that came
+    // BEFORE it. A genuinely new click AFTER the withdrawal still applies.
+    if (q.acceptUndoneAt && data.actedAt && new Date(data.actedAt) <= new Date(q.acceptUndoneAt)) return null;
     // Map server action to local quote.status. We use the existing status
     // values where possible; introduce 'declined' and 'contingent-approved'
     // for the new states.
