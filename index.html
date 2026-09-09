@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ag</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-09a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2087,6 +2087,22 @@ function getCustomers() {
   try { return JSON.parse(localStorage.getItem(CK)||'[]'); } catch{ return []; }
 }
 function saveCustomers(arr) { localStorage.setItem(CK, JSON.stringify(arr)); queueSPSync(); }
+// 2026-09-09 (09-09a, Jon: "This page isn't responding" every time a customer
+// name is clicked from a job). getCustomer() re-parses the ENTIRE customers
+// store from localStorage on every call. The Customers page called it once
+// per (customer × job) pair — hundreds × hundreds of full JSON parses of a
+// multi-megabyte string — and _leadsForCustomer once per job. That is the
+// freeze. This builds the lookup ONCE per render: same merge-pointer
+// following as getCustomer(), zero re-parsing.
+function _custResolver(arr) {
+  arr = arr || getCustomers();
+  const byId = new Map(arr.map(c => [c.id, c]));
+  return function resolve(id) {
+    let c = byId.get(id) || null; let guard = 0;
+    while (c && c.mergedInto && guard++ < 8) { const t = byId.get(c.mergedInto); if (!t || t.id === c.id) break; c = t; }
+    return c;
+  };
+}
 function getCustomer(id) {
   const arr = getCustomers();
   let c = arr.find(c=>c.id===id) || null;
@@ -4222,8 +4238,17 @@ function renderCustomersPage() {
       <div class="edesc">${q?'Try a different search.':'Click "New Customer" to add your first customer.'}</div></div>`;
     return;
   }
+  // 09-09a: count jobs per customer in ONE pass with a per-render resolver —
+  // this line used to be customers × jobs full re-parses of the store.
+  const _resolve = _custResolver();
+  const _jobCount = new Map();
+  leads.forEach(l => {
+    if (!l || !l.customerId) return;
+    const r = _resolve(l.customerId); const key = r ? r.id : l.customerId;
+    _jobCount.set(key, (_jobCount.get(key) || 0) + 1);
+  });
   wrap.innerHTML = `<div class="cust-grid">${custs.map(c=>{
-    const jc = leads.filter(l=>l.customerId===c.id || (l.customerId && (getCustomer(l.customerId)||{}).id===c.id)).length;
+    const jc = _jobCount.get(c.id) || 0;
     const addr = [c.street,c.city,c.state].filter(Boolean).join(', ')||'No address';
     const isCom = c.propertyType==='commercial';
     const biz = isCom && c.businessName ? c.businessName : '';
@@ -4271,11 +4296,13 @@ function _leadsForCustomer(custId) {
   const cPhone = digits(c.phone), cEmail = String(c.email || '').trim().toLowerCase();
   const cName = (typeof custFullName === 'function' ? custFullName(c) : '').trim().toLowerCase();
   const seen = new Set(); const out = [];
+  const _resolve = _custResolver();   // 09-09a: one parse for the whole scan, not one per job
   getLeads().forEach(l => {
     if (!l || seen.has(l.id)) return;
     let hit = false;
-    if (l.customerId) { const r = getCustomer(l.customerId); hit = !!(r && r.id === c.id); }
-    if (!hit && !(l.customerId && getCustomer(l.customerId))) {
+    const _r = l.customerId ? _resolve(l.customerId) : null;
+    if (l.customerId) { hit = !!(_r && _r.id === c.id); }
+    if (!hit && !(l.customerId && _r)) {
       const lp = digits(l.phone || l.customerPhone), le = String(l.email || l.customerEmail || '').trim().toLowerCase(), ln = String(l.customerName || '').trim().toLowerCase();
       hit = (cPhone && lp === cPhone) || (cEmail && le === cEmail) || (cName && cName !== 'unknown' && ln === cName);
     }
