@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-09a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-09b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2096,7 +2096,7 @@ function saveCustomers(arr) { localStorage.setItem(CK, JSON.stringify(arr)); que
 // following as getCustomer(), zero re-parsing.
 function _custResolver(arr) {
   arr = arr || getCustomers();
-  const byId = new Map(arr.map(c => [c.id, c]));
+  const byId = new Map(arr.filter(c => c && c.id).map(c => [c.id, c]));   // 09-09b: a null/blank row must not throw
   return function resolve(id) {
     let c = byId.get(id) || null; let guard = 0;
     while (c && c.mergedInto && guard++ < 8) { const t = byId.get(c.mergedInto); if (!t || t.id === c.id) break; c = t; }
@@ -2895,7 +2895,7 @@ function showPage(page) {
     _pipeRestorePending = true;   // returning to the pipeline resumes position
     renderPipeline();
   }
-  else if (page==='customers') { S.custView=null; document.getElementById('cust-list-view').style.display=''; document.getElementById('cust-detail-view').style.display='none'; renderCustomersPage(); }
+  else if (page==='customers') { S.custView=null; document.getElementById('cust-list-view').style.display=''; document.getElementById('cust-detail-view').style.display='none'; try { renderCustomersPage(); } catch(e) { console.error('[GK] renderCustomersPage failed:', e); try { toast('Could not draw the customer list: ' + (e && e.message ? e.message : e), 'error'); } catch(_){} } }
   else if (page==='quotes') { S.quoteId=null; const lv=document.getElementById('quotes-list-view'),bv=document.getElementById('quotes-builder-view'); if(lv)lv.style.display=''; if(bv)bv.style.display='none'; renderQuotesPage(); }
   else if (page==='tasks') renderTasksPage();
   else if (page==='files') { renderFilesPage(); }
@@ -4220,7 +4220,7 @@ function updateLeadsBadge() {
 function renderCustomersPage() {
   const q = (document.getElementById('cust-search-inp')||{}).value||'';
   const ql = q.toLowerCase();
-  let custs = getCustomers().filter(c=>!c.mergedInto);
+  let custs = getCustomers().filter(c=>c && c.id && !c.mergedInto);   // 09-09b: null-safe
   if (ql) custs = custs.filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
     (c.email||'').toLowerCase().includes(ql)||
@@ -4315,7 +4315,10 @@ function openCustomerDetail(custId) {
   S.custView = custId;
   document.getElementById('cust-list-view').style.display = 'none';
   document.getElementById('cust-detail-view').style.display = 'block';
-  renderCustomerDetail(custId);
+  // 09-09b: a render error used to leave a silent blank page (Jon: "customer
+  // screen with no customer pulled up"). Say so, and say what.
+  try { renderCustomerDetail(custId); }
+  catch (e) { console.error('[GK] renderCustomerDetail failed:', e); try { toast('Could not draw this customer: ' + (e && e.message ? e.message : e), 'error'); } catch(_){} }
 }
 
 function closeCustomerDetail() {
