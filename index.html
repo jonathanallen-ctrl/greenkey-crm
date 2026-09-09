@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ae</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28af</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -17756,6 +17756,28 @@ function upsertNotification(data) {
   if (typeof _bellRefreshUI === 'function') _bellRefreshUI();
 }
 
+// 28af: ONE parse, ONE write, ONE sync, ONE re-render for a whole batch —
+// and nothing at all when nothing is new. upsertNotification() above does all
+// four per call; the 3-day bell look-back (28ad) called it up to 100× every
+// 30 s and froze the page ("This page isn't responding", Jon 2026-09-09).
+// Existing entries keep status/ackedBy exactly as upsertNotification does.
+function upsertNotificationsBatch(list) {
+  if (!Array.isArray(list) || !list.length) return 0;
+  const arr = getNotifications();
+  const byId = new Map(arr.map((n, i) => [n.id, i]));
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const data of list) {
+    if (!data || !data.id) continue;
+    if (byId.has(data.id)) continue;            // already persisted — nothing to do
+    arr.push({ ...data, status: 'pending', createdAt: now, updatedAt: now });
+    byId.set(data.id, arr.length - 1);
+    changed++;
+  }
+  if (changed) { saveNotifications(arr); updateNotifBadge(); if (typeof _bellRefreshUI === 'function') _bellRefreshUI(); }
+  return changed;
+}
+
 function createFieldRevisionRequest(jobId, description, quoteId) {
   upsertNotification({
     type: 'field-revision',
@@ -27429,7 +27451,7 @@ function _bellGetLastSeen() {
   // historical messages the user has already triaged in their phone.
   const stored = localStorage.getItem(BELL_LAST_SEEN_KEY);
   if (stored) return stored;
-  const fallback = new Date(Date.now() - 60*60*1000).toISOString();
+  const fallback = new Date(Date.now() - BELL_LOOKBACK_MS).toISOString();   // 28af: was 1 h — a fresh browser missed overnight texts
   localStorage.setItem(BELL_LAST_SEEN_KEY, fallback);
   return fallback;
 }
@@ -27476,6 +27498,7 @@ async function _bellPollOnce() {
     // upsert preserves existing status AND the per-user `ackedBy` map (the
     // incoming data has neither field), so re-polling the same message won't
     // resurrect it for anyone who already dismissed it.
+    const _toPersist = [];   // 28af: collected, written once below
     fresh.forEach(m => {
       if (m && (m.direction === 'outbound')) return;  // only inbound
       try {
@@ -27488,7 +27511,7 @@ async function _bellPollOnce() {
         if (_inspId) {
           const insp = (typeof getInspector === 'function') ? getInspector(_inspId[1]) : null;
           const ahj  = (insp && typeof getAHJs === 'function') ? getAHJs().find(a => a.id === insp.ahjId) : null;
-          upsertNotification({
+          _toPersist.push({
             id: 'insp-sms-' + (m.id || (m.created_at + '-' + (m.from_number||''))),
             type: 'insp-sms',
             title: 'Inspector reply — ' + ((insp && insp.name) || m.from_number || m.phone || 'Inspector')
@@ -27503,7 +27526,7 @@ async function _bellPollOnce() {
         const cust = (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
         const who = cust ? (typeof custFullName === 'function' ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim())
                          : ((lead && lead.customerName) || m.from_number || m.phone || 'Customer');
-        upsertNotification({
+        _toPersist.push({
           id: 'cust-sms-' + (m.id || (m.created_at + '-' + (m.from_number||''))),
           type: 'cust-sms',
           title: 'New text — ' + who,
@@ -27516,7 +27539,17 @@ async function _bellPollOnce() {
         });
       } catch (_) {}
     });
-    _bellRefreshUI();
+    const _wrote = upsertNotificationsBatch(_toPersist);
+    if (_wrote || brandNew.length) _bellRefreshUI();
+    // 28af: advance the last-seen stamp to the newest message this poll saw, so
+    // the NEXT poll asks only for what arrived after it (a few rows, usually
+    // none) instead of re-pulling three days every 30 s. The 3-day look-back
+    // still applies to the FIRST poll after the CRM opens — that is the one
+    // that catches overnight texts.
+    try {
+      const _newest = fresh.reduce((a, m) => ((m.created_at||'') > a ? m.created_at : a), '');
+      if (_newest && _newest > _bellGetLastSeen()) _bellSetLastSeen(_newest);
+    } catch (_) {}
     // Fire desktop notification + sound for each truly new inbound message.
     if (brandNew.length) { _bellMarkNotified(brandNew.map(m => m.id)); _bellNotify(brandNew); }
   } catch (_) {
