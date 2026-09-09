@@ -1286,7 +1286,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ad</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-08-28ae</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -27406,6 +27406,21 @@ const BELL_LOOKBACK_MS      = 3*24*60*60*1000;   // 28ad: how far back a waking 
 const BELL_POLL_LIMIT       = 100;         // 28ad: messages per poll — the worker allows 200; a 3-day backlog must not be cut at 30
 let _bellPollTimer    = null;
 let _bellRecentCache  = [];                  // most-recent first
+// 28ae: ids the bell has ALREADY chimed for (this tab + persisted). The cache
+// above is trimmed to BELL_RECENT_CAP, so with a 3-day look-back (28ad) the
+// 31st-oldest message fell out of the cache every poll and came back as
+// "brand new" 30 s later — sound + pop-up on repeat (Jon, 2026-09-09).
+// Persisted so a reload does not re-chime for last night's backlog either;
+// the dropdown still shows them, only the sound is suppressed.
+const BELL_NOTIFIED_KEY = 'gk_sms_bell_notified';
+let _bellNotified = (() => { try { return new Set(JSON.parse(localStorage.getItem(BELL_NOTIFIED_KEY) || '[]')); } catch (_) { return new Set(); } })();
+function _bellMarkNotified(ids) {
+  ids.forEach(id => { if (id) _bellNotified.add(id); });
+  try {
+    const arr = Array.from(_bellNotified);
+    localStorage.setItem(BELL_NOTIFIED_KEY, JSON.stringify(arr.slice(-500)));   // bounded
+  } catch (_) {}
+}
 let _bellOpen         = false;
 let _bellShowAcked    = false;   // bell dropdown showing the acknowledged-history view
 
@@ -27451,7 +27466,7 @@ async function _bellPollOnce() {
     // Determine which messages are truly new (not already in cache) before merging.
     const seenIds = new Set(_bellRecentCache.map(m => m.id));
     const lastSeen = _bellGetLastSeen();
-    const brandNew = fresh.filter(m => !seenIds.has(m.id) && (m.created_at||'') > lastSeen);
+    const brandNew = fresh.filter(m => !seenIds.has(m.id) && !_bellNotified.has(m.id) && (m.created_at||'') > lastSeen);
     // Merge into cache, dedupe by id, keep newest first, cap length.
     fresh.forEach(m => { if (!seenIds.has(m.id)) _bellRecentCache.unshift(m); });
     _bellRecentCache.sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
@@ -27503,7 +27518,7 @@ async function _bellPollOnce() {
     });
     _bellRefreshUI();
     // Fire desktop notification + sound for each truly new inbound message.
-    if (brandNew.length) _bellNotify(brandNew);
+    if (brandNew.length) { _bellMarkNotified(brandNew.map(m => m.id)); _bellNotify(brandNew); }
   } catch (_) {
     // Silent — polling failures shouldn't toast.
   }
