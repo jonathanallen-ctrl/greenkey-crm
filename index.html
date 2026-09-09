@@ -1282,11 +1282,14 @@
       <button id="mtog" onclick="toggleSidebar()">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
       </button>
+      <button id="nav-back" onclick="navBack()" title="Back to the previous screen (job, customer or page)" style="display:none;align-items:center;gap:5px;margin-right:10px;padding:4px 10px;font-size:12px;font-family:var(--font);color:var(--text-secondary);background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);cursor:pointer">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3L5 8l5 5"/></svg> Back
+      </button>
       <div class="ptitle" id="ptitle">Dashboard</div>
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-09b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-09e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2857,6 +2860,49 @@ function navEl(el) {
   closeSidebar();
 }
 
+// ── ← BACK (2026-09-09, crm-2026-09-09e) ──
+// Jon: "we do a lot of going back and forth between screens." A CRM-side
+// history of (page, job, customer) — recorded at the moment a screen is LEFT
+// (top of showPage / openJobDetail / openCustomerDetail / closeJobDetail), so
+// Back restores the JOB or CUSTOMER you were on, not just the page it lived on.
+// Browser Back and the URL hash are deliberately untouched. Drawers/modals are
+// never reopened. Capped at 30 hops.
+const _navHist = [];
+let _navBack = false;   // true while navBack() is restoring — suppresses recording
+function _navSnapshot() {
+  return { page: S.page, jobId: (S.page === 'jobs' ? (S.jobDetailId || null) : null), custId: (S.page === 'customers' ? (S.custView || null) : null) };
+}
+function _navSame(a, b) { return !!a && !!b && a.page === b.page && (a.jobId||null) === (b.jobId||null) && (a.custId||null) === (b.custId||null); }
+function _navRecord() {
+  if (_navBack) return;
+  try {
+    const cur = _navSnapshot();
+    if (!cur.page) return;
+    if (_navSame(cur, _navHist[_navHist.length - 1])) return;
+    _navHist.push(cur);
+    if (_navHist.length > 30) _navHist.shift();
+  } catch (_) {}
+  _navUpdateBtn();
+}
+function _navUpdateBtn() {
+  const b = document.getElementById('nav-back');
+  if (b) b.style.display = _navHist.length ? 'inline-flex' : 'none';
+}
+function navBack() {
+  let target = null;
+  const cur = _navSnapshot();
+  while (_navHist.length) { const t = _navHist.pop(); if (!_navSame(t, cur)) { target = t; break; } }
+  if (!target) { _navUpdateBtn(); return; }
+  _navBack = true;
+  try {
+    if (target.jobId)       { openJobDetail(target.jobId); }
+    else if (target.custId) { navigate('customers'); openCustomerDetail(target.custId); }
+    else                    { navigate(target.page); }
+  } catch (e) { console.warn('[GK] navBack failed:', e); }
+  _navBack = false;
+  _navUpdateBtn();
+}
+
 function navigate(page) {
   const el = document.querySelector(`[data-page="${page}"]`);
   if (el) navEl(el); else showPage(page);
@@ -2865,6 +2911,7 @@ function navigate(page) {
 const TITLES = {dashboard:'Dashboard',leads:'Leads',jobs:'Jobs',customers:'Customers',quotes:'Quotes',calls:'Calls',tasks:'Tasks',files:'Photos & Files',permitting:'Permitting',scheduler:'Scheduler',payments:'Payments',reports:'Reports',settings:'Settings',tech:'Tech Mode'};
 
 function showPage(page) {
+  if (page !== S.page || S.jobDetailId || S.custView) _navRecord();   // 09-09d: remember where we were
   // Any cross-page navigation should also tear down the SMS poller. If the
   // user lands back on a job detail, openJobDetail will restart it.
   try { if (typeof stopSMSPolling === 'function') stopSMSPolling(); } catch (_) {}
@@ -4312,6 +4359,7 @@ function _leadsForCustomer(custId) {
 }
 
 function openCustomerDetail(custId) {
+  if (!(S.page === 'customers' && S.custView === custId)) _navRecord();   // 09-09d
   S.custView = custId;
   document.getElementById('cust-list-view').style.display = 'none';
   document.getElementById('cust-detail-view').style.display = 'block';
@@ -12985,6 +13033,7 @@ function commitMaterialImport(){
 // ══════════════════════════════════════════════════════
 
 function openJobDetail(id) {
+  if (!(S.page === 'jobs' && S.jobDetailId === id)) _navRecord();   // 09-09d
   // ⚠ 2026-08-15b — ACTIVATE THE JOBS PAGE FIRST. This function only ever
   // toggled the two views INSIDE page-jobs; called from any other page (the
   // Payments page's job links, its ↩ Back-to-job button) it rendered the job
@@ -13097,6 +13146,7 @@ function openJobDetail(id) {
 }
 
 function closeJobDetail() {
+  if (S.jobDetailId) _navRecord();   // 09-09d: "< Pipeline" then Back returns to the job
   // Flush any debounced auto-saves before tearing down the page —
   // otherwise the last ~800ms of typing in Snapshot/Charger/Utility/Platform is lost.
   try { if (typeof _flushAllAutoSaves === 'function') _flushAllAutoSaves(); } catch (_) {}
@@ -19014,12 +19064,32 @@ const DEFAULT_AHJS = [
   { id:'ahj-010', name:'Powhatan County', state:'VA', portalType:'paper',
     url:'https://www.powhatanva.gov/201/Building-Inspections', platform:'Phone / Email / In person',
     fee:250, phone:'(804) 598-5622', email:'',
-    notes:'No online portal. Building Inspections: 3834 Old Buckingham Rd Suite F. Applications processed 9 AM–3 PM; inspections requested by 3 PM are typically performed the next business day.' },
+    notes:'No online portal. Building Inspections: 3834 Old Buckingham Rd Suite F. Applications processed 9 AM–3 PM; inspections requested by 3 PM are typically performed the next business day.' },,
+  // 2026-09-09 (09-09c, Jon): Manakin Sabot / Dover Branch Lane jobs are Goochland
+  // County, not "Manakin Sabot" — the mailing-city fallback had been putting the
+  // post office on the calendar. Added so the geocoded county resolves to a real
+  // directory entry (permit portal link + inspector list).
+  { id:'ahj-011', name:'Goochland County', state:'VA', portalType:'online',
+    url:'https://www.goochlandva.us/168/Building-Inspection',
+    platform:'Goochland County Building Inspection',
+    fee:250, phone:'', email:'',
+    notes:'Building Inspection office handles electrical permits. Confirm fee and online-submission steps on first job.' }
 ];
 
 function getAHJs() {
   const stored = localStorage.getItem(AHJ_KEY);
-  if (stored) return JSON.parse(stored);
+  if (stored) {
+    // 09-09c: defaults used to seed ONCE, so a county added to DEFAULT_AHJS later
+    // never reached a browser that already had the list. Merge in any default
+    // whose name is missing (by name — never overwrite what the office edited).
+    try {
+      const arr = JSON.parse(stored);
+      const have = new Set(arr.map(a => String((a && a.name) || '').toLowerCase()));
+      const add = DEFAULT_AHJS.filter(d => !have.has(d.name.toLowerCase()));
+      if (add.length) { const merged = arr.concat(add); localStorage.setItem(AHJ_KEY, JSON.stringify(merged)); return merged; }
+      return arr;
+    } catch (_) { return JSON.parse(stored); }
+  }
   // First load — seed defaults
   localStorage.setItem(AHJ_KEY, JSON.stringify(DEFAULT_AHJS));
   return DEFAULT_AHJS;
@@ -28620,6 +28690,28 @@ function openUnroutedThread(phoneRaw, name){
      <button class="btn btn-p" onclick="closeDrawer();createJobFromCall('${digits}','${escHtml(String(name||'').replace(/'/g,''))}',null)">＋ Create job</button>`);
   loadCallThread(digits);
 }
+// 2026-09-09 (09-09e, Jon — the "Sam Godhwani" (469) number): the caller name
+// on a Calls card comes from the messaging service's phone→name map, which is
+// stamped whenever a text goes OUT to a number from a job. Put a stranger's
+// number on a job for a day, send one text, correct the number — and the map
+// still calls the stranger by the customer's name forever, and routes their
+// replies into that customer's thread. This clears both sides.
+async function unlinkCallName(digits, callId) {
+  if (!confirm('Clear this name from the number?\n\nThe call will show as just the phone number, and future calls/texts from it will no longer be labelled or routed as this person.')) return;
+  try {
+    const token = await _acquireSMSToken();
+    const r = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/unlink', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: digits }) });
+    if (!r.ok) { toast('Could not clear on the messaging service (' + r.status + ') — cleared locally only.', 'warning'); }
+  } catch (e) { toast('Messaging service unreachable — cleared locally only.', 'warning'); }
+  try {
+    const arr = getCalls(); const last10 = String(digits||'').replace(/\D/g,'').slice(-10); let n = 0;
+    arr.forEach(c => { if (c && String(c.phone||'').replace(/\D/g,'').slice(-10) === last10 && c.name) { c.name = ''; n++; } });
+    localStorage.setItem(CALLK, JSON.stringify(arr));
+    toast('Name cleared' + (n ? ' on ' + n + ' call' + (n>1?'s':'') : '') + '.', 'success');
+  } catch (_) {}
+  try { renderCallsPage(); } catch (_) {}
+}
+
 function createJobFromCall(digits, name, callId) {
   // Creating a job IS dealing with the call, so it clears the follow-up. This is
   // a deliberate click, not an inference — which is the line Jonathan drew when
@@ -28687,7 +28779,7 @@ function renderCallsPage() {
     return `<div class="card" style="padding:12px 14px;margin-bottom:8px">
      <div style="display:flex;gap:12px;align-items:flex-start">
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:14px">${escHtml(name || phone)}${name ? ` <span style="font-weight:400;color:var(--text-muted);font-size:12.5px">${escHtml(phone)}</span>` : ''}</div>
+        <div style="font-weight:600;font-size:14px">${escHtml(name || phone)}${name ? ` <span style="font-weight:400;color:var(--text-muted);font-size:12.5px">${escHtml(phone)}</span>` : ''}${(name && !linkedLead) ? ` <a onclick="event.stopPropagation();unlinkCallName('${escHtml(digits)}','${escHtml(String(c.id))}')" style="font-size:11px;color:var(--amber,#f59e0b);cursor:pointer;margin-left:8px;text-decoration:underline dotted" title="This name came from an old text sent to this number from a job — no job in the CRM has this number now. Click to clear the name here AND on the messaging service so future calls and texts from this number stop being labelled as this person.">not this person?</a>` : ''}</div>
         <div style="font-size:12px;color:${colour};margin-top:2px">${escHtml(status)}</div>
         <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">${escHtml(_callAgo(c.at))}${when ? ' · ' + escHtml(when) : ''}${detail ? ' · ' + detail : ''}</div>
         ${c.voicemailUrl ? `<audio controls preload="none" src="${escHtml(c.voicemailUrl)}" style="width:100%;max-width:320px;margin-top:8px;height:32px"></audio>` : ''}
