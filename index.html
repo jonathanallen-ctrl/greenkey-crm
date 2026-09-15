@@ -337,6 +337,8 @@
   .chip-blink{background:var(--blue-dim);color:var(--blue)}
   .chip-website{background:var(--green-dim);color:var(--green)}
   .chip-phone{background:var(--bg-hover);color:var(--text-secondary)}
+  .chip-af1{background:rgba(52,152,219,0.16);color:#5dade2}
+  .chip-redecharge{background:rgba(231,76,60,0.16);color:#ff6b6b}
   .chip-ev{background:var(--green-dim);color:var(--green)}
   .chip-upgrade{background:var(--amber-dim);color:var(--amber)}
   .chip-service{background:var(--blue-dim);color:var(--blue)}
@@ -1289,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15f</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1456,7 +1458,7 @@
             </div>
             <select class="psel" id="lf-source" onchange="renderLeadsPage()">
               <option value="">All Sources</option>
-              <option>Qmerit</option><option>Electrum</option><option>Treehouse</option>
+              <option>Qmerit</option><option>Electrum</option><option>Treehouse</option><option>AF1</option><option>Red E Charge</option>
               <option>Tesla</option><option>ChargePoint</option><option>Blink</option>
               <option>Website</option><option>Phone</option>
             </select>
@@ -1489,7 +1491,7 @@
         <div id="jobs-pipe-view">
           <div class="pipe-bar">
             <div class="pipe-filters">
-              <select class="psel" id="pf-source" onchange="renderPipeline()"><option value="">All Sources</option><option>Qmerit</option><option>Electrum</option><option>Treehouse</option><option>Tesla</option><option>ChargePoint</option><option>Blink</option><option>Website</option><option>Phone</option></select>
+              <select class="psel" id="pf-source" onchange="renderPipeline()"><option value="">All Sources</option><option>Qmerit</option><option>Electrum</option><option>Treehouse</option><option>AF1</option><option>Red E Charge</option><option>Tesla</option><option>ChargePoint</option><option>Blink</option><option>Website</option><option>Phone</option></select>
               <select class="psel" id="pf-type" onchange="renderPipeline()"><option value="">All Types</option><option value="ev-residential">EV Residential</option><option value="service-upgrade">Service Upgrade</option><option value="new-service">New Service</option></select>
               <select class="psel" id="pf-tech" onchange="renderPipeline()"><option value="">All Staff</option></select>
               <select class="psel" id="pf-sort" onchange="renderPipeline()" style="display:none">
@@ -1729,12 +1731,17 @@ const STAGES = [
 const STAGE_MAP = Object.fromEntries(STAGES.map(s=>[s.id,s]));
 
 // ── SOURCES ──
-const SOURCES = ['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink','Website','Phone'];
+const SOURCES = ['Qmerit','Electrum','Treehouse','AF1','Red E Charge','Tesla','ChargePoint','Blink','Website','Phone'];
 
 // Sources where the bill-to is typically the referrer (a B2B customer record)
 // rather than the homeowner. Quotes from these sources auto-suggest the
 // referrer-as-bill-to flow and zero out the card payment buffer.
-const REFERRER_BILL_SOURCES = ['AF1'];
+// 2026-09-15 (crm-2026-09-15f, Jon): Red E Charge — charging-network service
+// vendor that dispatches us to commercial sites (ticket-based work orders) and
+// pays us directly. Same shape as AF1: bill-to = referrer record.
+const REFERRER_BILL_SOURCES = ['AF1','Red E Charge'];
+// Stable referrer-record id for a source name ('Red E Charge' -> 'cust-ref-redecharge').
+function referrerIdForSource(src){ return 'cust-ref-' + String(src||'').toLowerCase().replace(/\s+/g,''); }
 
 // Sources where GreenKey doesn't invoice the homeowner directly because the
 // platform handles payment. Drives buffer auto-zero on quotes.
@@ -3863,7 +3870,7 @@ function capturePhoto() {
 // ── CHIP HELPERS ──
 function sourceChip(src) {
   const k = (src||'').toLowerCase().replace(/\s/g,'');
-  const map={qmerit:'qmerit',electrum:'electrum',treehouse:'treehouse',tesla:'tesla',chargepoint:'chargepoint',blink:'blink',website:'website',phone:'phone'};
+  const map={qmerit:'qmerit',electrum:'electrum',treehouse:'treehouse',af1:'af1',redecharge:'redecharge',tesla:'tesla',chargepoint:'chargepoint',blink:'blink',website:'website',phone:'phone'};
   return `<span class="chip chip-${map[k]||'muted'}">${src||'—'}</span>`;
 }
 function typeChip(t) {
@@ -6255,7 +6262,7 @@ function startQuoteBuilder(){
   // user having to remember to set Bill-To manually.
   let _autoBillTo = null;
   if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(lead.source)) {
-    const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
+    const ref = getCustomers().find(c => c.isReferrer && c.id === referrerIdForSource(lead.source));
     if (ref) _autoBillTo = ref.id;
   }
   // Permit default: respect the job type's noPermit flag and per-type permit
@@ -6363,7 +6370,7 @@ function startRecoverQuote() {
   const _isUtilityNew = (lead.jobType === 'new-service' || lead.jobType === 'service-upgrade');
   let _autoBillTo = null;
   if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(lead.source)) {
-    const ref = getCustomers().find(c => c.isReferrer && c.id === 'cust-ref-' + lead.source.toLowerCase());
+    const ref = getCustomers().find(c => c.isReferrer && c.id === referrerIdForSource(lead.source));
     if (ref) _autoBillTo = ref.id;
   }
   const _jt = (typeof getJobType === 'function') ? getJobType(lead.jobType) : null;
@@ -6546,7 +6553,7 @@ function renderQuoteBuilder(qid){
         <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Source</div>
           <select id="qb-source" class="qb-sel" onchange="changeQuoteSource('${q.id}', this.value)">
-            ${(['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
+            ${(['Qmerit','Electrum','Treehouse','AF1','Red E Charge','Tesla','ChargePoint','Blink','Website','Phone','Referral','Direct']).map(s=>`<option value="${s}"${(q.source||'')===s?' selected':''}>${s}</option>`).join('')}
           </select>
         </div>
         ${(() => {
@@ -11075,7 +11082,7 @@ function changeQuoteSource(qid,newSource){
   const updates = { source: newSource };
   // Auto-suggest bill-to when source maps to a known B2B referrer
   if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(newSource) && !q.billToCustomerId) {
-    const ref = getCustomers().find(c => c.isReferrer && (c.id === 'cust-ref-' + newSource.toLowerCase()));
+    const ref = getCustomers().find(c => c.isReferrer && (c.id === referrerIdForSource(newSource)));
     if (ref) updates.billToCustomerId = ref.id;
   }
   upsertQuote({...q, ...updates});
@@ -24404,6 +24411,32 @@ function seedReferrerCustomers() {
       poRequired: false,
       taxExempt: false,
       notes: 'Referral partner — HVAC company that calls us for circuit / panel work on their installs. Sometimes AF1 pays direct (most common); sometimes they have us bill the homeowner. Field contact: Nico LaBoy. Legal name and AP contact are placeholders — verify on first invoice.'
+    },
+    {
+      // 2026-09-15 (crm-2026-09-15f): Red E Charge — EV charging network / service
+      // desk (redecharge.com, Zoho Desk tickets "[## NNNN ##]"). Sends ticketed
+      // service requests for commercial sites (first: Hyatt Place Charlottesville,
+      // ticket 7409), asks for an estimate, then authorizes. Bill Red E Charge,
+      // not the site. They ask that the charger SERIAL NUMBER appear on the
+      // estimate and the final invoice.
+      id: 'cust-ref-redecharge',
+      isReferrer: true,
+      propertyType: 'commercial',
+      businessName: 'Red E Charge',
+      firstName: 'Elizabeth',
+      lastName: 'Georgescu',
+      salutation: 'Elizabeth',
+      pocTitle: 'Field Service',
+      email: 'service@redecharge.zohodesk.com',
+      phone: '313-210-1037',
+      street: '',
+      city: '',
+      state: '',
+      zip: '',
+      paymentTerms: 'Net 7',
+      poRequired: false,
+      taxExempt: false,
+      notes: 'Charging-network service vendor — dispatches GreenKey to commercial charger sites via Zoho Desk tickets (reply keeps the [## NNNN ##] tag in the subject). Elizabeth Georgescu, Field Service: direct 313-210-1037, office 866-363-6069, service@redecharge.zohodesk.com. Remote support contact during visits: Harold (via Elizabeth). Net 7 is OUR default — they have not stated terms yet. Put the charger serial number on every estimate and invoice.'
     }
   ];
   try {
