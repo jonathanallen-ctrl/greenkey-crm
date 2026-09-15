@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15l</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15m</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -13674,7 +13674,8 @@ function _chipEditorHTML(leadId, key){
           _c.status==='confirmed' ? '✓ confirmed' + (_c.manual?' (recorded manually)':'') + (_c.respondedAt?' · '+mdy(_c.respondedAt):'') :
           _c.status==='reschedule_requested' ? 'asked to reschedule' :
           'request sent' + (_c.sentAt?' '+mdy(_c.sentAt):'') + ' — awaiting reply'}</strong></span>`
-        + (_c.status!=='confirmed' ? btnP('✓ Mark confirmed — they replied another way', `_manualConfirmSched('${leadId}','${im.date}')`) : '')
+        + (_c.status!=='confirmed' ? btnP('✓ Mark confirmed — they replied another way', `_manualConfirmSched('${leadId}','${im.date}')`)
+                                   : btnP('↻ Still hashed in Outlook? Make it solid', `_resolidOutlook('${leadId}','${im.date}')`))
       ) : '';
       // 2026-08-18l (Jon, live on a real reschedule): the desk had the date/
       // time boxes but NOT the action that actually moves the calendar — he
@@ -34584,7 +34585,7 @@ async function _pollJobSchedConfirm(leadId) {
       const s = statuses?.[c.token]; if (!s || s.status === c.status) continue;
       const conf = arr[i].scheduling.confirmations[d];
       conf.status = s.status; conf.respondedAt = s.respondedAt; conf.note = s.note; dirty = true; changed = true;
-      if (s.status === 'confirmed' && conf.outlookEventId) _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId);
+      if (s.status === 'confirmed') _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId, { date: d, lead: arr[i] });
       if (s.status === 'confirmed') toast('Customer confirmed the appointment.', 'success');
       else if (s.status === 'reschedule_requested') toast('Customer asked to reschedule' + (s.note ? ': ' + s.note : '') + '.', 'warning');
       if (s.status === 'confirmed' && _autoStageOnConfirm(arr[i], d)) { _movedHere = true; toast('Moved to Installation.', 'success'); }
@@ -34620,21 +34621,64 @@ async function _manualConfirmSched(leadId, dateKey){
   const _movedM = _autoStageOnConfirm(arr[i], dateKey);
   saveLeads(arr);
   if (_movedM) _afterAutoStage(leadId);
-  if (conf.outlookEventId) { try { await _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId); } catch(_){} }
-  toast('Confirmed ✓ — the calendar block is now solid.' + (_movedM ? ' Moved to Installation.' : ''), 'success');
+  let _solid = false;
+  try { _solid = await _patchOutlookEventBusy(conf.outlookEventId, conf.outlookCalId, { date: dateKey, lead: arr[i] }); } catch(_){}
+  toast('Confirmed ✓' + (_solid ? ' — the calendar block is now solid.' : ' — could not find the Outlook event from this account; open it in Outlook and set Show as: Busy.') + (_movedM ? ' Moved to Installation.' : ''), _solid ? 'success' : 'warning');
   try { if (S.jobDetailId === leadId && typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch(_){}
   try { if (S.page === 'scheduler' && typeof renderSchedulerPage === 'function') renderSchedulerPage(); } catch(_){}
 }
 
+// Re-run the tentative→busy flip on an already-confirmed appointment (the
+// desk button under "Confirmation: ✓ confirmed"). For the cases where the
+// original flip ran in a different account than the one that made the event.
+async function _resolidOutlook(leadId, dateKey){
+  const lead = getLead(leadId); if (!lead) return;
+  const conf = lead.scheduling && lead.scheduling.confirmations && lead.scheduling.confirmations[dateKey];
+  let ok = false;
+  try { ok = await _patchOutlookEventBusy(conf && conf.outlookEventId, conf && conf.outlookCalId, { date: dateKey, lead }); } catch(_){}
+  toast(ok ? 'Calendar block set to Busy (solid).' : 'Could not find that event from this account — try from the account that created it, or open it in Outlook and set Show as: Busy.', ok ? 'success' : 'warning');
+}
 // Flip a created Outlook event tentative → busy once the customer confirms.
-async function _patchOutlookEventBusy(eventId, calId) {
-  if (!eventId) return;
+// 2026-09-15 (crm-2026-09-15m, Jon — Paige Turnes stayed hashed after
+// confirming): Graph event ids are PER MAILBOX. Sherri created the event, the
+// confirmation was processed in Jon's CRM, and PATCH /me/events/<Sherri's id>
+// failed silently. The batch confirmation path (scheduler page) never records
+// an event id at all. So: try the id, and when that fails or there is no id,
+// find the event on the target calendar by DAY + "<LastName> Project" subject
+// via calendarView (the same per-account view the Outlook sync uses) and patch
+// that. Returns true when something was flipped.
+async function _patchOutlookEventBusy(eventId, calId, hint) {
+  if (eventId) {
+    try {
+      const path = calId
+        ? `/me/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(eventId)}`
+        : `/me/events/${encodeURIComponent(eventId)}`;
+      await _graphFetch(path, { method: 'PATCH', body: JSON.stringify({ showAs: 'busy' }) });
+      return true;
+    } catch (e) { console.warn('[GK] event busy-patch by id failed — trying by day+name:', e); }
+  }
   try {
-    const path = calId
-      ? `/me/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(eventId)}`
-      : `/me/events/${encodeURIComponent(eventId)}`;
-    await _graphFetch(path, { method: 'PATCH', body: JSON.stringify({ showAs: 'busy' }) });
-  } catch (e) { console.warn('[GK] event busy-patch failed (non-fatal):', e); }
+    const date = hint && hint.date; if (!date) return false;
+    const lead = hint.lead || (hint.leadId ? getLead(hint.leadId) : null);
+    const cust = lead && lead.customerId && (typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
+    const lastName = String((cust && cust.lastName) || (lead && lead.customerLastName) || (lead && lead.customerName ? lead.customerName.trim().split(/\s+/).pop() : '') || '').trim().toLowerCase();
+    if (!lastName) return false;
+    const tgt = (typeof getSchedTargetCalendar === 'function') ? getSchedTargetCalendar() : null;
+    const base = tgt && tgt.id ? `/me/calendars/${encodeURIComponent(tgt.id)}/calendarView` : '/me/calendarView';
+    const path = `${base}?startDateTime=${encodeURIComponent(date + 'T00:00:00')}&endDateTime=${encodeURIComponent(date + 'T23:59:59')}&$select=id,subject,showAs,isCancelled&$top=50`;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    const data = await _graphFetch(path, { headers: { 'Prefer': 'outlook.timezone="' + tz + '"' } });
+    const hits = ((data && data.value) || []).filter(ev => ev && !ev.isCancelled && new RegExp('^' + lastName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(String(ev.subject || '')));
+    let flipped = 0;
+    for (const ev of hits) {
+      if (ev.showAs === 'busy') { flipped++; continue; }
+      const epath = tgt && tgt.id ? `/me/calendars/${encodeURIComponent(tgt.id)}/events/${encodeURIComponent(ev.id)}` : `/me/events/${encodeURIComponent(ev.id)}`;
+      try { await _graphFetch(epath, { method: 'PATCH', body: JSON.stringify({ showAs: 'busy' }) }); flipped++; }
+      catch (e) { console.warn('[GK] event busy-patch by day+name failed:', e); }
+    }
+    if (!hits.length) console.warn('[GK] busy-patch: no "' + lastName + '" event found on ' + date + ' in this account\'s view of the calendar');
+    return flipped > 0;
+  } catch (e) { console.warn('[GK] event busy-patch fallback failed (non-fatal):', e); return false; }
 }
 
 function openSMSModal(leadId) {
