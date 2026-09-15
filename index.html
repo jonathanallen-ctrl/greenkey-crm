@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15h</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15i</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -7511,6 +7511,9 @@ function _renderQQ_ServiceCall(q) {
           <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Flat price for the visit — replaces fee + hours + travel (materials still add). Blank = auto.</div></div>
       </div>
+      <div class="fg" style="margin-top:10px"><div class="fl">Office note — why this price / what the visit covers (internal, never prints)</div>
+        <textarea class="fi" id="qq-lm-override-note" rows="3" placeholder="e.g. Shared travel with Betts and no EV needed, so reduced to $200. Voltage readings only at panel + charger terminals, photos, S/N on invoice." oninput="onQQChange('${q.id}')">${escHtml(q.qq?.lmOverrideNote||'')}</textarea>
+        <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Shows in the Internal Margin box so the office can see why the number is what it is.</div></div>
     </div>
     <div class="qq-section">
       <div class="qq-title">Materials <span style="font-weight:400;color:var(--text-muted)">— enter YOUR cost; ${SC_MAT_MARKUP_PCT}% markup applies automatically</span></div>
@@ -7564,6 +7567,7 @@ function _onQQChange_ServiceCall(qid) {
   // materials still add on top, same as the other four forms' override.
   const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
   const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null && isFinite(parseFloat(lmOverrideRaw)) ? parseFloat(lmOverrideRaw) : null;
+  const lmOverrideNote = (document.getElementById('qq-lm-override-note')?.value ?? (q.qq?.lmOverrideNote || '')).slice(0, 2000);
   const lm = lmOverride!=null ? lmOverride + matBilled : r.first + addlCharge + matBilled + travelAdder;
   const bd = document.getElementById('qq-sc-breakdown');
   if (bd && lmOverride!=null) bd.innerHTML =
@@ -7587,6 +7591,7 @@ function _onQQChange_ServiceCall(qid) {
     travelMinutes,
     travelAdder,
     lmOverride,
+    lmOverrideNote,
     extras: q.qq?.extras || []
   }, 0);
 }
@@ -10226,6 +10231,8 @@ function renderMarginBox(q,totals,isQmerit){
     ${_scMatCost>0?`<div class="margin-row" style="color:var(--amber)"><span>− Materials cost</span><span class="margin-num">${fmt$(_scMatCost)}</span></div>`:''}
     <div class="margin-row" style="border-top:1px solid rgba(46,204,113,0.3);padding-top:5px;margin-top:3px;font-weight:600;color:var(--text-primary)"><span>Net Margin Est.</span><span class="margin-num">${fmt$(net)}</span></div>
     ${marginRow}
+    ${(q.qq?.lmOverride!=null && isFinite(q.qq.lmOverride))?`<div class="margin-row" style="color:var(--amber);font-size:11px"><span>L&amp;M overridden</span><span class="margin-num">${fmt$(q.qq.lmOverride)}</span></div>`:''}
+    ${(q.qq?.lmOverrideNote||'').trim()?`<div style="font-size:11.5px;color:var(--text-secondary);line-height:1.45;margin-top:6px;padding-top:6px;border-top:1px dashed rgba(46,204,113,0.3);white-space:pre-wrap">📝 ${escHtml(q.qq.lmOverrideNote.trim())}</div>`:''}
     ${royaltyFlag?`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>⚠ 3% Qmerit Royalty (res. EV)</span><span class="margin-num">~${fmt$(royalty)}</span></div>`:''}
   </div>`;
 }
@@ -11074,7 +11081,8 @@ function changeQuoteJobType(qid, newType) {
       extras:        old.extras || [],
       isVeteran:     old.isVeteran || false,
       installOverride: old.installOverride,
-      lmOverride:    old.lmOverride
+      lmOverride:    old.lmOverride,
+      lmOverrideNote: old.lmOverrideNote
     };
   })();
   upsertQuote({ ...q, jobType: newType, permitFee: newPermit, qq: sharedQQ });
