@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15j</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15l</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6785,15 +6785,15 @@ function renderQuickQuoteForm(q){
         }
       </div>
     </div>
-    ${q.jobType!=='nema-1450' ? `<div class="qq-section">
-      <div class="qq-title">Scope Wording <span style="font-weight:400;color:var(--text-muted);font-size:11px">— optional, wording only, no price change (Sherri's scope format, 2026-08-05)</span></div>
-      <div class="fg"><div class="fl">Where does the charger go?</div>
-        <input class="li-inp" type="text" id="qq-charger-loc" value="${escHtml(qq.chargerLocText||'')}" placeholder="e.g. the exterior wall of the house to the left of the garage door" oninput="onQQChange('${q.id}')" style="width:100%">
+    ${`<div class="qq-section">
+      <div class="qq-title">Scope Wording <span style="font-weight:400;color:var(--text-muted);font-size:11px">— optional, wording only, no price change (Sherri's scope format, 2026-08-05${q.jobType==='nema-1450' ? '; outlets 2026-09-15' : ''})</span></div>
+      <div class="fg"><div class="fl">${q.jobType==='nema-1450' ? 'Where does the outlet go?' : 'Where does the charger go?'}</div>
+        <input class="li-inp" type="text" id="qq-charger-loc" value="${escHtml(qq.chargerLocText||'')}" placeholder="${q.jobType==='nema-1450' ? 'e.g. the garage wall to the right of the overhead door' : 'e.g. the exterior wall of the house to the left of the garage door'}" oninput="onQQChange('${q.id}')" style="width:100%">
       </div>
       <div class="fg" style="margin-top:8px"><div class="fl">Where is the panel?</div>
         <input class="li-inp" type="text" id="qq-panel-loc" value="${escHtml(qq.panelLocText||'')}" placeholder="e.g. in the back right corner of the garage" oninput="onQQChange('${q.id}')" style="width:100%">
       </div>
-    </div>` : ''}
+    </div>`}
     <div class="qq-section">
       <div class="qq-title">Add-Ons & Equipment</div>
       <div class="qq-row">
@@ -8984,12 +8984,40 @@ function _autoScopePrimary(q){
     return `${t ? t.label : 'Custom installation'} per detailed scope below. All work performed to NEC standards and local code requirements.`;
   }
 
-  // NEMA 14-50 Outlet
+  // NEMA 14-50 Outlet — Sherri's scope format (2026-09-15, crm-2026-09-15k, Jon:
+  // "Sherri uses the quote text to apply for permits and she likes what she
+  // likes"). Same shape as the EV paragraph: "Install a NEMA 14-50 outlet on
+  // <outlet location>. Install a <breaker> and run <wire + method> from the
+  // panel located <panel location> to the outlet, approximately <N> feet."
+  // Blank locations print LOUD [INSERT …] placeholders (Jon's 8/5 rule).
   if (q.jobType === 'nema-1450') {
-    const outLoc = qq.nemaLocation==='outside' ? 'exterior' : 'interior';
     const wireOpt = _evnemaWire(qq);
-    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'nm3');
-    return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
+    const _nLead = (typeof getLead === 'function' && q.leadId) ? getLead(q.leadId) : null;
+    const _nSnap = (_nLead && _nLead.electricalSnapshot) || {};
+    const _nBrand = String(_nSnap.panelBrand || '').replace(/^Eaton BRH$/, 'Eaton BR').split(' ').pop() || '';
+    const _nBrandWord = (_nBrand && _nBrand !== 'Other') ? _nBrand + ' ' : 'two-pole ';
+    const breakerName = `50-amp ${_nBrandWord}GFCI`;
+    const _nINS  = { surface:'THHN/THWN-2', 'hand-trench':'THHN/THWN-2', 'machine-trench':'THHN/THWN-2' };
+    const _nMETH = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'through the crawl space', attic:'through the attic', unfinished:'through the unfinished space' };
+    const _nLegs = segs.filter(sg => sg && sg.type);
+    const _g3 = String(wireOpt.gauge||'#6').replace(/^#/, '') + '/3';
+    let wirePhrase, routeTail = '';
+    if (_nLegs.length <= 1) {
+      const _t = _nLegs[0] && _nLegs[0].type;
+      const _cable = _nINS[_t] ? `${wireOpt.gauge} ${_nINS[_t]}${wireOpt.metal === 'Al' ? ' (aluminum)' : ''}` : `${_g3} NM-B`;
+      wirePhrase = _t ? `${_cable} ${_nMETH[_t] || 'in conduit'}` : _cable;   // no legs = within 5 ft, no method
+    } else {
+      wirePhrase = `${wireOpt.gauge}${wireOpt.metal === 'Al' ? ' aluminum' : ''} conductors`;
+      routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'nm3').sentence || '';
+    }
+    const _oLoc = (qq.chargerLocText || '').trim().replace(/\.+$/,'') || (qq.nemaLocation==='outside' ? '[INSERT OUTLET LOCATION] (exterior)' : '[INSERT OUTLET LOCATION]');
+    const _pLoc = (qq.panelLocText || '').trim().replace(/\.+$/,'') || '[INSERT PANEL LOCATION]';
+    const s1 = `Install a NEMA 14-50 outlet on ${_oLoc}.`;
+    const s2 = `Install a ${breakerName} breaker and run ${wirePhrase} from the panel located ${_pLoc} to the outlet, approximately ${totalFt} feet.${routeTail}`;
+    const _tn = qq.tandemBreakers || 0;
+    const _tW = ['', 'One', 'Two', 'Three'];
+    const s3 = _tn > 0 ? ` ${_tW[_tn] || _tn} ${(_nBrand && _nBrand !== 'Other') ? _nBrand + ' ' : ''}tandem breaker${_tn > 1 ? 's are' : ' is'} required to make space in the panel.` : '';
+    return `${s1} ${s2}${s3} All work is performed to NEC and local code.`;
   }
 
   // EV Charger — swap / existing-circuit install types (2026-07-11)
@@ -28116,7 +28144,7 @@ async function _leadInboxPollOnce() {
         // phone_lead_map — so the customer's replies land in this job's
         // SMS thread and a later email opt-in flips the consent banner.
         const ackBody = { ids: [row.id] };
-        if (imported) ackBody.map = { [row.id]: { leadId: imported.leadId, customerId: imported.custId } };
+        if (imported) ackBody.map = { [row.id]: { leadId: imported.leadId, customerId: imported.custId, ...(imported.attached ? { attached: true } : {}) } };
         await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/lead/ack', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -30366,8 +30394,57 @@ function _splitOneLineAddress(row) {
     return { ...row, address: street, city, state: state || row.state || 'VA', postal_code: zip };
   } catch (_) { return row; }
 }
+// 2026-09-15 (crm-2026-09-15l, Jon — Paige Turnes): an inbox row whose phone /
+// email matches a customer who ALREADY has an open job must not become a
+// second job. Paige (Qmerit job GK-2026-0656695, install booked Wed 9/16)
+// called 9/14, got the post-call intake link, filled it in, and the import
+// matched her CUSTOMER but still built lead GK-2026-2479639 — which then read
+// as an unanswered inquiry and the 4 PM nudge texted a scheduled customer
+// "a real person will be in touch tomorrow". Now: attach the submission to the
+// open job as a job note + bell notice, record the inbox id on that job, and
+// ack the worker with the EXISTING lead id — so her texts re-key onto the real
+// job and phone_lead_map finally learns the number (the worker only knows a
+// caller if that map has them, which is why she got the intake link at all).
+function _openLeadForCustomer(custId) {
+  try {
+    return getLeads()
+      .filter(l => l && l.customerId === custId && !l.deleted && STAGE_MAP && STAGE_MAP[l.stage])
+      .sort((a,b) => new Date(b.updatedAt||b.createdAt||0) - new Date(a.updatedAt||a.createdAt||0))[0] || null;
+  } catch (_) { return null; }
+}
+function _attachInboxRowToLead(row, lead, custId) {
+  const arr = getLeads();
+  const idx = arr.findIndex(l => l.id === lead.id);
+  if (idx < 0) return null;
+  const when = row.created_at ? new Date(row.created_at).toLocaleString('en-US',{timeZone:'America/New_York'}) : '';
+  const via = row.source === 'phone-intake' ? 'Details sent after a phone call'
+            : row.source === 'sms-ai'       ? 'Texted the business number'
+            : 'Website form';
+  const addr = [row.address, row.city, row.state, row.postal_code].filter(Boolean).join(', ');
+  const text = `📥 ${via}${when ? ' (' + when + ')' : ''} — existing customer, attached to this job instead of creating a new one.`
+    + (row.message ? `\n"${String(row.message).trim()}"` : '')
+    + (addr ? `\nAddress given: ${addr}` : '')
+    + (row.email ? `\nEmail given: ${row.email}` : '')
+    + (row.service_type ? `\nService type picked: ${row.service_type}` : '');
+  if (!Array.isArray(arr[idx].jobNotes)) arr[idx].jobNotes = [];
+  arr[idx].jobNotes.push({ id: 'note-inbox-' + row.id, text, author: 'system', authorName: 'Intake', timestamp: new Date().toISOString(), mentions: [] });
+  arr[idx].webInboxIds = (arr[idx].webInboxIds || []).concat([row.id]);
+  arr[idx].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  const name = ((row.first_name||'') + ' ' + (row.last_name||'')).trim() || 'Customer';
+  try {
+    upsertNotification({
+      id: 'web-lead-' + row.id, type: 'web-lead',
+      title: 'Existing customer sent details',
+      description: name + ' — ' + via + ' · attached to ' + lead.id + (row.message ? ' · "' + String(row.message).slice(0, 80) + '"' : ''),
+      jobId: lead.id
+    });
+  } catch (_) {}
+  try { if (typeof _activityOsNotify === 'function') _activityOsNotify([{ id: 'web-lead-' + row.id, title: 'Existing customer sent details', description: name + ' — ' + via, jobId: lead.id }]); } catch (_) {}
+  return { leadId: lead.id, custId, attached: true };
+}
 function _importWebLead(row) {
-  if (getLeads().some(l => l.webInboxId === row.id)) return null;
+  if (getLeads().some(l => l.webInboxId === row.id || (Array.isArray(l.webInboxIds) && l.webInboxIds.includes(row.id)))) return null;
   row = _splitOneLineAddress(row);
 
   const fn = row.first_name || '';
@@ -30400,6 +30477,8 @@ function _importWebLead(row) {
       state:  cust.state  || row.state   || 'VA',
       zip:    cust.zip    || row.postal_code || ''
     });
+    const _open = _openLeadForCustomer(custId);
+    if (_open) return _attachInboxRowToLead(row, _open, custId);
   } else {
     custId = upsertCustomer({
       id: 'cust-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
