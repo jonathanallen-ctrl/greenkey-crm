@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15h</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -7507,7 +7507,9 @@ function _renderQQ_ServiceCall(q) {
       <div class="frow2" style="margin-top:10px">
         <div class="fg"><div class="fl">Round-trip travel (min)</div><input class="fi" type="number" id="qq-travel-min" value="${travelMinutes}" min="0" step="5" oninput="onQQChange('${q.id}')">
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Beyond 60 min adds <span id="qq-travel-calc">$0</span> ($40 / 15 min)</div></div>
-        <div class="fg"></div>
+        <div class="fg"><div class="fl">Override L&amp;M Subtotal ($)</div>
+          <input class="fi" type="number" id="qq-lm-override" placeholder="auto" value="${q.qq?.lmOverride!=null?q.qq.lmOverride:''}" oninput="onQQChange('${q.id}')">
+          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">Flat price for the visit — replaces fee + hours + travel (materials still add). Blank = auto.</div></div>
       </div>
     </div>
     <div class="qq-section">
@@ -7556,9 +7558,19 @@ function _onQQChange_ServiceCall(qid) {
   const tCalcEl = document.getElementById('qq-travel-calc'); if (tCalcEl) tCalcEl.textContent = '$' + travelAdder;
   const addlHours = Math.max(0, hours - 1);
   const addlCharge = Math.round(addlHours * r.addl);
-  const lm = r.first + addlCharge + matBilled + travelAdder;
+  // 2026-09-15 (crm-2026-09-15h, Jon): the service-call form was the only Quick
+  // Quote without an L&M override — a $200 flat diagnostic (Red E Charge /
+  // Hyatt Place) could not be entered. Override replaces fee + hours + travel;
+  // materials still add on top, same as the other four forms' override.
+  const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
+  const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null && isFinite(parseFloat(lmOverrideRaw)) ? parseFloat(lmOverrideRaw) : null;
+  const lm = lmOverride!=null ? lmOverride + matBilled : r.first + addlCharge + matBilled + travelAdder;
   const bd = document.getElementById('qq-sc-breakdown');
-  if (bd) bd.innerHTML =
+  if (bd && lmOverride!=null) bd.innerHTML =
+    `Flat visit price (override): <strong>$${lmOverride.toLocaleString()}</strong><br>` +
+    mats.filter(m=>(m.d&&m.d.trim())||m.c).map(m=>`${escHtml((m.d&&m.d.trim())||'Material')}: <strong>$${_scMatBilled(m.c).toLocaleString()}</strong><br>`).join('') +
+    `<span style="color:var(--text-primary)">Labor &amp; materials subtotal: <strong>$${Math.round(lm).toLocaleString()}</strong></span>`;
+  else if (bd) bd.innerHTML =
     `Service fee (trip + first hour): <strong>$${r.first}</strong><br>` +
     (addlHours > 0 ? `Additional ${addlHours} hr × $${r.addl}: <strong>$${addlCharge.toLocaleString()}</strong><br>` : '') +
     mats.filter(m=>(m.d&&m.d.trim())||m.c).map(m=>`${escHtml((m.d&&m.d.trim())||'Material')}: <strong>$${_scMatBilled(m.c).toLocaleString()}</strong><br>`).join('') +
@@ -7574,6 +7586,7 @@ function _onQQChange_ServiceCall(qid) {
     scNotes: notes,
     travelMinutes,
     travelAdder,
+    lmOverride,
     extras: q.qq?.extras || []
   }, 0);
 }
@@ -12544,12 +12557,18 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
   if (_sc) {
     const _scr = SERVICE_CALL_RATES[_sc.scCrew] || SERVICE_CALL_RATES.solo;
     const _ah = Math.max(0, (_sc.scHours||1) - 1);
-    _invRows = [{desc:'Service call — trip + first hour on site', amt:_scr.first}];
-    if (_ah > 0) _invRows.push({desc:`Additional labor — ${_ah} hr × $${_scr.addl}`, amt:Math.round(_ah*_scr.addl)});
+    // crm-2026-09-15h: an L&M override is a flat visit price — one line, no
+    // fee/hours/travel itemization (those would not reconcile to the total).
+    const _scOv = (typeof _sc.lmOverride==='number' && isFinite(_sc.lmOverride)) ? _sc.lmOverride : null;
+    if (_scOv!=null) _invRows = [{desc:'Service call — trip + labor on site (flat)', amt:_scOv}];
+    else {
+      _invRows = [{desc:'Service call — trip + first hour on site', amt:_scr.first}];
+      if (_ah > 0) _invRows.push({desc:`Additional labor — ${_ah} hr × $${_scr.addl}`, amt:Math.round(_ah*_scr.addl)});
+    }
     (Array.isArray(_sc.scMaterials)?_sc.scMaterials:[]).forEach(m=>{
       if ((m.d&&m.d.trim())||m.c) _invRows.push({desc:(m.d&&m.d.trim())||'Materials', amt:_scMatBilled(m.c)});
     });
-    if ((_sc.travelAdder||0) > 0) _invRows.push({desc:'Extended travel', amt:_sc.travelAdder});
+    if (_scOv==null && (_sc.travelAdder||0) > 0) _invRows.push({desc:'Extended travel', amt:_sc.travelAdder});
   } else {
     _invRows=[{desc:'Labor & Materials',amt:_totalsInv.laborAndMaterials||0}];
   }
@@ -30304,8 +30323,38 @@ function _reconcileFieldPayments() {
 
 // Create the customer + lead from one leads_inbox row. Returns
 // { leadId, custId }, or null if already imported (webInboxId guard).
+// 2026-09-15 (crm-2026-09-15g, Jon): the post-call intake form has ONE address
+// box ("Street, city, ZIP") and the worker stores it whole in `address`, so
+// "2100 Bond St, Charlottesville VA, 22901, USA" landed entirely in Street.
+// When a row has no city/zip of its own, split a comma-separated one-liner
+// into street / city / state / zip. Leaves rows that already carry city/zip
+// (website form, AI text intake) untouched; bails to the original on doubt.
+function _splitOneLineAddress(row) {
+  try {
+    if (!row || row.city || row.postal_code) return row;
+    let a = String(row.address || '').trim();
+    if (!a || a.indexOf(',') < 0) return row;
+    a = a.replace(/,?\s*(USA|U\.S\.A\.|United States)\s*$/i, '').trim();
+    const parts = a.split(',').map(x => x.trim()).filter(Boolean);
+    if (parts.length < 2) return row;
+    let zip = '', state = '', city = '';
+    const eat = (seg) => {
+      let m = seg.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+      if (m) { zip = zip || m[1]; seg = seg.slice(0, m.index).trim().replace(/,$/, '').trim(); }
+      m = seg.match(/(?:^|\s)([A-Za-z]{2})\s*$/);
+      if (m && !/^(st|rd|dr|ln|ct|pl|hw|av)$/i.test(m[1])) { state = state || m[1].toUpperCase(); seg = seg.slice(0, m.index).trim(); }
+      return seg;
+    };
+    city = eat(parts.pop());
+    if (!city && parts.length > 1) city = eat(parts.pop());
+    const street = parts.join(', ');
+    if (!street || !city) return row;
+    return { ...row, address: street, city, state: state || row.state || 'VA', postal_code: zip };
+  } catch (_) { return row; }
+}
 function _importWebLead(row) {
   if (getLeads().some(l => l.webInboxId === row.id)) return null;
+  row = _splitOneLineAddress(row);
 
   const fn = row.first_name || '';
   const ln = row.last_name || '';
