@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15i</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6757,9 +6757,9 @@ function renderQuickQuoteForm(q){
       </button>
       <div class="fg" style="margin-top:14px"><div class="fl">Wire Size</div>
         <select class="fsel" id="qq-wire" onchange="onQQChange('${q.id}')">
-          ${EVNEMA_WIRE_OPTIONS.map(o=>`<option value="${o.id}"${(qq.evWireId||'6cu')===o.id?' selected':''}>${o.label}</option>`).join('')}
+          ${EVNEMA_WIRE_OPTIONS.map(o=>`<option value="${o.id}"${(qq.evWireId||'6cu')===o.id?' selected':''}>${q.jobType==='nema-1450' ? (o.nemaLabel||o.label) : o.label}</option>`).join('')}
         </select>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">Names the conductor on the quote. #6 Cu is standard; upsize for long runs (voltage drop). Wire is included in the run rate, so this changes the wording, not the price.</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">${q.jobType==='nema-1450' ? 'Names the conductor on the quote. A 14-50 outlet needs a neutral, so concealed runs are written as 3-conductor NM-B (6/3 NM-B is standard); conduit runs as THHN/THWN-2. Wire is included in the run rate, so this changes the wording, not the price.' : 'Names the conductor on the quote. #6 Cu is standard; upsize for long runs (voltage drop). Wire is included in the run rate, so this changes the wording, not the price.'}</div>
       </div>
     </div>
     <div class="qq-section">
@@ -8849,10 +8849,10 @@ function autoScope(q) {
 // #4 Cu / #2 Al cover long runs. Wire is baked into the per-foot run rate, so
 // this drives the scope wording, not the price.
 const EVNEMA_WIRE_OPTIONS = [
-  {id:'8cu', gauge:'#8', metal:'Cu', label:'#8 Cu — 50 A (NEMA 14-50)'},
-  {id:'6cu', gauge:'#6', metal:'Cu', label:'#6 Cu — 60 A (standard)'},
-  {id:'4cu', gauge:'#4', metal:'Cu', label:'#4 Cu — long runs'},
-  {id:'2al', gauge:'#2', metal:'Al', label:'#2 Al — long runs (economical)'}
+  {id:'8cu', gauge:'#8', metal:'Cu', label:'#8 Cu — 50 A (NEMA 14-50)',      nemaLabel:'8/3 NM-B Cu — 40 A (code-minimum for 14-50)'},
+  {id:'6cu', gauge:'#6', metal:'Cu', label:'#6 Cu — 60 A (standard)',        nemaLabel:'6/3 NM-B Cu — 50 A (standard)'},
+  {id:'4cu', gauge:'#4', metal:'Cu', label:'#4 Cu — long runs',              nemaLabel:'4/3 NM-B Cu — long runs'},
+  {id:'2al', gauge:'#2', metal:'Al', label:'#2 Al — long runs (economical)', nemaLabel:'#2 Al — long runs (conduit)'}
 ];
 function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWireId))||EVNEMA_WIRE_OPTIONS[1]; }
 // Builds one plain-language sentence describing the wire route across all run
@@ -8871,8 +8871,14 @@ function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWi
 // total — previously this sentence described only the ADDED footage, so a
 // 15 ft total showed a "10 ft" route and looked both wrong and redundant
 // (Jonathan, 2026-07-11).
-function _runRoutingSentence(segs, gauge, metal, includedFt){
+// cable (2026-09-15, crm-2026-09-15j, Jon): 'nm3' = NEMA 14-50 — the outlet
+// needs a neutral, so concealed legs are 3-conductor NM-B ("6/3 NM-B"), never
+// SEU (two hots + bare). Conduit legs stay THHN/THWN-2. Default = EV (SEU).
+function _runRoutingSentence(segs, gauge, metal, includedFt, cable){
   const m = metal || 'Cu';
+  const nm3 = cable === 'nm3';
+  const _gaugeFor = (t) => (nm3 && INSUL[t] === 'SEU') ? String(gauge||'').replace(/^#/, '') + '/3' : gauge;
+  const _insulFor = (t) => (nm3 && INSUL[t] === 'SEU') ? 'NM-B' : INSUL[t];
   const PHRASE = {
     'crawl':'through the crawl space',
     'attic':'through the attic',
@@ -8892,11 +8898,11 @@ function _runRoutingSentence(segs, gauge, metal, includedFt){
   list[0].ft += (includedFt || 0);
   if (list.length === 1) {
     const s = list[0];
-    const spec = gauge ? ` of ${gauge} ${INSUL[s.type]} (${m}) wire` : '';
+    const spec = gauge ? ` of ${_gaugeFor(s.type)} ${_insulFor(s.type)} (${m}) wire` : '';
     return { inline: `${spec} ${PHRASE[s.type]}`, sentence: '' };
   }
   const parts = list.map(s => {
-    const spec = gauge ? ` (${gauge} ${INSUL[s.type]}, ${m})` : '';
+    const spec = gauge ? ` (${_gaugeFor(s.type)} ${_insulFor(s.type)}, ${m})` : '';
     return `approximately ${s.ft} ft ${PHRASE[s.type]}${spec}`;
   });
   return { inline: '', sentence: ` The route runs ${parts.join(', then ')}.` };
@@ -8982,7 +8988,7 @@ function _autoScopePrimary(q){
   if (q.jobType === 'nema-1450') {
     const outLoc = qq.nemaLocation==='outside' ? 'exterior' : 'interior';
     const wireOpt = _evnemaWire(qq);
-    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5);
+    const routing = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'nm3');
     return `Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker from the main electrical panel in the ${loc} to a NEMA 14-50 outlet (${outLoc} mounted), a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
   }
 
