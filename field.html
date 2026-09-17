@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-09-02 field-32';
+const BUILD = '2026-09-17 field-33';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -202,6 +202,21 @@ function quoteAmounts(l){
   if(q){ const net=(typeof q.preProcessingTotal==='number'&&isFinite(q.preProcessingTotal))?Math.round(q.preProcessingTotal):null;
          const card=(typeof q.quoteTotal==='number'&&isFinite(q.quoteTotal))?Math.round(q.quoteTotal):net; return {net,card}; }
   const jv=(l.jobValue&&typeof l.jobValue.amount==='number'&&isFinite(l.jobValue.amount))?Math.round(l.jobValue.amount):null;
+  // field-33 (2026-09-17, Freddie Stevens): Job Value is the NET (cash) price. A CRM
+  // bug dropped acceptedQuoteId on email-accepted jobs, so this fallback ran and the
+  // card link went out WITHOUT the 3%. If Job Value names its quote, take the card
+  // figure from that quote: the stored card total when the nets agree, otherwise the
+  // quote's card % applied to Job Value (same round-up-to-$5 rule as the CRM).
+  if(jv!=null && l.jobValue.quoteId){
+    const jq=getQuotes().find(x=>x&&x.id===l.jobValue.quoteId);
+    if(jq){
+      const pre=(typeof jq.preProcessingTotal==='number')?Math.round(jq.preProcessingTotal):null;
+      const tot=(typeof jq.quoteTotal==='number')?Math.round(jq.quoteTotal):null;
+      const pct=(typeof jq.paymentBuffer==='number')?jq.paymentBuffer:0;
+      if(pre===jv && tot!=null && tot>=jv) return {net:jv, card:tot};
+      if(pct>0) return {net:jv, card:Math.ceil(jv*(1+pct/100)/5)*5};
+    }
+  }
   return {net:jv, card:jv};
 }
 // ── Install Spec ──────────────────────────────────────────────────────────
