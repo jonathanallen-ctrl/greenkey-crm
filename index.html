@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -29003,21 +29003,83 @@ function createJobFromCall(digits, name, callId) {
   // a deliberate click, not an inference — which is the line Jonathan drew when
   // he pushed back on auto-resolving tasks from bell acknowledgements.
   if (callId) { try { if (typeof completeTask === 'function') completeTask('call-' + callId, 'Job created from the Calls page'); } catch (_) {} }
-  const parts = String(name || '').trim().split(/\s+/);
   const pretty = (typeof _callPretty === 'function') ? _callPretty(digits) : digits;
-  navigate('jobs');
-  setTimeout(() => {
-    try {
-      S.drawerMode = 'new-lead';
-      showLeadForm({
-        customerPhone: pretty,
-        customerFirstName: parts[0] || '',
-        customerLastName:  parts.slice(1).join(' ') || '',
-        customerName: name || '',
-        source: 'Phone'
-      });
-    } catch (e) { console.warn('[GK] createJobFromCall failed:', e); }
-  }, 60);
+  // crm-2026-09-17d (Jon, Roger Gench): "it didn't populate anything." Read what
+  // the caller TEXTED us and prefill name / email / address / description from
+  // it. Best effort: anything it can't find stays blank, nothing is saved until
+  // the office presses Save Lead, and every field is editable.
+  const open = (found) => {
+    const f = found || {};
+    const nm = String(name || f.name || '').trim();
+    const parts = nm.split(/\s+/);
+    navigate('jobs');
+    setTimeout(() => {
+      try {
+        S.drawerMode = 'new-lead';
+        showLeadForm({
+          customerPhone: pretty,
+          customerFirstName: parts[0] || '',
+          customerLastName:  parts.slice(1).join(' ') || '',
+          customerName: nm,
+          customerEmail: f.email || '',
+          siteStreet: f.street || '', siteCity: f.city || '', siteState: f.state || '', siteZip: f.zip || '',
+          description: f.description || '',
+          source: 'Phone'
+        });
+        const got = ['name','email','street','description'].filter(k => f[k]);
+        if (got.length) toast('Filled in from their texts — please check: ' + got.join(', ').replace('street','address'), 'success');
+      } catch (e) { console.warn('[GK] createJobFromCall failed:', e); }
+    }, 60);
+  };
+  _callsTextsForNumber(digits).then(bodies => open(_parseLeadFromTexts(bodies, digits))).catch(() => open(null));
+}
+// Inbound text bodies from this number, oldest first. Full thread from the worker
+// (one indexed read, 4 s cap); falls back to the 200-char previews in the notices.
+async function _callsTextsForNumber(digits) {
+  const d10 = String(digits || '').replace(/\D/g, '').slice(-10);
+  if (d10.length !== 10) return [];
+  try {
+    const token = await _acquireSMSToken();
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 4000);
+    const resp = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/sms/thread?leadId=unrouted&phone=' + encodeURIComponent('+1' + d10),
+      { headers: { 'Authorization': 'Bearer ' + token }, signal: ctl.signal });
+    clearTimeout(tm);
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && Array.isArray(data.messages)) {
+      const inb = data.messages.filter(m => m && m.direction !== 'out' && m.direction !== 'outbound' && m.body).map(m => String(m.body));
+      if (inb.length) return inb;
+    }
+  } catch (_) {}
+  try {
+    return getNotifications().filter(n => n && n.type === 'cust-sms' && String(n.phone || '').replace(/\D/g, '').slice(-10) === d10)
+      .sort((a, b) => (a.at || '').localeCompare(b.at || '')).map(n => String(n.description || '')).filter(Boolean);
+  } catch (_) { return []; }
+}
+// Pure function — text bodies in, best-guess lead fields out. Conservative on
+// purpose: a wrong prefill is worse than a blank one.
+function _parseLeadFromTexts(bodies, ownDigits) {
+  const out = {};
+  const list = (bodies || []).map(b => String(b || '').replace(/[<>"]/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!list.length) return out;
+  const all = list.join('  \n ');
+  const em = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(all);
+  if (em) out.email = em[0].replace(/[.,;]+$/, '');
+  // "4518 Newport Dr, Richmond VA 23227" / "... Richmond, Virginia, 23227"
+  const ad = /(\d{1,6}\s+[A-Za-z0-9 .'#-]{3,60}?(?:,\s*(?:Apt|Unit|Suite|Ste|#)\.?\s*[A-Za-z0-9-]+)?)\s*,\s*([A-Za-z .'-]{2,40}?)\s*,?\s+(VA|Va|va|Virginia|[A-Z]{2})\.?\s*,?\s*(\d{5})(?:-\d{4})?/.exec(all);
+  if (ad) { out.street = ad[1].trim(); out.city = ad[2].trim(); out.state = /^v(a|irginia)$/i.test(ad[3]) ? 'VA' : ad[3].toUpperCase(); out.zip = ad[4]; }
+  // Name: "my name is X Y" / "this is X Y", else Capitalised words right before their phone number or email.
+  const NOT = /^(Level|Tesla|Volvo|Ford|Chevy|Rivian|Model|Hello|Thanks|Thank|Please|Street|Richmond|Virginia|Good|Morning|Afternoon|The|We|My|Our|Can|Do|Hi)$/;
+  const okName = n => n && n.split(/\s+/).every(w => !NOT.test(w));
+  let nm = /(?:my name is|this is|i am|i'm|name:)\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,2})/i.exec(all);
+  if (!(nm && okName(nm[1]))) nm = /([A-Z][a-z'’-]+(?:\s+[A-Z][a-z'’-]+){1,2})\s*[,.:–-]?\s*(?:\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}|[A-Za-z0-9._%+-]+@)/.exec(all);
+  if (nm && okName(nm[1])) out.name = nm[1].trim();
+  // Description: their longest message, contact details trimmed off the end.
+  let desc = list.slice().sort((a, b) => b.length - a.length)[0] || '';
+  if (out.name) { const i = desc.indexOf(out.name); if (i > 20) desc = desc.slice(0, i); }
+  if (out.email) desc = desc.replace(out.email, '');
+  desc = desc.replace(/[\s,.;:-]+$/, '').trim();
+  if (desc.length > 15 && !(ad && desc === ad[0])) out.description = desc.slice(0, 400) + (/[.?!]$/.test(desc) ? '' : '.');
+  return out;
 }
 
 function renderCallsPage() {
