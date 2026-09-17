@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -25213,6 +25213,7 @@ async function _syncFromSP() {
     }
   }
   console.log('[GK] Synced from SharePoint:', Object.keys(fetched).length, 'keys', mergeStats, `(${nonMergeCount} overwritten)`);
+  try { if (typeof repairAcceptedPointer20260917 === 'function') repairAcceptedPointer20260917(); } catch (_) {}
   try { if (typeof repairSeedStages20260914 === 'function' && repairSeedStages20260914()) { if (S.page === 'jobs' && !S.jobDetailId && typeof renderPipeline === 'function') renderPipeline(); } } catch (_) {}   // 09-14b
 }
 
@@ -31801,7 +31802,12 @@ async function hydrateQuoteStatusFromServer(qid) {
         if (!_ids.includes(qid)) {
           _ids.push(qid);
           if (_ids.length > 1) upd.acceptedQuoteIds = _ids;
-          _syncAcceptedPointer(upd.acceptedQuoteIds ? upd : Object.assign(upd, { acceptedQuoteId: qid }));
+          // crm-2026-09-17b: a FIRST (single) accept must just set the legacy slot.
+          // It used to be routed through _syncAcceptedPointer, which — seeing no
+          // acceptedQuoteIds array — DELETED acceptedQuoteId. Every email-accepted
+          // job since 8/18g lost its pointer, so the field app fell back to Job
+          // Value (the NET price) and texted card links without the 3% (Freddie Stevens 9/17).
+          if (upd.acceptedQuoteIds) _syncAcceptedPointer(upd); else upd.acceptedQuoteId = qid;
           if (_ids.length > 1) {
             const _sum = _ids.map(x => getQuote(x)).filter(Boolean).reduce((s,x) => s + _quoteJobNet(x), 0);
             upd.jobValue = { amount: Math.round(_sum), source: 'quote-sum', setAt: new Date().toISOString(), setBy: 'customer-accept' };
@@ -35230,11 +35236,44 @@ function repairSeedStages20260914() {
   } catch (e) { console.warn('[GK] repairSeedStages20260914 failed:', e); return 0; }
 }
 
+// ── 2026-09-17 REPAIR (crm-2026-09-17b): email-accepted jobs that lost acceptedQuoteId ──
+// See the note in hydrateQuoteStatusFromServer. Restores the pointer ONLY when it is
+// unambiguous: no accepted ids on the job, Job Value was set by the customer's accept
+// from a named quote, that quote still exists, is still approved, was not withdrawn,
+// belongs to this job, and its net equals the Job Value to the dollar. Anything else
+// is left for a human. Idempotent; bumps updatedAt so it wins everywhere.
+function repairAcceptedPointer20260917() {
+  try {
+    const arr = JSON.parse(localStorage.getItem('gk_leads') || '[]');
+    const qs = JSON.parse(localStorage.getItem('gk_quotes') || '[]');
+    const byId = new Map(); for (const q of qs) if (q && q.id) byId.set(q.id, q);
+    let n = 0; const now = new Date().toISOString();
+    for (const l of arr) {
+      if (!l || l.acceptedQuoteId || (Array.isArray(l.acceptedQuoteIds) && l.acceptedQuoteIds.length)) continue;
+      const jv = l.jobValue;
+      if (!jv || jv.setBy !== 'customer-accept' || jv.source !== 'quote' || !jv.quoteId) continue;
+      const q = byId.get(jv.quoteId);
+      if (!q || q.leadId !== l.id || q.acceptUndoneAt) continue;
+      if (!['approved','contingent-approved','invoiced'].includes(q.status)) continue;
+      let net = null; try { net = _quoteJobNet(q); } catch (_) {}
+      if (typeof net !== 'number' || Math.round(net) !== Math.round(jv.amount)) continue;
+      l.acceptedQuoteId = q.id; l.updatedAt = now; n++;
+    }
+    if (n) {
+      localStorage.setItem('gk_leads', JSON.stringify(arr));
+      console.log('[GK] repairAcceptedPointer20260917: restored ' + n + ' accepted-quote pointers');
+      try { queueSPSync(); } catch (_) {}
+    }
+    return n;
+  } catch (e) { console.warn('[GK] repairAcceptedPointer20260917 failed:', e); return 0; }
+}
+
 // ── INIT ──
 async function init() {
   archiveOldLeads();
   seedImportData();
   try { repairSeedStages20260914(); } catch (_) {}
+  try { repairAcceptedPointer20260917(); } catch (_) {}
   // Start the background quote-action poller. It self-throttles based on
   // tab visibility + current page so it's cheap when the user isn't on
   // the pipeline. Idempotent so safe to call from init.
