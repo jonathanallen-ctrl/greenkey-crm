@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4584,13 +4584,15 @@ function closeDrawer() {
 function findDuplicateCustomers(fn, ln, email, phone) {
   const custs = getCustomers();
   const norm  = s => (s||'').toLowerCase().replace(/\W/g,'');
-  const normP = p => (p||'').replace(/\D/g,'');
+  // crm-2026-09-17e: LAST 10 digits — '+17578768184' and '(757) 876-8184' are the same phone.
+  // Comparing all digits let Val Gibberman be created twice (11 digits vs 10 never matched).
+  const normP = p => (p||'').replace(/\D/g,'').slice(-10);
   const matches = [];
   for (const c of custs) {
     if (c.mergedInto) continue;   // skip records already folded into another
     let score = 0; const reasons = [];
     const ph = normP(phone);
-    if (ph.length >= 7 && normP(c.phone) === ph)                       { score+=3; reasons.push('same phone'); }
+    if (ph.length >= 7 && (normP(c.phone) === ph || normP(c.phone2) === ph))                       { score+=3; reasons.push('same phone'); }
     if (norm(email).length>3 && norm(c.email) === norm(email))          { score+=3; reasons.push('same email'); }
     if (norm(fn) && norm(ln) && norm(c.firstName)===norm(fn) && norm(c.lastName)===norm(ln)) { score+=2; reasons.push('same name'); }
     if (score >= 2) matches.push({cust:c, score, reasons});
@@ -4809,6 +4811,9 @@ function showLeadForm(lead, prefillCustId) {
   openDrawer(isNew?'New Lead':l.id, body,
     `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button>
      <button class="btn btn-p" onclick="saveLead()">Save Lead</button>`);
+  // crm-2026-09-17e: the duplicate banner only ran on blur — a form PREFILLED from a
+  // call/text never triggered it. Run it as soon as a new-lead form opens.
+  if (isNew && !prefillCust) { try { setTimeout(checkLeadFormDuplicate, 80); } catch (_) {} }
 
   // Bind EVSE toggle
   const evseChk = document.getElementById('lf-qevse');
@@ -4934,6 +4939,23 @@ function saveLead() {
   // Require at least a name
   const custName = document.getElementById('lf-custname').value.trim();
   if (!custName && !fn) { toast('Please enter a customer name','error'); return; }
+
+  // crm-2026-09-17e: last line of defence against a second job for the same person.
+  // New lead, not linked to a customer, and the phone/email/name matches someone who
+  // ALREADY HAS AN OPEN JOB → stop and ask.
+  if (!existingId && !custId) {
+    try {
+      const _d = findDuplicateCustomers(fn, ln, email, phone).filter(x => x.reasons.some(r => r !== 'same name'));
+      for (const x of _d) {
+        const _ol = _openLeadForCustomer(x.cust.id);
+        if (_ol) {
+          const _st = (STAGE_MAP[_ol.stage] && STAGE_MAP[_ol.stage].label) || _ol.stage;
+          if (!confirm(custFullName(x.cust) + ' already has an open job: ' + _ol.id + ' (' + _st + ') — matched on ' + x.reasons.join(', ') + '.\n\nOK = open that job instead (nothing new is created)\nCancel = create a SECOND job anyway')) break;
+          closeDrawer(); openLeadDetail(_ol.id); return;
+        }
+      }
+    } catch (_) {}
+  }
 
   // County check
   const j = checkJurisdiction(city);
@@ -28962,6 +28984,10 @@ function markCallHandled(callId) {
 function openUnroutedThread(phoneRaw, name){
   const digits=String(phoneRaw||'').replace(/\D/g,'').slice(-10);
   if(digits.length!==10){ toast('No usable number on this notice','warning'); return; }
+  // crm-2026-09-17e: an OLD 'unrouted' bell notice outlives the moment a job gets created
+  // for that number (AI intake made Val Gibberman's job 7 min after his first text; the
+  // notice still said "no job on file" hours later → second job). Re-check by phone NOW.
+  try { const _m=_callMatchByPhone(digits); if(_m && _m.lead){ toast('This number already has a job — opening '+_m.lead.id,'success'); openLeadDetail(_m.lead.id); return; } }catch(_){}
   const pretty=(typeof _callPretty==='function')?_callPretty(digits):digits;
   const body=`
     <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:8px">Texts with <strong>${escHtml(pretty)}</strong> — no job on file yet. Reply here, or create the job and every message and picture from this number moves onto it automatically.</div>
@@ -29004,6 +29030,17 @@ function createJobFromCall(digits, name, callId) {
   // he pushed back on auto-resolving tasks from bell acknowledgements.
   if (callId) { try { if (typeof completeTask === 'function') completeTask('call-' + callId, 'Job created from the Calls page'); } catch (_) {} }
   const pretty = (typeof _callPretty === 'function') ? _callPretty(digits) : digits;
+  // crm-2026-09-17e: never start a second job for a number that already has one.
+  try {
+    const _m = _callMatchByPhone(digits);
+    if (_m && _m.lead) {
+      const _live = (typeof STAGE_MAP !== 'undefined') && STAGE_MAP[_m.lead.stage];
+      const _who = (_m.cust && custFullName(_m.cust)) || _m.lead.customerName || pretty;
+      if (_live) { try { closeDrawer(); } catch (_) {} toast(_who + ' already has a job — opening ' + _m.lead.id, 'success'); openLeadDetail(_m.lead.id); return; }
+      if (!confirm(_who + ' has an earlier job on file (' + _m.lead.id + ', ' + _m.lead.stage + ').\n\nOK = start a NEW job for them\nCancel = open the earlier job')) { try { closeDrawer(); } catch (_) {} openLeadDetail(_m.lead.id); return; }
+      if (_m.cust) { navigate('jobs'); setTimeout(() => { try { openNewLeadForCustomer(_m.cust.id); } catch (_) {} }, 60); return; }
+    }
+  } catch (_) {}
   // crm-2026-09-17d (Jon, Roger Gench): "it didn't populate anything." Read what
   // the caller TEXTED us and prefill name / email / address / description from
   // it. Best effort: anything it can't find stays blank, nothing is saved until
@@ -29238,15 +29275,18 @@ function _callPretty(p) {
 function _callMatchByPhone(phone) {
   const digits = _callDigits(phone);
   if (!digits) return { cust: null, lead: null };
-  const cust = getCustomers().filter(c => !c.mergedInto && !c.deleted)
-                 .find(c => _callDigits(c.phone) === digits) || null;
-  const leads = getLeads().filter(l => !l.deleted);
-  let lead = null;
-  if (cust) {
-    lead = leads.filter(l => l.customerId === cust.id)
-                .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
-  }
-  if (!lead) lead = leads.find(l => _callDigits(l.customerPhone) === digits) || null;
+  // crm-2026-09-17e: a number can sit on MORE than one customer record (duplicates) and a
+  // customer can have an archived job beside a live one. Gather every job tied to the number
+  // and prefer a LIVE pipeline job, newest first — so "is there already a job?" answers yes
+  // whenever one exists, and never hands back the archived duplicate.
+  const custs = getCustomers().filter(c => !c.mergedInto && !c.deleted)
+                 .filter(c => _callDigits(c.phone) === digits || _callDigits(c.phone2) === digits);
+  const custIds = new Set(custs.map(c => c.id));
+  const leads = getLeads().filter(l => l && !l.deleted && (custIds.has(l.customerId) || _callDigits(l.customerPhone) === digits));
+  const live  = l => (typeof STAGE_MAP !== 'undefined' && STAGE_MAP[l.stage]) ? 1 : 0;
+  leads.sort((a, b) => (live(b) - live(a)) || (new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)));
+  const lead = leads[0] || null;
+  const cust = (lead && custs.find(c => c.id === lead.customerId)) || custs[0] || null;
   return { cust, lead };
 }
 
@@ -31012,6 +31052,15 @@ function _bellSelectNotif(id, jobId) {
   // machine yet" and the reply was unreachable from the bell (Jonathan,
   // 2026-08-28). _bellOpenLead already knows how to route them.
   if (jobId && /^insp-/.test(jobId)) { _bellOpenLead(jobId); return; }
+  // crm-2026-09-17e: a text notice pointing at an ARCHIVED job (e.g. a duplicate that was
+  // archived) should land on the customer's LIVE job when the number has one.
+  try {
+    const _n0 = getNotification(id), _l0 = jobId && getLead(jobId);
+    if (_n0 && _n0.type === 'cust-sms' && _n0.phone && _l0 && !STAGE_MAP[_l0.stage]) {
+      const _m0 = _callMatchByPhone(_n0.phone);
+      if (_m0 && _m0.lead && STAGE_MAP[_m0.lead.stage]) jobId = _m0.lead.id;
+    }
+  } catch (_) {}
   if (jobId && typeof getLead === 'function' && getLead(jobId)) { _bellOpenLead(jobId); return; }
   // 28r: a text from a number with no job used to dead-end in a toast. If the
   // notice carries (or its title contains) the number, open the conversation —
