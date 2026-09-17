@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -27892,6 +27892,9 @@ async function _bellPollOnce() {
     });
     const _wrote = upsertNotificationsBatch(_toPersist);
     if (_wrote || brandNew.length) _bellRefreshUI();
+    // 09-17c: a new inbound text flags its card on the Calls page right away — but never
+    // re-render over an open conversation (it would wipe a half-typed reply).
+    try { if (_wrote && S.page === 'calls' && !_callsOpenThread && typeof renderCallsPage === 'function') renderCallsPage(); } catch (_) {}
     // 28af: advance the last-seen stamp to the newest message this poll saw, so
     // the NEXT poll asks only for what arrived after it (a few rows, usually
     // none) instead of re-pulling three days every 30 s. The 3-day look-back
@@ -28219,8 +28222,40 @@ function _callAgo(iso) {
 let _callsOpenThread = null;
 let _callsOnlyOpen  = false;
 
+// ── crm-2026-09-17c (Jon): "we could not see that they had texted us until we
+// hit the Text button." Inbound texts already land in the synced notifications
+// store (type 'cust-sms', with the sender's phone) via the bell poll — so the
+// Calls page reads THAT: no new worker calls, no extra D1 reads. A text is
+// "unread here" until someone opens that number's conversation in this browser
+// (gk_calls_text_seen: { last10: isoOpenedAt }).
+const CALLS_TEXT_SEEN_K = 'gk_calls_text_seen';
+function _callsTextSeen(){ try { return JSON.parse(localStorage.getItem(CALLS_TEXT_SEEN_K) || '{}') || {}; } catch (_) { return {}; } }
+function _callsMarkTextSeen(key){
+  try { const m = _callsTextSeen(); m[key] = new Date().toISOString(); localStorage.setItem(CALLS_TEXT_SEEN_K, JSON.stringify(m)); } catch (_) {}
+}
+// Map last-10 digits → { at, body, n (unread count), name, jobId } from inbound-text notices.
+function _callsInboundTexts(){
+  const out = new Map();
+  try {
+    const seen = _callsTextSeen();
+    for (const n of getNotifications()) {
+      if (!n || n.type !== 'cust-sms') continue;
+      const d = String(n.phone || '').replace(/\D/g, '').slice(-10);
+      if (d.length !== 10) continue;
+      const at = n.at || '';
+      const unread = at > (seen[d] || '');
+      const cur = out.get(d) || { at: '', body: '', n: 0, name: '', jobId: null };
+      if (unread) cur.n++;
+      if (at >= cur.at) { cur.at = at; cur.body = n.description || ''; cur.jobId = n.jobId || null;
+        const nm = /^New text — (.+)$/.exec(n.title || ''); cur.name = (nm && !/\d{4}/.test(nm[1])) ? nm[1] : ''; }
+      out.set(d, cur);
+    }
+  } catch (_) {}
+  return out;
+}
 function toggleCallThread(key) {
   _callsOpenThread = (_callsOpenThread === key) ? null : key;
+  if (_callsOpenThread) _callsMarkTextSeen(_callsOpenThread);
   renderCallsPage();
   if (_callsOpenThread) loadCallThread(_callsOpenThread);
 }
@@ -28991,7 +29026,9 @@ function renderCallsPage() {
   const openTasks = getTasks().filter(t => t.status !== 'done' && String(t.id || '').startsWith('call-'));
   const openIds = new Set(openTasks.map(t => String(t.id).replace(/^call-/, '')));
   // The log only grows, so give it a way to show just what still needs doing.
-  const calls = _callsOnlyOpen ? allCalls.filter(c => openIds.has(String(c.id))) : allCalls;
+  const _inTexts = _callsInboundTexts();
+  // 09-17c: an unread text keeps a call visible under "Needs follow-up only" even if the call itself was marked Done.
+  const calls = _callsOnlyOpen ? allCalls.filter(c => openIds.has(String(c.id)) || ((_inTexts.get(_callDigits(c.phone)) || {}).n > 0)) : allCalls;
 
   if (!allCalls.length) {
     el.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:var(--text-muted)">
@@ -29000,6 +29037,7 @@ function renderCallsPage() {
     return;
   }
 
+  const _txtShown = new Set();
   const rows = calls.map(c => {
     const name  = c.name || '';
     const phone = _callPretty(c.phone);
@@ -29018,6 +29056,9 @@ function renderCallsPage() {
     const digits  = String(c.phone||'').replace(/[^0-9+]/g,'');
     const openKey = _callDigits(c.phone);
     const isOpen  = _callsOpenThread === openKey;
+    const _txt    = _inTexts.get(openKey);
+    const _txtNew = !!(_txt && _txt.n > 0 && !_txtShown.has(openKey));   // newest card for that number only
+    if (_txtNew) _txtShown.add(openKey);
     // c.leadId is whatever matched when the call was IMPORTED. A caller who had
     // no job then still has none stored now, even if you created one two minutes
     // later — so the row went on offering "+ Create job" and would cheerfully
@@ -29034,9 +29075,11 @@ function renderCallsPage() {
         <div style="font-size:12px;color:${colour};margin-top:2px">${escHtml(status)}</div>
         <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">${escHtml(_callAgo(c.at))}${when ? ' · ' + escHtml(when) : ''}${detail ? ' · ' + detail : ''}</div>
         ${c.voicemailUrl ? `<audio controls preload="none" src="${escHtml(c.voicemailUrl)}" style="width:100%;max-width:320px;margin-top:8px;height:32px"></audio>` : ''}
+        ${_txtNew ? `<div onclick="toggleCallThread('${escHtml(openKey)}')" title="Open the conversation" style="cursor:pointer;margin-top:8px;padding:7px 10px;border:1px solid #3498db;border-left:4px solid #3498db;border-radius:6px;background:rgba(52,152,219,0.08);font-size:12.5px;max-width:720px"><strong style="color:#3498db">💬 They texted us${_txt.n>1?' ('+_txt.n+')':''}</strong> <span style="color:var(--text-muted);font-size:11.5px">${escHtml(_callAgo(_txt.at))}</span><div style="margin-top:2px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(_txt.body)}</div></div>` : ''}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0">
         ${needs ? '<span style="font-size:10.5px;font-weight:600;color:#fff;background:var(--amber,#f59e0b);border-radius:10px;padding:2px 8px">NEEDS FOLLOW-UP</span>' : ''}
+        ${_txtNew ? '<span style="font-size:10.5px;font-weight:600;color:#fff;background:#3498db;border-radius:10px;padding:2px 8px">NEW TEXT</span>' : ''}
         <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
           <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;${isOpen?'border-color:#3498db;color:#3498db':''}" onclick="toggleCallThread('${escHtml(openKey)}')" title="Read and answer the text conversation with this number, without needing a job for them">💬 ${isOpen?'Hide':'Text'}</button>
           <a class="btn btn-g" style="padding:4px 10px;font-size:11.5px;text-decoration:none" href="tel:${escHtml(digits)}">Call back</a>
@@ -29069,6 +29112,27 @@ function renderCallsPage() {
   // 34 needing follow-up" (2026-07-30). A follow-up count larger than the list
   // it sits above is worse than no count: it says something is missing without
   // saying what.
+  // Unread texts from numbers that never CALLED and have no job — they have no
+  // card to hang a flag on, so they get their own strip at the top.
+  let textOnly = '';
+  try {
+    const _callNums = new Set(allCalls.map(c => _callDigits(c.phone)));
+    const _items = [];
+    _inTexts.forEach((t, d) => {
+      if (!t.n || _callNums.has(d)) return;
+      if (t.jobId && t.jobId !== 'unrouted' && typeof getLead === 'function' && getLead(t.jobId)) return;   // lives on its job
+      try { const m = _callMatchByPhone(d); if (m && m.lead) return; } catch (_) {}
+      _items.push({ d, t });
+    });
+    _items.sort((a, b) => (b.t.at || '').localeCompare(a.t.at || ''));
+    if (_items.length) textOnly = `<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:4px solid #3498db">
+      <div style="font-weight:600;font-size:13px;color:#3498db;margin-bottom:6px">💬 Texts from numbers with no call and no job (${_items.length})</div>` +
+      _items.map(x => `<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${escHtml(x.t.name || _callPretty(x.d))} <span style="font-weight:400;color:var(--text-muted);font-size:11.5px">${escHtml(_callAgo(x.t.at))}${x.t.n>1?' · '+x.t.n+' texts':''}</span></div>
+        <div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(x.t.body)}</div></div>
+        <button class="btn btn-g" style="padding:4px 10px;font-size:11.5px;border-color:#3498db;color:#3498db" onclick="_callsMarkTextSeen('${x.d}');openUnroutedThread('${x.d}','${escHtml(String(x.t.name||'').replace(/'/g,''))}')">💬 Open</button>
+      </div>`).join('') + `</div>`;
+  } catch (_) {}
   const openCount   = calls.filter(c => openIds.has(String(c.id))).length;
   const orphanCount = Math.max(0, openTasks.length - openCount);
   try { updateCallsBadge(); } catch (_) {}
@@ -29079,7 +29143,7 @@ function renderCallsPage() {
       </label>
       <span>${allCalls.length} call${allCalls.length===1?'':'s'}${openCount ? ` · <strong style="color:var(--amber,#f59e0b)">${openCount} needing follow-up</strong>` : ' · nothing outstanding'}
       ${orphanCount ? ` · <span title="Open call tasks whose call record isn't in this list — older than the 200 shown, or imported before call history was stored locally. Clear them on the Tasks page.">${orphanCount} older follow-up task${orphanCount===1?'':'s'} on the Tasks page</span>` : ''}</span>
-    </div>${rows || '<div class="card" style="padding:22px;text-align:center;color:var(--text-muted);font-size:13px">Nothing needs follow-up. Untick the box above to see the full call log.</div>'}`;
+    </div>${textOnly}${rows || '<div class="card" style="padding:22px;text-align:center;color:var(--text-muted);font-size:13px">Nothing needs follow-up. Untick the box above to see the full call log.</div>'}`;
 }
 
 // ── MISSED CALL / VOICEMAIL POLLER ──────────────────────────────────────────
