@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-15m</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4658,6 +4658,20 @@ function showLeadForm(lead, prefillCustId) {
   let prefillCust = null;
   if (prefillCustId) prefillCust = getCustomer(prefillCustId);
   else if (l.customerId) prefillCust = getCustomer(l.customerId);
+  // 2026-09-17 (crm-2026-09-17a, Jon — Will Tumlin charger swap): "+ New Job
+  // for Customer" opened with an empty site address because the CUSTOMER record
+  // (imported) carried only "VA" — the real address lives on his earlier job.
+  // Prefill the site address from the customer record when it has a street,
+  // otherwise from the customer's most recent job that has one. Phone/email
+  // were already flowing (hidden inputs) — the address was the gap.
+  if (prefillCust && isNew && !String(prefillCust.street || '').trim()) {
+    try {
+      const prior = getLeads()
+        .filter(x => x && x.customerId === prefillCust.id && !x.deleted && String(x.siteStreet || '').trim())
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0];
+      if (prior) prefillCust = { ...prefillCust, street: prior.siteStreet, city: prior.siteCity || prefillCust.city, state: prior.siteState || prefillCust.state, zip: prior.siteZip || prefillCust.zip, _addrFromJob: prior.id };
+    } catch (_) {}
+  }
 
   const custName = prefillCust ? custFullName(prefillCust) : (l.customerName||'');
   const users = getUsers();
@@ -4960,10 +4974,16 @@ function saveLead() {
     // Existing customer — update phone/email if they were changed
     const existingCust = getCustomer(finalCustId);
     if (existingCust) {
+      // crm-2026-09-17a: fill a BLANK customer address from the job's site
+      // address (imported records often carry only the state). Never overwrite
+      // an address the office already has — a job at a second property must
+      // not rewrite the customer's home.
+      const _custHasStreet = !!String(existingCust.street || '').trim();
       upsertCustomer({
         ...existingCust,
         email: email || existingCust.email,
-        phone: phone || existingCust.phone
+        phone: phone || existingCust.phone,
+        ...(!_custHasStreet && String(street || '').trim() ? { street, city: city || existingCust.city, state: state || existingCust.state, zip: zip || existingCust.zip } : {})
       });
     }
   }
@@ -34242,6 +34262,13 @@ async function openSchedInOutlook(_specOk) {
   // request — if accepted, the event is created TENTATIVE and flips to busy when
   // the customer confirms (via the /scheduling/* Worker flow).
   const _isInstall = (document.getElementById('sched-type')?.value || '') === 'installation';
+  // 2026-09-15 (crm-2026-09-15n, Jon — Georgescu / Red E Charge): "Schedule
+  // now" on a Service Call left the job in Lead Received. The confirmation
+  // request, the "already agreed?" prompt and the auto-move to Installation
+  // were all gated on type === 'installation'. A service call or charger swap
+  // IS the job's main visit on a troubleshooting / swap job, so they get the
+  // same treatment. The spec-complete gate above stays install-only.
+  const _isMainVisit = _isInstall || ['troubleshoot', 'charger-swap'].includes(document.getElementById('sched-type')?.value || '');
 
   // ── SPEC BACKSTOP ──────────────────────────────────────────────────────
   // Gate on the APPOINTMENT TYPE, not the job's stage. An Installation can't be
@@ -34282,7 +34309,7 @@ async function openSchedInOutlook(_specOk) {
   // a confirmation request and whether the event is created tentative. If a
   // confirmation ever fails to send, this line says which one was wrong.
   console.log('[GK] Sched decision:', { specOk: !!_specOk, isInstall: _isInstall, custEmail: _custEmail || '(none)', schedType: document.getElementById('sched-type')?.value || '(none)' });
-  if (_isInstall && _custEmail) {
+  if (_isMainVisit && _custEmail) {
     _wantConfirm = confirm(
       `Send ${_cust ? custFullName(_cust) : (lead.customerName || 'the customer')} a confirmation request for this appointment?\n\n` +
       `• OK — the event is created as TENTATIVE and the customer gets a "Confirm / Request reschedule" email; it flips to confirmed when they reply.\n` +
@@ -34438,7 +34465,7 @@ async function openSchedInOutlook(_specOk) {
     // email/text) — OK writes a manual 'confirmed' record so the chip goes
     // straight to ✅ Confirmed; Cancel leaves a clean 📅 Scheduled.
     let _autoMovedAtBook = false;
-    if (_isInstall) {
+    if (_isMainVisit) {
       try {
         const _arr2 = getLeads(); const _i2 = _arr2.findIndex(l => l.id === lead.id);
         if (_i2 >= 0) {
