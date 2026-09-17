@@ -97,7 +97,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-09-17 field-33';
+const BUILD = '2026-09-17 field-34';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -1090,9 +1090,10 @@ function renderDetail(id){
       + ((pay.paid||0) ? '<div style="font-size:12.5px;color:#7fe0a6;margin-bottom:6px;font-weight:600">Balance after '+fmt$(pay.paid)+' already paid</div>' : '')
       + (hasAmt ? '<div style="font-size:14px;margin-bottom:10px">'+(c!=null?'Card <b>'+fmt$(c)+'</b>':'')+((c!=null&&n!=null&&n!==c)?' &nbsp;·&nbsp; Zelle/cash <b>'+fmt$(n)+'</b>':'')+'</div>'
                  : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
+      + (payLinkPending(l) ? '<div style="background:#16324a;border:1px solid #3498db;border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px;line-height:1.45">💳 <b>Pay link texted '+esc(new Date(l.paymentExpected.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))+' · '+fmt$(l.paymentExpected.amount)+'</b><br>It records itself when the customer pays — <b>nothing to enter here</b>. This job flips to “Paid” after the office CRM sees it.</div>' : '')
       + '<button class="btn green" onclick="tapToPay(\''+esc(l.id)+'\')">💳 Tap to Pay'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
-      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">✓ Card paid — record it'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">✓ Tap to Pay done — record it'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">💳 Text pay link'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
       + '<div style="height:8px"></div>'
@@ -1108,7 +1109,7 @@ function renderDetail(id){
       +   '<div style="color:#555;font-size:12px;margin-top:2px;line-height:1.45">Ask the customer to add this code to the Zelle note so the office can match the payment instantly.</div>'
       +   '<div style="color:#555;font-size:12px;margin-top:4px;line-height:1.45">Scan with your banking app’s Zelle, or search the email. Send the exact amount shown above.</div>'
       + '</div>'
-      + '<div class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">Card: open the <b>Stripe</b> app and charge the card amount with Tap to Pay (tap the customer’s card or phone), then tap “Card paid”. Zelle to '+esc(ZELLE_EMAIL)+'.</div>'
+      + '<div class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">Card: open the <b>Stripe</b> app and charge the card amount with Tap to Pay (tap the customer’s card or phone), then tap “Tap to Pay done”. A texted pay link records itself — never enter it by hand. Zelle to '+esc(ZELLE_EMAIL)+'.</div>'
       + '</div>';
   }
   const ms = l.milestones||{}; const complete = !!(ms.installCompleted && ms.installCompleted.done);
@@ -1885,7 +1886,7 @@ async function clearAdjust(jobId){
 function tapToPay(jobId){
   const l=getLeads().find(x=>x.id===jobId); if(!l) return;
   const amt=jobPayAmounts(l).card;
-  alert('Tap to Pay\n\n1) Open the Stripe app and start a Tap to Pay charge for '+(amt?fmt$(amt):'the amount')+'.\n2) Tap the customer’s card or phone.\n3) Come back here and tap “✓ Card paid — record it”.');
+  alert('Tap to Pay\n\n1) Open the Stripe app and start a Tap to Pay charge for '+(amt?fmt$(amt):'the amount')+'.\n2) Tap the customer’s card or phone.\n3) Come back here and tap “✓ Tap to Pay done — record it”.');
 }
 
 // ---------- Stripe pay link: create + text from the business number ----------
@@ -1916,7 +1917,7 @@ async function textPayLink(jobId){
       body:JSON.stringify({leadId:l.id,to:phone,message:msg,templateKey:'stripe_pay_link',customerName:custName(l)})});
     const sd=await sr.json().catch(()=>({}));
     if(!sr.ok) throw new Error(sd.error||'Link created but the text failed to send');
-    alert('✓ Payment link texted to '+custName(l)+'.\nThey pay by card — it shows here in the office once it clears.');
+    alert('✓ Payment link texted to '+custName(l)+'.\nThey pay by card and it records ITSELF — do NOT tap “record it” for a pay link.');
     // Track the ask on the office Payments page (cleared when payment lands).
     try{
       const arr2=getLeads(); const j=arr2.findIndex(x=>x.id===l.id);
@@ -1927,10 +1928,30 @@ async function textPayLink(jobId){
         await pushLeads();
       }
     }catch(_){}
+    try{ renderDetail(l.id); }catch(_){}
   }catch(e){ alert('Could not send pay link: '+(e.message||e)); }
   renderDetail(jobId);
 }
+// field-34 (2026-09-17, Jon — Freddie Stevens recorded twice): a texted pay link
+// records ITSELF when the customer pays (Stripe → office CRM → ledger, method
+// 'card-link'). Nothing on this screen said so, the "Card paid — record it"
+// button sat right there, and tapping it booked the same $910 a second time.
+function payLinkPending(l){
+  const pe=l&&l.paymentExpected;
+  if(!pe||!Array.isArray(pe.methods)||!pe.methods.includes('card-link')||!pe.at) return null;
+  if(Date.now()-new Date(pe.at).getTime() > 7*24*3600*1000) return null;
+  return pe;
+}
+function recentLinkPayment(l){
+  return ledgerPayments(l).find(function(p){ return p && p.method==='card-link' && p.collectedAt && (Date.now()-new Date(p.collectedAt).getTime() < 48*3600*1000); }) || null;
+}
 async function doPayment(jobId, method, amount){
+  if(method==='card'){
+    const _l=getLeads().find(x=>x.id===jobId);
+    const _lp=_l&&recentLinkPayment(_l), _pe=_l&&payLinkPending(_l);
+    if(_lp && !confirm('STOP — the pay link payment of '+fmt$(_lp.amount)+' is ALREADY recorded on this job.\n\nRecording again would count the money twice.\n\nOK = record ANOTHER, separate card payment\nCancel = do nothing (correct if they paid by the link)')) return;
+    if(!_lp && _pe && !confirm('You texted this customer a pay link. A pay link records ITSELF when they pay — you do not enter it.\n\nOnly continue if you charged the card a DIFFERENT way (Tap to Pay in the Stripe app).\n\nOK = I used Tap to Pay, record it\nCancel = they paid by the link, do nothing')) return;
+  }
   if(!amount){ const v=prompt('Amount collected ($):',''); if(v===null) return; amount=Math.round(parseFloat(v)||0); }
   const label = method==='card'?'card':(method==='zelle'?'Zelle':'cash/check');
   if(!confirm('Record '+fmt$(amount)+' '+label+' payment collected for this job?')) return;
