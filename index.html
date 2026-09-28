@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-17e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-28b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -4426,6 +4426,7 @@ function renderCustomerDetail(custId) {
       ${isCom && personName ? `<div class="info-card"><div class="info-lbl">Contact Name</div><div class="info-val">${personName}</div></div>` : ''}
       <div class="info-card"><div class="info-lbl">Email</div><div class="info-val">${c.email||'—'}</div></div>
       <div class="info-card"><div class="info-lbl">Phone</div><div class="info-val">${c.phone||'—'}</div></div>
+      ${c.phone2 ? `<div class="info-card"><div class="info-lbl">Second phone</div><div class="info-val">${escHtml(c.phone2)}${c.phone2Label ? ` <span style="color:var(--text-muted);font-size:12px">(${escHtml(c.phone2Label)})</span>` : ''}</div></div>` : ''}
       <div class="info-card" style="grid-column:1/-1"><div class="info-lbl">Address</div><div class="info-val">${addr}</div></div>
       <div class="info-card"><div class="info-lbl">Property Type</div><div class="info-val">${isCom ? 'Commercial' : 'Residential'}</div></div>
       <div class="info-card"><div class="info-lbl">Notes</div><div class="info-val" style="white-space:pre-wrap;font-size:13px">${c.notes||'—'}</div></div>
@@ -5082,6 +5083,11 @@ function showCustomerForm(c) {
         <div class="fg"><div class="fl">Email</div><input class="fi" id="cf-email" type="email" value="${c?.email||''}" placeholder="email@example.com" autocomplete="off"></div>
         <div class="fg"><div class="fl">Phone</div><input class="fi" id="cf-phone" value="${c?.phone||''}" placeholder="(540) 000-0000" autocomplete="off" oninput="fmtPhone(this)"></div>
       </div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Second phone <span style="font-weight:400;color:var(--text-muted)">(optional)</span></div><input class="fi" id="cf-phone2" value="${escHtml(c?.phone2||'')}" placeholder="(540) 000-0000" autocomplete="off" oninput="fmtPhone(this)"></div>
+        <div class="fg"><div class="fl">Whose / which phone?</div><input class="fi" id="cf-phone2-label" value="${escHtml(c?.phone2Label||'')}" placeholder="e.g. other cell, wife's cell" maxlength="40" autocomplete="off"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin:-4px 0 4px;line-height:1.4">Texts from the second phone show up on this customer's job. Quotes, scheduling and other automatic texts still go to the main phone only.</div>
     </div>
     <div class="fsec">
       <div class="fsec-title">Address</div>
@@ -5138,6 +5144,10 @@ function saveCustomer() {
     id, firstName:fn, lastName:ln,
     email: document.getElementById('cf-email').value,
     phone: document.getElementById('cf-phone').value,
+    // 2026-09-28: second number (e.g. "his other cell"). Stored even when blank
+    // so clearing the field actually removes it.
+    phone2: (document.getElementById('cf-phone2')?.value || '').trim(),
+    phone2Label: (document.getElementById('cf-phone2-label')?.value || '').trim().slice(0, 40),
     street: document.getElementById('cf-street').value,
     city: document.getElementById('cf-city').value,
     state: document.getElementById('cf-state').value||'VA',
@@ -5183,7 +5193,7 @@ function doGlobalSearch(q) {
     (c.businessName||'').toLowerCase().includes(ql)||
     (c.email||'').toLowerCase().includes(ql)||
     (c.phone||'').toLowerCase().includes(ql)||
-    phoneMatch((c.phone||'') + ' ' + (c.altPhone||''))
+    phoneMatch((c.phone||'') + ' ' + (c.altPhone||'') + ' ' + (c.phone2||''))
   ).sort((a,b)=>custFullName(a).toLowerCase().localeCompare(custFullName(b).toLowerCase()));
   const custTotal = custAll.length;
   const custs = custAll.slice(0,SEARCH_LIMIT);
@@ -5203,7 +5213,7 @@ function doGlobalSearch(q) {
       (qKey && _nameKey(lcName).includes(qKey))||
       bn.toLowerCase().includes(ql)||
       (l.description||'').toLowerCase().includes(ql)||
-      phoneMatch((lc?.phone||'') + ' ' + (lc?.altPhone||'') + ' ' + (l.customerPhone||''))
+      phoneMatch((lc?.phone||'') + ' ' + (lc?.altPhone||'') + ' ' + (lc?.phone2||'') + ' ' + (l.customerPhone||''))
     );
   }).sort((a,b)=>_leadName(a).localeCompare(_leadName(b)));
   const leadTotal = leadAll.length;
@@ -7872,6 +7882,7 @@ function _calcAdditionalTaskCalculated(task) {
   if (!task) return 0;
   if (task.jobType === 'hvac-circuit') return _calcAdditionalTask_HVAC(task);
   if (task.jobType === 'ev-swap')      return task.swapKind === 'different' ? 200 : 150;
+  if (task.jobType === 'ev-removal')   return 200;
   if (task.jobType === 'ev-existing')  {
     const brk = HVAC_BREAKER_OPTIONS.find(b => b.key === (task.breakerKey || 'none'));
     return 300 + (brk ? brk.price : 0);
@@ -7917,6 +7928,7 @@ function _additionalTaskLabel(t) {
   if (t.jobType === 'hvac-circuit') return 'Additional HVAC circuit';
   if (t.jobType === 'ev-swap') return t.swapKind === 'different' ? 'Charger swap (different type)' : 'Charger swap (like-for-like)';
   if (t.jobType === 'ev-existing') return 'Charger on existing circuit';
+  if (t.jobType === 'ev-removal') return 'Charger removal' + ((t.location || '').trim() ? ' — ' + t.location.trim() : ' at current home');
   return 'Additional task';
 }
 // Per-scope breakdown rows for a quick quote with additional tasks: each task
@@ -7987,6 +7999,10 @@ function _additionalTaskScope(task) {
     const diff = task.swapKind === 'different';
     return `Remove the existing EV charger and install the customer-supplied replacement charger${diff ? ' (different make/model, including any required connection adjustments)' : ''} in the same location on the existing dedicated circuit, with mounting, connection, and setup.`;
   }
+  if (task.jobType === 'ev-removal') {
+    const loc = (task.location || '').trim();
+    return `Remove the customer's existing EV charger ${loc ? 'at ' + loc : "at the customer's current home"}. Terminate the circuit conductors in a covered junction box and turn off and label the breaker as a spare in the panel. The charger is carefully removed and kept ready for reinstallation.`;
+  }
   if (task.jobType === 'ev-existing') {
     const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
     const brkDesc = ampLabel ? `, including a new ${ampLabel} breaker in the existing panel` : '';
@@ -8011,6 +8027,11 @@ function _additionalTaskInclusions(task) {
   }
   if (task.jobType === 'ev-swap') {
     return ['• Removal and disposal of the existing charger', '• Mounting, connection, and setup of the replacement charger'];
+  }
+  if (task.jobType === 'ev-removal') {
+    const loc = (task.location || '').trim();
+    return ['• Removal of the existing charger' + (loc ? ' at ' + loc : ' at your current home') + ' — kept ready for reinstallation',
+            '• Circuit conductors terminated in a covered junction box; breaker turned off and labeled as a spare'];
   }
   if (task.jobType === 'ev-existing') {
     const lines = ['• Conversion of existing outlet/connection to hardwired junction box'];
@@ -8057,6 +8078,22 @@ function _renderAdditionalTaskCard(qid, task, idx) {
           <option value="like"${(task.swapKind||'like')==='like'?' selected':''}>Like for like — same make/model — $150</option>
           <option value="different"${task.swapKind==='different'?' selected':''}>Different type — connection adjustments — $200</option>
         </select>
+      </div>
+      ${_atPriceRows(qid, task, calculated, effective, overrideActive)}
+    </div>`;
+  }
+  // Charger removal (2026-09-28, Jon: "We do this pretty frequently") — take the
+  // customer's charger off at their old home so we can reinstall it at the new
+  // one. $200 flat: remove charger, JB the conductors, spare the breaker.
+  if (task.jobType === 'ev-removal') {
+    return `<div class="qq-row" id="addtask-card-${task.id}" style="flex-direction:column;align-items:stretch;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:13px;font-weight:600">Task ${idx + 2}: Charger Removal</div>
+        <button class="li-del" onclick="removeAdditionalTask('${qid}', '${task.id}')">×</button>
+      </div>
+      <div style="font-size:11.5px;color:var(--text-muted);line-height:1.45">$200 — removes the charger, terminates the conductors in a covered junction box, turns off and labels the breaker as a spare. The charger is kept ready for reinstallation. Use the override for a difficult removal.</div>
+      <div class="fg"><div class="fl">Where is it coming off? (optional — prints on the quote)</div>
+        <input class="fi" type="text" maxlength="120" placeholder="e.g. 123 Oak St, Henrico — leave blank for &quot;your current home&quot;" value="${escHtml(task.location || '')}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'location', this.value.trim().slice(0,120))">
       </div>
       ${_atPriceRows(qid, task, calculated, effective, overrideActive)}
     </div>`;
@@ -8159,6 +8196,10 @@ function _renderAdditionalTasksSection(q) {
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
           Charger, Existing Circuit
         </button>
+        <button class="li-add" onclick="addAdditionalTask_EVRemoval('${q.id}')" style="padding:5px 12px;font-size:12px" title="Remove the customer's charger at their old home — JB the conductors, spare the breaker ($200)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+          Charger Removal
+        </button>
       </div>
     </div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
@@ -8212,6 +8253,19 @@ function addAdditionalTask_EVExisting(qid) {
     id: 'at-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
     jobType: 'ev-existing',
     breakerKey: 'none'
+  });
+  upsertQuote({ ...q, additionalTasks: tasks });
+  if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
+  if (typeof onQQChange === 'function') onQQChange(qid);
+}
+// Charger removal at the customer's old home ($200 flat) — 2026-09-28.
+function addAdditionalTask_EVRemoval(qid) {
+  const q = getQuote(qid); if (!q) return;
+  const tasks = Array.isArray(q.additionalTasks) ? q.additionalTasks.slice() : [];
+  tasks.push({
+    id: 'at-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    jobType: 'ev-removal',
+    location: ''
   });
   upsertQuote({ ...q, additionalTasks: tasks });
   if (typeof renderQBForm === 'function') renderQBForm(getQuote(qid));
@@ -11763,7 +11817,7 @@ function _buildPaymentScheduleText(q) {
   // objection before it lands. Skipped on contingent-utility quotes since
   // those already explain the $200 fee in the body copy.
   if (!q.contingentOnUtility) {
-    txt += `\nA note on the deposit: this covers the materials we order specifically for your project and reserves your spot on our schedule. It's standard practice for licensed contractors and protects both of us if scope changes mid-project. If anything comes up during the work that affects the price, we'll always discuss it with you before adding to the total.\n`;
+    txt += `\nA note on the deposit: it covers the materials we order specifically for your project and locks in your spot on our schedule, so everything is on hand and ready when we arrive. Your price is set by this quote — if anything comes up during the work that would change it, we'll always discuss it with you and get your OK before adding to the total.\n`;
   }
   return txt;
 }
@@ -12520,7 +12574,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
     // Skipped on contingent-utility quotes since the $200 fee is explained
     // in the email body copy already.
     if (!q.contingentOnUtility) {
-      const _rationale = 'A note on the deposit: this covers the materials we order specifically for your project and reserves your spot on our schedule. It\'s standard practice for licensed contractors and protects both of us if scope changes mid-project. If anything comes up during the work that affects the price, we\'ll always discuss it with you before adding to the total.';
+      const _rationale = 'A note on the deposit: it covers the materials we order specifically for your project and locks in your spot on our schedule, so everything is on hand and ready when we arrive. Your price is set by this quote — if anything comes up during the work that would change it, we\'ll always discuss it with you and get your OK before adding to the total.';
       doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...GRAY);
       const _rl = doc.splitTextToSize(_rationale, W-72);
       _fl(_rl, 36, 10);
@@ -15883,6 +15937,7 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">${_custHeaderLabel}</div><div class="jd-fv" style="font-weight:500;display:flex;align-items:center;gap:8px">${_custHeaderValue}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv" style="display:flex;align-items:center;gap:8px">${custName}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
         <div class="jd-f"><div class="jd-fl">Phone</div><div class="jd-fv">${cust?.phone||lead.customerPhone||'—'}</div></div>
+        ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Second phone</div><div class="jd-fv">${escHtml(cust.phone2)}${cust.phone2Label ? ` <span style="color:var(--text-muted);font-size:12px">(${escHtml(cust.phone2Label)})</span>` : ''}</div></div>` : ''}
         <div class="jd-f"><div class="jd-fl">Email</div><div class="jd-fv">${cust?.email||lead.customerEmail||'—'}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
       </div>
@@ -21685,7 +21740,7 @@ function _renderTechModeLanding(pg) {
       const city = (l.siteCity || '').toLowerCase();
       const street = (l.siteStreet || '').toLowerCase();
       const phoneA = c?.phone || l.customerPhone || '';
-      const phoneB = c?.altPhone || '';
+      const phoneB = (c?.altPhone || '') + ' ' + (c?.phone2 || '');
       const allDigits = _digitsOnly(phoneA + ' ' + phoneB);
       if (name.includes(q))   return true;
       if (id.includes(q))     return true;
@@ -27598,7 +27653,7 @@ const SMS_TEMPLATES_DEFAULT = {
   // Editable like every template in Settings → Text Templates.
   siteInfo: {
     label: 'Request site info (quote prep)',
-    body:  "Hi {firstName}, this is {repName} with GreenKey. Thank you for reaching out for a quote. Here is the information that I will need from you in order to complete it:\n\n1. Full name\n2. Email\n3. Street address\n4. Pic of your electrical panel with the door open so that the breakers and load list are clearly visible\n5. Pic of the location where you'd like the outlet to be installed\n6. Short video starting at your electrical panel and walking to the location where you want the outlet\n\nAs soon as I have this information and pics, I'll get the quote right over to you.\n\nWe look forward to hearing from you! 😊"
+    body:  "Hi {firstName}, this is {repName} with GreenKey. Thank you for reaching out for a quote. Here is the information that I will need from you in order to complete it:\n\n1. Pic of your electrical panel with the door open so that the breakers and load list are clearly visible\n2. Pic of the location where you'd like the charger to be installed\n3. Short video starting at your electrical panel and walking to the location where you want the charger\n\nAs soon as I have this information and pics, I'll get the quote right over to you.\n\nWe look forward to hearing from you! 😊"
   },
   permitFollowup: {
     label: 'Post-permit follow-up',
@@ -27786,6 +27841,7 @@ const SMS_POLL_INTERVAL_MS = 7000;
 let _smsPollTimer = null;
 let _smsPollLeadId = null;
 const _smsThreadFingerprint = {}; // leadId -> last-rendered fingerprint, prevents flicker
+const _smsLastInPhone = {};       // leadId -> E.164 the customer last texted FROM (2026-09-28)
 
 // ─── Header SMS notification bell ─────────────────────────────────────
 //
@@ -28328,7 +28384,16 @@ function _callsInsertSiteInfo(key){
     repName: (S.user?.name || 'Jonathan').split(' ')[0],
     source: '', techName: '', etaMinutes: '', jobAddress: ''
   }).replace(/^Hi there, /, 'Hi, ');
-  inp.value = body;
+  // 2026-09-25 (Jon, option B): the stock template no longer asks for name /
+  // email / address (a job usually has them). A Calls-page caller usually has
+  // NO job yet, so add one line asking for them — their reply also feeds
+  // + Create job's text parser. Goes before the "As soon as…" line when the
+  // template still has it; otherwise after the whole message.
+  const _askContact = "Also, please send your full name, email, and the street address where the charger will be installed.";
+  const _mk = '\n\nAs soon as';
+  const _i = body.indexOf(_mk);
+  const bodyOut = _i >= 0 ? body.slice(0, _i) + '\n\n' + _askContact + body.slice(_i) : (body ? body + '\n\n' + _askContact : _askContact);
+  inp.value = bodyOut;
   inp.focus();
 }
 async function sendCallReply(key, digits) {
@@ -34925,7 +34990,21 @@ function openSMSModal(leadId) {
 
   _smsLeadId = leadId;
   const name = cust ? custFullName(cust) : (lead.customerName || 'Customer');
-  document.getElementById('sms-to-display').textContent = `${name} · ${phone}`;
+  // 2026-09-28: two numbers on file → pick which one. Defaults to the number
+  // the customer last texted from, so you answer him where he is.
+  const _toEl = document.getElementById('sms-to-display');
+  const _p2 = (cust?.phone2 || '').trim();
+  if (_p2) {
+    const _d10 = x => String(x || '').replace(/\D/g, '').slice(-10);
+    const _last = _d10(_smsLastInPhone[leadId]);
+    const _use2 = _last && _last === _d10(_p2);
+    _toEl.innerHTML = `${escHtml(name)} · <select id="sms-to-sel" class="fsel" style="display:inline-block;width:auto;padding:4px 8px;font-size:13px">
+        <option value="${escHtml(phone)}"${_use2 ? '' : ' selected'}>${escHtml(phone)} (main)</option>
+        <option value="${escHtml(_p2)}"${_use2 ? ' selected' : ''}>${escHtml(_p2)} (${escHtml(cust.phone2Label || 'second phone')})</option>
+      </select>${_last ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">Last text from them came from ${_use2 ? 'the ' + escHtml(cust.phone2Label || 'second phone') : 'the main number'}.</div>` : ''}`;
+  } else {
+    _toEl.textContent = `${name} · ${phone}`;
+  }
 
   // Populate template dropdown and wire change handler.
   const templates = getSMSTemplates();
@@ -35026,7 +35105,8 @@ async function sendIntroSMS() {
   const lead = getLead(_smsLeadId);
   if (!lead) return;
   const cust = getCustomer(lead.customerId);
-  const phone = cust?.phone || lead?.customerPhone || '';
+  const _toSel = document.getElementById('sms-to-sel');   // present only when a second phone is on file
+  const phone = (_toSel && _toSel.value) ? _toSel.value : (cust?.phone || lead?.customerPhone || '');
   const message = document.getElementById('sms-body').value.trim();
 
   if (!message && !_smsPendingImage) { toast('Add a message or a picture to send', 'error'); return; }
@@ -35238,15 +35318,32 @@ async function renderSMSThread(leadId, quiet) {
     const _tl = (typeof getLead === 'function') ? getLead(leadId) : null;
     const _tc = (_tl && typeof getCustomer === 'function') ? getCustomer(_tl.customerId) : null;
     const _tp = (_tc?.phone || _tl?.customerPhone || '').trim();
+    const _tp2 = (_tc?.phone2 || '').trim();   // 2026-09-28: second number
     const resp = await fetch(
       SMS_WORKER_URL.replace(/\/$/,'') + '/sms/thread?leadId=' + encodeURIComponent(leadId)
-        + (_tp ? '&phone=' + encodeURIComponent(_tp) : ''),
+        + (_tp ? '&phone=' + encodeURIComponent(_tp) : '')
+        + (_tp2 ? '&phone2=' + encodeURIComponent(_tp2) : ''),
       { headers: { 'Authorization': 'Bearer ' + token } }
     );
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data?.error || 'Failed to load thread');
 
     const msgs = data.messages || [];
+    // 2026-09-28: remember which number the customer last texted FROM, so the
+    // New Text modal defaults to replying there.
+    try {
+      const _lastIn = msgs.slice().reverse().find(m => m && m.direction === 'in' && m.phone);
+      if (_lastIn) _smsLastInPhone[leadId] = _lastIn.phone;
+    } catch (_) {}
+    // Tag each bubble with its number once the conversation spans two numbers.
+    const _d10 = x => String(x || '').replace(/\D/g, '').slice(-10);
+    const _multi = new Set(msgs.map(m => _d10(m.phone)).filter(Boolean)).size > 1;
+    const _numTag = ph => {
+      const d = _d10(ph); if (!d) return '';
+      if (_tc && _d10(_tc.phone2) === d) return (_tc.phone2Label || 'second phone') + ' …' + d.slice(-4);
+      if (_tc && _d10(_tc.phone) === d) return 'main …' + d.slice(-4);
+      return '…' + d.slice(-4);
+    };
 
     // Fingerprint to detect changes — covers count, ids, and status updates.
     const fingerprint = msgs.map(m => (m.id || '') + ':' + (m.status || '') + ':' + (m.body || '').length + ':' + (m.media_json ? '1' : '0')).join('|');
@@ -35299,7 +35396,7 @@ async function renderSMSThread(leadId, quiet) {
       return `<div style="display:flex;justify-content:${align};margin:2px 0">
         <div style="max-width:66%;padding:3px 8px;background:${bg};border:${border};border-radius:9px;font-size:12.5px;line-height:1.2;color:var(--text-primary);white-space:pre-wrap">
           ${mediaHtml}${m.body ? escHtml(m.body) : ''}
-          <div style="font-size:9.5px;color:var(--text-muted);margin-top:1px">${escHtml(who)} · ${ts}${statusChip}</div>
+          <div style="font-size:9.5px;color:var(--text-muted);margin-top:1px">${escHtml(who)}${_multi ? ' · ' + escHtml(_numTag(m.phone)) : ''} · ${ts}${statusChip}</div>
         </div>
       </div>`;
     }).join('');
@@ -35443,12 +35540,39 @@ function repairAcceptedPointer20260917() {
   } catch (e) { console.warn('[GK] repairAcceptedPointer20260917 failed:', e); return 0; }
 }
 
+// ── crm-2026-09-17f: BROWSER STORAGE GAUGE ──────────────────────────────────
+// Every store lives in localStorage, which browsers cap at ~5.2 M characters per
+// site. The data went 0.7 MB (May) → 3.4 MB (Sep 17) and a write past the cap
+// THROWS — i.e. saves silently stop. This only measures and warns (once per
+// session per level); it never deletes anything.
+const GK_LS_CAP = 5200000;
+function gkStorageUsage(){
+  let n = 0, top = [];
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); const len = (k.length + (localStorage.getItem(k) || '').length); n += len; top.push([k, len]); } } catch (_) {}
+  top.sort((a, b) => b[1] - a[1]);
+  return { chars: n, pct: Math.round(n / GK_LS_CAP * 100), top: top.slice(0, 6) };
+}
+let _gkStorageWarned = 0;
+function gkStorageCheck(){
+  try {
+    const u = gkStorageUsage();
+    console.log('[GK] browser storage: ' + (u.chars/1e6).toFixed(2) + ' M chars (' + u.pct + '% of ~5.2 M)', u.top.map(t => t[0] + ' ' + (t[1]/1e6).toFixed(2) + 'M').join(' · '));
+    const lvl = u.pct >= 90 ? 2 : (u.pct >= 75 ? 1 : 0);
+    if (lvl > _gkStorageWarned) {
+      _gkStorageWarned = lvl;
+      toast((lvl === 2 ? '⚠ CRM browser storage is ' : 'CRM browser storage is ') + u.pct + '% full — tell Jon / Claude before it reaches 100% (saves would stop).', lvl === 2 ? 'error' : 'warning');
+    }
+    return u;
+  } catch (_) { return null; }
+}
+
 // ── INIT ──
 async function init() {
   archiveOldLeads();
   seedImportData();
   try { repairSeedStages20260914(); } catch (_) {}
   try { repairAcceptedPointer20260917(); } catch (_) {}
+  try { setTimeout(gkStorageCheck, 15000); setInterval(gkStorageCheck, 30*60*1000); } catch (_) {}
   // Start the background quote-action poller. It self-throttles based on
   // tab visibility + current page so it's cheap when the user isn't on
   // the pipeline. Idempotent so safe to call from init.
