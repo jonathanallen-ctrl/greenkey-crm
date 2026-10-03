@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -9581,7 +9581,12 @@ function renderDetailedQuoteForm(q){
       </div>` : ''}
     </div>
     <div class="qq-section">
-      <div class="qq-title">Materials</div>
+      <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>Materials</span>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--text-secondary)" title="Off (default): the quote PDF shows one 'Labor & Materials' line. On: every material line, labor line and rental prints as its own row under Quote Summary — use it when the customer may approve only some of the work (crm-2026-10-03e, Jon).">
+          <input type="checkbox" ${q.showLineItems?'checked':''} onchange="setQuoteShowLineItems('${q.id}',this.checked)" style="width:15px;height:15px;accent-color:var(--green);cursor:pointer">
+          <span>Show line items on the quote PDF</span>
+        </label>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
         <span style="font-size:12px;color:var(--text-muted);font-weight:600">Stack a scope:</span>
         <select class="fsel" id="dq-scope-pick" style="max-width:220px;flex:0 1 auto">
@@ -9935,6 +9940,13 @@ function onDQSkipMatAllowanceChange(qid){
   onDQChange(qid);
 }
 
+// crm-2026-10-03e (Jon): per-quote switch — itemise the PDF's Quote Summary.
+// Not a price field, so it saves even on a committed (frozen) quote.
+function setQuoteShowLineItems(qid, on){
+  const q=getQuote(qid); if(!q) return;
+  upsertQuote({...q, showLineItems: !!on});
+  toast(on ? 'Quote PDF will list every line item' : 'Quote PDF will show one Labor & Materials line', 'success');
+}
 function onDQChange(qid){
   const q=getQuote(qid);if(!q)return;
   const p=getQQPricing();
@@ -11608,6 +11620,14 @@ function pdfCustomerBlock(doc,cust,lead,y,q){
 
   // Address — for split, this comes after Service Location header; for
   // single, this comes after the QUOTE FOR contact info.
+  // crm-2026-10-03e (Jon, Red E Charge): a commercial customer with no bill-to
+  // split got the SITE address printed under its own name, as if it were the
+  // company's address. Label it WORK LOCATION so the quote reads right.
+  if(lead?.siteStreet && !isSplit && cust && cust.propertyType==='commercial'){
+    y+=6;
+    doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(...GRAY);
+    doc.text('WORK LOCATION:',36,y);y+=13;
+  }
   if(lead?.siteStreet){
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
     const addrLines=[lead.siteStreet,[lead.siteCity,lead.siteState||'VA',lead.siteZip].filter(Boolean).join(', ')].filter(Boolean);
@@ -11624,8 +11644,9 @@ function pdfTable(doc,y,W,items,totalLabel,totalAmt){
   items.forEach((item,i)=>{
     doc.setFillColor(i%2===0?245:252,i%2===0?247:253,i%2===0?250:255);
     doc.rect(36,y,W-72,20,'F');
-    doc.setTextColor(...DARK);doc.setFont('helvetica','normal');doc.setFontSize(9);
-    doc.text(item.desc,46,y+13);doc.text(fmt$(item.amt),W-46,y+13,{align:'right'});y+=20;
+    doc.setTextColor(...DARK);doc.setFont('helvetica',item.bold?'bold':'normal');doc.setFontSize(9);
+    let _d=String(item.desc||''); try{ const _w=doc.splitTextToSize(_d,W-72-110); if(_w.length>1) _d=_w[0].replace(/\s+\S*$/,'')+'…'; }catch(_){}
+    doc.text(_d,46,y+13);if(item.amt!=null)doc.text(fmt$(item.amt),W-46,y+13,{align:'right'});y+=20;
   });
   y+=4;doc.setFillColor(...GREEN);doc.rect(36,y,W-72,26,'F');
   doc.setTextColor(15,17,23);doc.setFont('helvetica','bold');doc.setFontSize(12);
@@ -12546,9 +12567,30 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   // Multi-scope quick quotes itemize each scope's price before the combined
   // L&M line (Jonathan, 2026-07-11). Skipped on Qmerit (fee baked into L&M).
   const _bkPDF = (!_isQmeritPDF && typeof _scopeBreakdownRows === 'function') ? _scopeBreakdownRows(q, _totalsPDF.laborAndMaterials||0) : null;
-  const _pdfRows = _bkPDF
+  // crm-2026-10-03e (Jon, Red E Charge maintenance): a detailed quote with
+  // "Show line items on the quote PDF" ticked prints every material line, labor
+  // line and rental as its own row (scope headers as unpriced rows), then the
+  // Labor & Materials line as the subtotal — so the customer can approve part
+  // of the work. The L&M line keeps the rounded/padded value the total is built
+  // from, so the printed lines still reconcile to the printed TOTAL.
+  const _itemPDF = (q.type==='detailed' && q.showLineItems) ? (() => {
+    const rows = [];
+    const _qtyTxt = (ln) => { const n = parseFloat(ln.qty); const u = ln.unit || 'each'; if (!Number.isFinite(n) || (n === 1 && u === 'each')) return ''; return ` (${n} ${u})`; };
+    (q.lines || []).forEach(ln => {
+      if (!ln) return;
+      if (ln.header) { rows.push({ desc: (ln.label || 'Scope'), amt: null, bold: true }); return; }
+      rows.push({ desc: '   ' + (ln.desc || 'Item') + _qtyTxt(ln), amt: Math.ceil(calcLine(ln)) });
+    });
+    if ((q.matAllowance || 0) > 0) rows.push({ desc: '   Materials allowance', amt: Math.ceil(q.matAllowance) });
+    _laborLines(q).forEach(l => { const h = parseFloat(l.hours) || 0, r = parseFloat(l.rate) || 160; if (h > 0) rows.push({ desc: '   ' + (l.desc || 'Labor') + ` — ${h} h @ $${r}/h`, amt: Math.ceil(h * r) }); });
+    (q.rentals || []).forEach(r => { const c = parseFloat(r.cost) || 0; if (c > 0) rows.push({ desc: '   Rental — ' + (r.desc || 'equipment'), amt: Math.ceil(c) }); });
+    if (!rows.length) return null;
+    rows.push({ desc: _lmLabel, amt: _lmPDF, bold: true });
+    return rows;
+  })() : null;
+  const _pdfRows = _itemPDF ? _itemPDF : (_bkPDF
     ? [..._bkPDF.map(r => ({desc:'   ' + r.desc, amt:r.amt})), {desc:_lmLabel + ' (all scopes)', amt:_lmPDF}]
-    : [{desc:_lmLabel,amt:_lmPDF}];
+    : [{desc:_lmLabel,amt:_lmPDF}]);
   if((_totalsPDF.veteranDiscount||0)>0) _pdfRows.push({desc:'Military Veteran Discount',amt:-(_totalsPDF.veteranDiscount||0)});
   if((_totalsPDF.manualDiscount||0)>0) _pdfRows.push({desc:(_totalsPDF.discountLabel||'Discount'),amt:-(_totalsPDF.manualDiscount||0)});
   _pdfRows.push({desc:'Permitting',amt:_totalsPDF.permitFee||0});
@@ -16373,7 +16415,7 @@ function renderJobDetail(id) {
     <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Queue it without a date. It appears in the Scheduler as work waiting to be booked. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
     <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="findSlotForJob('${id}', document.getElementById('appt-add-${id}').value)" title="Reads the live Outlook calendar for the next 10 business days and proposes the 3 best times to add this visit near work already booked — ranked by added drive time. Nothing is booked until you press Create.">📍 Find a slot</button>
   </div>
-  <div id="findslot-${id}"></div>
+  <div id="findslot-${id}">${(() => { try { return (_fsLast[id] && _fsLast[id].html) || ''; } catch (_) { return ''; } })()}</div>
   <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here without a date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
 
   // ── Crew & hours (2026-07-28) ──
@@ -27633,6 +27675,11 @@ function _trySyncFromSP(reason) {
     return;
   }
   _lastVisibilitySync = Date.now();
+  // crm-2026-10-03d (Jon: "the CRM glitches — pop-ups close and the screen jumps"):
+  // remember what the open job looked like BEFORE the pull so we can skip the
+  // redraw when nothing about it changed.
+  let _openBefore = null;
+  try { if (S.page === 'jobs' && S.jobDetailId) _openBefore = JSON.stringify(getLead(S.jobDetailId)); } catch (_) {}
   _syncFromSP().then(() => {
     // Skip the post-sync re-render entirely if the user is actively typing
     // in a form field — re-rendering would blow away focus + scroll + any
@@ -27650,6 +27697,17 @@ function _trySyncFromSP(reason) {
       console.log('[GK] post-sync re-render skipped: user is editing a field');
       return;
     }
+    // crm-2026-10-03d: never redraw under an open pop-up (Send Text, Schedule,
+    // snip editor, …) — the redraw is what made them close / the page jump.
+    try { if (document.querySelector('.moverlay.show, [id$="-modal"][style*="display: flex"], [id$="-modal"][style*="display:flex"]')) { console.log('[GK] post-sync re-render skipped: a pop-up is open'); return; } } catch (_) {}
+    // crm-2026-10-03d: if the open job is byte-identical after the pull, there
+    // is nothing new to show — leave the screen exactly where it is.
+    try {
+      if (_openBefore !== null && S.page === 'jobs' && S.jobDetailId && JSON.stringify(getLead(S.jobDetailId)) === _openBefore) {
+        console.log('[GK] post-sync re-render skipped: open job unchanged');
+        return;
+      }
+    } catch (_) {}
     // Preserve scroll position around the re-render so the user doesn't get
     // kicked to the top mid-scroll. We restore it AFTER the re-render so the
     // scroll-to-top in renderJobDetail / friends gets overridden.
@@ -34101,6 +34159,14 @@ function _fsEventAddress(ev) {
   const m = (ev.subject || '').match(_FS_ADDR_RE) || (ev.bodyPreview || '').match(_FS_ADDR_RE);
   return m ? m[0].trim() : '';
 }
+// Display name for a calendar stop: "Njunge Project - Phone" → "Njunge Project"
+// (Jon 10/3: drop the lead-source suffix; keep "Placeholder" so those stay obvious).
+function _fsShort(subject) {
+  const t = stripTechTag(subject || '');
+  const m = t.match(/^(.*?)\s+[-–—]\s+([^-–—]+)$/);
+  if (m && !/placeholder/i.test(m[2])) return m[1].trim();
+  return t;
+}
 function _fsHm(d) { return d.getHours() * 60 + d.getMinutes(); }
 function _fsMinToHHMM(m) { m = Math.round(m); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
 function _fsMinTo12(m) { m = Math.round(m); let h = Math.floor(m / 60); const mm = m % 60; const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(mm).padStart(2,'0')} ${ap}`; }
@@ -34292,26 +34358,26 @@ async function findSlotForJob(leadId, type) {
   if (!box) return;
   if (!picks.length) { box.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No slot near existing work in the next ${_FS_WINDOW_DAYS} business days, and no day where Jon is free.</div>`; return; }
   const row = (c, i) => {
-    const whenStr = `${_fsDayLabel(c.day)} · ${_fsMinTo12(c.start)}–${_fsMinTo12(c.end)}`;
+    const techStr = c.tech ? escHtml(c.tech) : '<span style="color:var(--amber,#f59e0b);font-weight:500">crew not tagged</span>';
+    const whenStr = `${_fsDayLabel(c.day)} · ${_fsMinTo12(c.start)}–${_fsMinTo12(c.end)} · ${techStr}`;
     let why;
     if (c.pos === 'standalone') why = `Jon's own stop — nothing of Jon's on the calendar that day · ${Math.round(c.added/2)} min from the shop`;
-    else if (c.pos === 'before') why = `before ${escHtml(c.near.subject)} (${escHtml(c.near.addr)})`;
-    else why = `after ${escHtml(c.near.subject)} (${escHtml(c.near.addr)}) ends ${_fsMinTo12(c.near.em)}`;
-    const techStr = c.tech ? escHtml(c.tech) : '<span style="color:var(--amber,#f59e0b)">crew not tagged</span>';
+    else if (c.pos === 'before') why = `before ${escHtml(_fsShort(c.near.subject))} (${escHtml(c.near.addr)})`;
+    else why = `after ${escHtml(_fsShort(c.near.subject))} (${escHtml(c.near.addr)}) ends ${_fsMinTo12(c.near.em)}`;
     let moves = '';
     if (c.pushes && c.pushes.length) {
       moves = `<div style="font-size:11.5px;color:var(--amber,#b45309);margin-top:2px">Moves: ` +
-        c.pushes.map(x => `<strong>${escHtml(x.stop.subject)}</strong> ${_fsMinTo12(x.stop.sm)} → <strong>${_fsMinTo12(x.newStart)}</strong> (+${x.delta} min)`).join(' · ') +
+        c.pushes.map(x => `<strong>${escHtml(_fsShort(x.stop.subject))}</strong> ${_fsMinTo12(x.stop.sm)} → <strong>${_fsMinTo12(x.newStart)}</strong> (+${x.delta} min)`).join(' · ') +
         `</div>`;
     } else if (c.pos !== 'standalone' && c.next) {
-      moves = `<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">No other jobs move · ${escHtml(c.next.subject)} still starts ${_fsMinTo12(c.next.sm)}</div>`;
+      moves = `<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">No other jobs move · ${escHtml(_fsShort(c.next.subject))} still starts ${_fsMinTo12(c.next.sm)}</div>`;
     }
     const dayLine = (c.pos !== 'standalone' && Number.isFinite(c.dayEnd))
       ? `<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">Day ends ${_fsMinTo12(c.dayEnd)}${c.dayEnd !== c.origDayEnd ? ` (was ${_fsMinTo12(c.origDayEnd)})` : ''}${Number.isFinite(c.homeArrive) ? ` · back at the shop ~${_fsMinTo12(c.homeArrive)}` : ''}</div>` : '';
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
       <div style="min-width:0">
         <div style="font-size:13px;font-weight:600;color:var(--text-primary)">${whenStr}${c.early ? ' <span style="color:var(--amber,#f59e0b);font-weight:500">· early start — confirm with crew</span>' : ''}${c.firstPass ? '' : ' <span style="color:var(--text-muted);font-weight:500">· outside 3 days</span>'}</div>
-        <div style="font-size:11.5px;color:var(--text-muted);margin-top:1px">${why} · adds ~${c.added} min drive${c.estimated ? ' (est.)' : ''} · ${techStr}</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:1px">${why} · adds ~${c.added} min drive${c.estimated ? ' (est.)' : ''}</div>
         ${moves}${dayLine}
       </div>
       <div style="display:flex;gap:5px;flex-shrink:0">
@@ -34328,6 +34394,7 @@ async function findSlotForJob(leadId, type) {
     ${sqRows ? `<div style="font-size:11px;color:var(--amber,#b45309);text-transform:uppercase;letter-spacing:.4px;margin:8px 0 2px">Squeeze in — other jobs move (next ${R.firstPassDays} business days)</div>${sqRows}` : ''}
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Ranked against the live Outlook calendar (placeholders count). Nothing is booked until you press Create. When a squeeze option is booked, the CRM re-times the moved Outlook events and notes each job — <strong>you</strong> tell those customers; no automatic texts.</div>
   </div>`;
+  _fsLast[leadId].html = box.innerHTML;   // crm-2026-10-03d: survives the periodic job-screen redraw
 }
 const _fsLast = {};
 
@@ -34351,7 +34418,7 @@ function findSlotText(leadId, idx) {
 async function findSlotBook(leadId, idx) {
   const st = _fsLast[leadId]; const c = st && st.picks[idx]; if (!c) return;
   if (c.pushes && c.pushes.length) {
-    const lines = c.pushes.map(x => `• ${x.stop.subject}: ${_fsMinTo12(x.stop.sm)} → ${_fsMinTo12(x.newStart)}  (+${x.delta} min)`).join('\n');
+    const lines = c.pushes.map(x => `• ${_fsShort(x.stop.subject)}: ${_fsMinTo12(x.stop.sm)} → ${_fsMinTo12(x.newStart)}  (+${x.delta} min)`).join('\n');
     if (!confirm(`Squeeze this in on ${_fsDayLong(c.day)} at ${_fsMinTo12(c.start)}?\n\nThese Outlook events will be moved NOW:\n${lines}\n\nDay ends ${_fsMinTo12(c.dayEnd)} (was ${_fsMinTo12(c.origDayEnd)}).\n\nNo texts go out — tell those customers yourself.`)) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
     const arr = getLeads(); let dirty = false; let ok = 0, fail = 0;
