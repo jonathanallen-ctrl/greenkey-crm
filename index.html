@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2325,8 +2325,12 @@ function saveLeads(arr) { localStorage.setItem(LK, JSON.stringify(arr)); queueSP
 // ── PAYMENTS CENTER stores (2026-07-21) ──
 // Memo code printed on every payment ask so Zelle deposits self-identify.
 // GreenKey's Zelle QR, inlined so the invoice PDF can render it offline.
-// 360x360 PNG, ~1.9 KB. Source: GreenKey_Zelle_QR.png.
-const GK_ZELLE_QR_B64='data:image/png;base64,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';
+// crm-2026-10-03b: REPLACED. The old image was a homemade QR of the bare email
+// address, which Zelle apps do not recognize (Sherri's emailed QR 'didn't work').
+// This is the bank-issued Zelle QR (enroll.zellepay.com link, same image as
+// field.html ZELLE_QR_DATAURI and CFO\Zelle Payments\GreenKey_Zelle_PayBlock.png),
+// re-saved as 684x684 8-bit RGB PNG (~4.3 KB) so jsPDF addImage handles it.
+const GK_ZELLE_QR_B64='data:image/png;base64,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AAAiAAAQAQCACAAA/sUzOQ/51NzytJnSX6SdV9p933rMjWssbRb9zc9p2n2fXD83/9+ZvIa+BADApUQAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAABEAAIgAACDR0zgnfPKY036rcR572j1NO+ZjD/PFayPtvm/dL2PrufsSAACIAABABAAAIgAAEAEAgAgAAEQAACACAAARAACIAABABAAAAd60A2qcx542937rfgeN92LyvLY+O2n3feseDWn3dPK+b13PvgQAACIAABABAIAIAAARAACIAABABAAAIgAAEAEAgAgAAEQAAFDlMfe+69wn55anzaKfvO+N8+Ebn53Kl+bSvQMa9xxp3C8j7d3rSwAAXEoEAIAIAABEAAAgAgAAEQAAiAAAQAQAACIAABABAIAIAAASxe0d8MXNxzy6OML2RGjcW8FeBvvW2Klnp3FW/9Z3eOMzeOoa+hIAAJcSAQAgAgAAEQAAiAAAQAQAACIAABABAIAIAABEAAAgAgCARO+pPzQ5e3lyLvfW80o797TzSruGjfeicW2krbHGd8uX30p7hze+W3wJAABEAAAgAgAAEQAAiAAAQAQAACIAAEQAACACAAARAACIAABgnWN7B6TNvZ+cx77173yRNiN963puZA+CnDU/+W65eR+QxneLLwEAcCkRAAAiAAAQAQCACAAARAAAIAIAABEAAIgAAEAEAAAiAABI9DTO84+7iGHz/L9Iu++T0u5Fo8Z9LtKuj/eY9ZywxnwJAIBLiQAAEAEAgAgAAEQAACACAAARAACIAABABAAAIgAAEAEAQKL31B+anBfdOJt6cl70qd9Km3G99by2PoM37y+wdc78KVv3LmncH8eXAAC4lAgAABEAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAABEAACQ6tnfAqTnYjbOXG+efpx3z5H2/eZ+Lxhnyae+EyePZur+AvSd8CQAARAAAIAIAABEAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAgH940maJfzrosDnzaTO3v2icSX7zfO9GafsCTK6fxnn1Zuzf+V71JQAALiUCAEAEAAAiAAAQAQCACAAARAAAIAIAABEAAIgAAEAEAACJKvcOqLzQS2f+p83BvvmeNu5hcYo9ULruV9o9bdwnxd4BAIAIAABEAAAgAgAAEQAAiAAAQAQAgAgAAEQAACACAAARAACs8576Q42zqU/ZOrP95nn17unMNTx1PI1rdfJ4JvcBmdS4ntPeP74EAMClRAAAiAAAQAQAACIAABABAIAIAABEAAAgAgAAEQAAiAAAINE7+WOT85BPSZtXnzaTfOs1TFvPjcecdu6T+xSk3dOt+4CkredT92LyfvkSAACXEgEAIAIAABEAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAgERv2gGlzZmf/K2t873T7kXaej517pP3a/LcJ/9O2v4Cp9ZG43ujcT03vut8CQCAS4kAABABAIAIAABEAAAgAgAAEQAAiAAAQAQAACIAABABAECi1yWY0bgvQNpM+7RZ4l9Mzn6/ea+Hybnuk9e58Z5Ovje27qUyee6+BADApUQAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAABEAAIgAACCRvQPKpM1I//J30ubMb517v3WtTq7nU2u+8dxP3dPG/TLS9k2YfEf5EgAAlxIBACACAAARAACIAABABAAAIgAAEAEAgAgAAEQAACACAIBEcXsHpM11bzyvtNnmXzTObE+bW5527pPnlXY8jftlNK4fz44vAQCACAAARAAAIAIAABEAAIgAAEAEAIAIAABEAAAgAgAAEQAALPI0zl5OMzmXO23+edrM9rR72rgXRuN5pa2Nrcfsnu57vnwJAIBLiQAAEAEAgAgAAEQAACACAAARAACIAABABAAAIgAAEAEAQKKncaY0APDnfAkAABEAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAABEAAIgAAEAEAAAiAAAQAQCACAAARAAAIAIAABEAAIgAAEAEAAAiAAAQAQCACAAAfn5+fn7+BjvPo8dRzWvDAAAAAElFTkSuQmCC';
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
 // Unmatched-payments parking lot — money that arrived with no obvious job.
 // Synced + merged like the other record arrays (added to SYNC_KEYS/MERGE_KEYS).
@@ -3134,6 +3138,21 @@ function renderSchedulingSettings() {
     </div>
     <div class="srow"><div><div class="srl">Crew Start Time</div><div class="srd">Time the crew actually starts driving (after gathering at the shop). Default 8:00 AM. Per-day overrides available in the Scheduler when an inspection or special start is needed.</div></div>
       <input class="sinput" id="set-starttime" style="width:120px" type="time" value="${getPrefs().crewStartTime||'08:00'}">
+    </div>
+    <div class="srow"><div><div class="srl">Technicians</div><div class="srd">Who can be assigned to a job (the Technician dropdown on the job screen). Comma-separated first names. Every name and every pair ("A and B") becomes an option, and the name goes on the end of each Outlook event subject as [Name]. Add a person here — no code change needed.</div></div>
+      <input class="sinput" id="set-techroster" style="width:300px" placeholder="Chase, Jon" value="${escHtml(getTechRoster().join(', '))}">
+    </div>
+    <div class="srow"><div><div class="srl">Find a slot — earliest arrival</div><div class="srd">Earliest a proposed stop may start. Default 8:30 AM.</div></div>
+      <input class="sinput" id="set-fs-earliest" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotEarliest||'08:30')}">
+    </div>
+    <div class="srow"><div><div class="srl">Find a slot — early-start floor</div><div class="srd">A slot between this time and the earliest arrival is still offered, flagged "early start — confirm with crew". Default 7:30 AM.</div></div>
+      <input class="sinput" id="set-fs-earlyfloor" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotEarlyFloor||'07:30')}">
+    </div>
+    <div class="srow"><div><div class="srl">Find a slot — latest start</div><div class="srd">Never propose a stop that starts after this. Default 5:00 PM.</div></div>
+      <input class="sinput" id="set-fs-latest" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotLatestStart||'17:00')}">
+    </div>
+    <div class="srow"><div><div class="srl">Find a slot — priority window (business days)</div><div class="srd">Options inside this many business days rank first; squeeze options are only offered inside it. Default 3.</div></div>
+      <input class="sinput" id="set-fs-firstpass" style="width:80px" type="number" min="1" max="10" step="1" value="${getPrefs().findSlotFirstPassDays||3}">
     </div>
     <div class="srow"><div><div class="srl">Distributor Address</div><div class="srd">Where the crew typically picks up materials (Capital Electric, Home Depot pro desk, etc.). Used when the "Stop at distributor" option is checked in the Scheduler.</div></div>
       <input class="sinput" id="set-distaddr" style="width:300px" placeholder="2300 Westwood Avenue, Richmond, VA 23230" value="${escHtml(getPrefs().distributorAddress||'')}">
@@ -16345,13 +16364,16 @@ function renderJobDetail(id) {
     </div>`;
   }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No appointments yet. Add one below, or use the <strong>Schedule</strong> button at the top to book one straight away.</div>`;
 
+  const _apptDefType = ['lead-received','info-gathering','estimating'].includes(lead.stage) ? 'walkdown' : 'installation';   // crm-2026-10-03c: pre-quote jobs default to Site Visit
   const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap">
     <select id="appt-add-${id}" class="jd-fi" style="flex:1;min-width:190px;font-size:12.5px;padding:5px 8px">
-      ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t==='installation'?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
+      ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t===_apptDefType?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
     </select>
     <button class="btn btn-p" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="scheduleApptNow('${id}', document.getElementById('appt-add-${id}').value)" title="Pick the date and time now and create the Outlook event — the same thing the old header Schedule button did, in one click.">📅 Schedule now</button>
     <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="requestAppt('${id}', document.getElementById('appt-add-${id}').value)" title="Queue it without a date. It appears in the Scheduler as work waiting to be booked. Does NOT move the job's pipeline stage.">+ Needs scheduling</button>
+    <button class="btn btn-g" style="padding:5px 12px;font-size:12px;white-space:nowrap" onclick="findSlotForJob('${id}', document.getElementById('appt-add-${id}').value)" title="Reads the live Outlook calendar for the next 10 business days and proposes the 3 best times to add this visit near work already booked — ranked by added drive time. Nothing is booked until you press Create.">📍 Find a slot</button>
   </div>
+  <div id="findslot-${id}"></div>
   <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Anything listed here without a date shows up in the Scheduler as work waiting to be booked — the job's stage is not affected.</div>`;
 
   // ── Crew & hours (2026-07-28) ──
@@ -16376,16 +16398,21 @@ function renderJobDetail(id) {
       </select>
     </div>
     <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px">Technician</span>
+      <select class="jd-fi" style="width:124px;font-size:12.5px;padding:4px 6px" onchange="setJobTech('${id}',this.value)"
+        title="Who is doing this job. Goes on the end of every Outlook event subject as [Name] and updates the job's existing Outlook events when changed. Outlook edits to the tag flow back here.">
+        <option value=""${getLeadTech(lead)?'':' selected'}>— not set —</option>
+        ${getTechOptions().map(t=>`<option value="${escHtml(t)}"${getLeadTech(lead)===t?' selected':''}>${escHtml(t)}</option>`).join('')}
+        ${getLeadTech(lead)&&!getTechOptions().includes(getLeadTech(lead))?`<option value="${escHtml(getLeadTech(lead))}" selected>${escHtml(getLeadTech(lead))}</option>`:''}
+      </select>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
       <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px">Est. hours</span>
       <input class="jd-fi" type="number" step="0.25" min="0.25" style="width:74px;font-size:12.5px;padding:4px 6px"
         value="${_crewHrs}" onchange="setJobCrewField('${id}','estHours',this.value)"
         title="Wall-clock hours. Two-person work defaults to 3.0 (1.0 inside 5 ft); solo is 1.5x that. Overwrite freely.">
     </div>
-    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px"
-      title="Ticked means Jonathan is needed on this one — which also means his day is NOT free for walkdowns. It decides WHO the second person is, not how many. Routine two-person work goes to JD. Also adds time: +0.5 hr with two people, +1.0 hr solo. Trenching ticks this by default.">
-      <input type="checkbox" ${isJobDifficult(lead)?'checked':''} onchange="setJobCrewField('${id}','crewDifficult',this.checked)" style="width:15px;height:15px;accent-color:var(--amber,#f59e0b);cursor:pointer">
-      <span>Difficult — needs Jonathan${_cd.trench?' <span style="color:var(--amber,#f59e0b)">· trenching</span>':''}</span>
-    </label>
+    <!-- crm-2026-10-03c (Jon): "Difficult — needs Jonathan" checkbox removed from the job screen; crewDifficult data + isJobDifficult() untouched -->
     <span style="font-size:11px;color:var(--text-muted)" title="Two people: 1.0 hr out to 10 ft, then +15 min per additional 10 ft. One person: 1.5 hr inside 5 ft, then +30 min per 10 ft. Difficult adds 0.5 hr (two) or 1.0 hr (solo). Trenching is timed separately.">${_crewOv||_hrsOv?'Overridden · ':''}auto: ${_cd.size} ${_cd.size===1?'person':'people'}, ${_cd.hours} hr — ${escHtml(_why)}${_cd.required?'':(_cd.longRun?' (preferred, not required)':'')}${_cd.hoursTrench?` · incl. ${_cd.hoursTrench.toFixed(2)} hr trenching`:''}${_cd.hoursDifficult?` · incl. ${_cd.hoursDifficult} hr difficult`:''}</span>
   </div>`;
 
@@ -19297,6 +19324,14 @@ function saveSchedSettings() {
   p.roadSpeedMph            = parseFloat(document.getElementById('set-roadspeed')?.value) || 45;
   p.dayHours                = parseFloat(document.getElementById('set-daylen')?.value)    || 8;
   p.crewStartTime           = (document.getElementById('set-starttime')?.value || '08:00').trim();
+  // crm-2026-10-03c: tech roster + Find-a-slot limits (Jon: add a person without rewriting code)
+  { const _r = (document.getElementById('set-techroster')?.value || '').split(',').map(x => x.trim()).filter(Boolean);
+    const _seen = new Set(); p.techRoster = _r.filter(x => { const k = x.toLowerCase(); if (_seen.has(k)) return false; _seen.add(k); return true; });
+    if (!p.techRoster.length) delete p.techRoster; }
+  p.findSlotEarliest        = (document.getElementById('set-fs-earliest')?.value || '08:30').trim();
+  p.findSlotEarlyFloor      = (document.getElementById('set-fs-earlyfloor')?.value || '07:30').trim();
+  p.findSlotLatestStart     = (document.getElementById('set-fs-latest')?.value || '17:00').trim();
+  p.findSlotFirstPassDays   = parseInt(document.getElementById('set-fs-firstpass')?.value, 10) || 3;
   p.distributorAddress      = newDistAddr;
   p.distributorStopMinutes  = parseInt(document.getElementById('set-distmin')?.value)  || 30;
   p.restroomStopMinutes     = parseInt(document.getElementById('set-restmin')?.value) || 15;
@@ -33919,9 +33954,13 @@ async function syncOutlookAppointments(quiet) {
         const newDate = startStr.slice(0, 10);
         const newTime = startStr.slice(11, 16);
         const same = newDate === appt.date && newTime === (appt.time || '');
+        // crm-2026-10-03c: [Technician] tag in the subject — Outlook wins here too.
+        const _evTech = parseTechTag(ev.subject);
+        let _techMoved = false;
+        if (_evTech && _evTech !== getLeadTech(arr[i])) { arr[i].tech = _evTech; _techMoved = true; if (same) notes.push(`Technician changed in Outlook: now ${_evTech}.`); }
         // `adopted` = the id came from the install mirror, not the row. Persist
         // it onto the row even when nothing moved, so next sync reads it directly.
-        if (same && !adopted) return;
+        if (same && !adopted && !_techMoved) return;
         if (!same) {
           notes.push(`Rescheduled in Outlook: ${_apptLabel(appt.type)} moved from ${appt.date}${appt.time ? ' ' + appt.time : ''} to ${newDate} ${newTime}. Outlook wins on date and time.`);
           moved++;
@@ -33967,6 +34006,389 @@ async function syncOutlookAppointments(quiet) {
   } finally {
     _olSyncRunning = false;
   }
+}
+
+// ═══════════ TECHNICIAN ON THE JOB + "FIND A SLOT" (crm-2026-10-03c, Jon 10/3) ═══════════
+// Jon's words: "assign a technician on the job itself rather than a window that
+// after it closes isn't accessible", and "find the next right spot in the
+// schedule based on location and let us know what it is so we can propose it to
+// the customer". Both live on the job screen's Appointments block; the Scheduler
+// page is NOT in use and is untouched.
+//
+// TECHNICIAN  — lead.tech is a plain label ('Chase' | 'Jon' | 'Chase and Jon').
+//   • Every Outlook subject the CRM creates ends with the tag, e.g.
+//     "Jackson Walkdown - Website [Chase]"  → readable in Outlook, parseable back.
+//   • Changing it on the job PATCHes the subject of every Outlook event the job
+//     already has, so CRM and Outlook never disagree.
+//   • syncOutlookAppointments() reads the tag back: edit it in Outlook and the
+//     CRM follows (Outlook wins, same as dates).
+//
+// FIND A SLOT — reads the GreenKey Business Calendar FRESH (never the CRM's own
+//   appointment list — unreliable after the 9/19 stale overwrite), next 10
+//   business days, every event with a street address is a stop (placeholders
+//   count — Jon), geocodes the stops (cached), one Mapbox Matrix call per day for
+//   drive times, and ranks "insert the new job here" positions by ADDED drive
+//   time. 3-business-day options rank first. Top 3 shown with "Text this" (Jon's
+//   wording) and "Book it" (opens the normal Schedule window pre-filled).
+//   Fallback: if no gap near existing work, offer a day where Jon has nothing
+//   tagged and propose it as Jon's standalone stop (Jon's rule: he adds it to his
+//   own work on a day the install crew covers itself). If still nothing: say so.
+//   ⚠ Never mention FaceTime / virtual walkdowns here (Jon) — the office decides
+//   those case by case and logs them as phone calls.
+
+const GK_TECH_ROSTER_DEFAULT = ['Chase', 'Jon'];   // order sets the pair label: 'Chase and Jon' (Jon 10/3)
+function getTechRoster() {
+  try { const p = getPrefs(); if (Array.isArray(p.techRoster) && p.techRoster.length) return p.techRoster.slice(); } catch (_) {}
+  return GK_TECH_ROSTER_DEFAULT.slice();
+}
+// All assignable labels: each tech alone, plus every pair ('A and B'). Roster is Settings → Scheduling → Technicians.
+function getTechOptions() {
+  const r = getTechRoster();
+  const out = r.slice();
+  for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) out.push(r[i] + ' and ' + r[j]);
+  return out;
+}
+const _TECH_TAG_RE = /\s*\[([A-Za-z][A-Za-z .+'-]{0,40})\]\s*$/;
+function parseTechTag(subject) {
+  const m = String(subject || '').match(_TECH_TAG_RE);
+  return m ? m[1].trim() : '';
+}
+function stripTechTag(subject) { return String(subject || '').replace(_TECH_TAG_RE, '').trim(); }
+function withTechTag(subject, tech) {
+  const base = stripTechTag(subject);
+  return tech ? `${base} [${tech}]` : base;
+}
+function getLeadTech(lead) { return (lead && typeof lead.tech === 'string') ? lead.tech.trim() : ''; }
+
+// Job screen → Technician select. Saves, then re-titles the job's Outlook events.
+async function setJobTech(leadId, value) {
+  const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId);
+  if (i < 0) return;
+  const tech = String(value || '').trim();
+  const prev = getLeadTech(arr[i]);
+  if (tech === prev) return;
+  arr[i].tech = tech;
+  arr[i].updatedAt = new Date().toISOString();
+  saveLeads(arr);
+  try { if (typeof renderJobDetail === 'function') renderJobDetail(leadId); } catch (_) {}
+  // Re-title every Outlook event this job owns (booked, not completed).
+  const appts = getApptsById(leadId).filter(a => _apptIsBooked(a) && a.outlookEventId && !a.completedAt);
+  if (!appts.length) { toast(tech ? `Technician: ${tech}` : 'Technician cleared', 'success'); return; }
+  let ok = 0, fail = 0;
+  for (const a of appts) {
+    try {
+      const path = a.outlookCalId
+        ? `/me/calendars/${encodeURIComponent(a.outlookCalId)}/events/${encodeURIComponent(a.outlookEventId)}`
+        : `/me/events/${encodeURIComponent(a.outlookEventId)}`;
+      const ev = await _graphFetch(path + '?$select=subject');
+      const cur = (ev && ev.subject) || '';
+      const next = withTechTag(cur, tech);
+      if (next !== cur) await _graphFetch(path, { method: 'PATCH', body: JSON.stringify({ subject: next }) });
+      ok++;
+    } catch (e) { fail++; console.warn('[GK] tech re-title failed:', e); }
+  }
+  if (fail) toast(`Technician saved; ${ok} Outlook event${ok===1?'':'s'} re-titled, ${fail} failed (sign-in / another account's event?)`, 'error', 7000);
+  else toast(`Technician: ${tech || '(none)'} — ${ok} Outlook event${ok===1?'':'s'} re-titled`, 'success');
+}
+
+// Street-address sniffer for calendar events. Outlook's `location.displayName`
+// is what the CRM writes; hand-made events sometimes carry the address in the
+// subject or body instead (Sherri's placeholders).
+const _FS_ADDR_RE = /\b\d{2,6}\s+[A-Za-z0-9][A-Za-z0-9 .'\-]{2,60}?,\s*[A-Za-z .'\-]{2,40},\s*(?:VA|Virginia)\b(?:,?\s*\d{5})?/i;
+function _fsEventAddress(ev) {
+  const loc = (ev.location && ev.location.displayName || '').trim();
+  if (loc && !/^phone\s*\/\s*video/i.test(loc) && /\d/.test(loc) && /,/.test(loc)) return loc;
+  const m = (ev.subject || '').match(_FS_ADDR_RE) || (ev.bodyPreview || '').match(_FS_ADDR_RE);
+  return m ? m[0].trim() : '';
+}
+function _fsHm(d) { return d.getHours() * 60 + d.getMinutes(); }
+function _fsMinToHHMM(m) { m = Math.round(m); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+function _fsMinTo12(m) { m = Math.round(m); let h = Math.floor(m / 60); const mm = m % 60; const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(mm).padStart(2,'0')} ${ap}`; }
+function _fsRound15(m) { return Math.ceil(m / 15) * 15; }
+function _fsDateKey(d) { const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+function _fsDayLabel(key) { return new Date(key + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }); }
+function _fsDayLong(key)  { return new Date(key + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'numeric', day: 'numeric' }); }
+
+// Drive-time matrix (minutes) for one day's points via Mapbox Matrix API — ONE
+// call per day instead of one per pair. Falls back to the straight-line estimate.
+const _fsMatrixCache = {};
+async function _fsMatrix(points) {
+  const key = points.map(p => p.lon.toFixed(5) + ',' + p.lat.toFixed(5)).join(';');
+  const hit = _fsMatrixCache[key];
+  if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.m;
+  const n = points.length;
+  let m = null;
+  if (n >= 2 && n <= 25) {
+    try {
+      const url = `https://api.mapbox.com/directions-matrix/v1/mapbox/driving/${key}?annotations=duration&access_token=${MAPBOX_TOKEN}`;
+      const ctrl = new AbortController(); const tid = setTimeout(() => ctrl.abort(), 9000);
+      let res; try { res = await fetch(url, { signal: ctrl.signal }); } finally { clearTimeout(tid); }
+      if (res.ok) {
+        const j = await res.json();
+        if (j && Array.isArray(j.durations) && j.durations.length === n) {
+          m = j.durations.map(row => row.map(s => (typeof s === 'number') ? s / 60 : null));
+        }
+      }
+    } catch (e) { console.warn('[GK] Matrix failed, using estimate:', e); }
+  }
+  if (!m) {
+    m = points.map(a => points.map(b => (a === b) ? 0 : driveTimeHrs(a.lat, a.lon, b.lat, b.lon) * 60));
+    m._estimated = true;
+  }
+  // Any null cell (unroutable) → straight-line estimate for that cell.
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (m[i][j] == null) m[i][j] = (i === j) ? 0 : driveTimeHrs(points[i].lat, points[i].lon, points[j].lat, points[j].lon) * 60;
+  _fsMatrixCache[key] = { t: Date.now(), m };
+  return m;
+}
+
+// Time rules — overridable in Settings → Scheduling (prefs.findSlot*), defaults from Jon 10/3:
+//   earliest 8:30 AM (the earliest the crew can be anywhere), early floor 7:30 AM (a slot
+//   between the floor and earliest is OFFERED but flagged "early — confirm with crew", for
+//   whichever crew is nearby — no tech-specific rule), latest start 5:00 PM.
+function _fsRules() {
+  let p = {}; try { p = getPrefs() || {}; } catch (_) {}
+  const hm = (v, dflt) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v || '')); return m ? (+m[1]) * 60 + (+m[2]) : dflt; };
+  return {
+    earliest:    hm(p.findSlotEarliest,    8 * 60 + 30),
+    earlyFloor:  hm(p.findSlotEarlyFloor,  7 * 60 + 30),
+    latestStart: hm(p.findSlotLatestStart, 17 * 60),
+    firstPassDays: (Number.isFinite(+p.findSlotFirstPassDays) && +p.findSlotFirstPassDays > 0) ? +p.findSlotFirstPassDays : 3
+  };
+}
+const _FS_WINDOW_DAYS = 10;
+
+async function findSlotForJob(leadId, type) {
+  const lead = getLead(leadId); if (!lead) { toast('Job not found', 'error'); return; }
+  type = type || 'walkdown';
+  const box = document.getElementById('findslot-' + leadId);
+  const addrParts = [lead.siteStreet, lead.siteCity, lead.siteState || 'VA', lead.siteZip].filter(Boolean);
+  const jobAddr = addrParts.join(', ');
+  if (!lead.siteStreet) { toast('Add the site address first — Find a slot needs it', 'error'); return; }
+  if (_schedIsRemote(type)) { toast('That appointment type is a phone call — nothing to route. Pick Site Visit, Installation or Service Call.', 'info'); return; }
+  if (box) box.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">📍 Reading the calendar and routing…</div>`;
+
+  const R = _fsRules();
+  const onsiteMin = (type === 'walkdown') ? 15 : Math.round(_schedDefaultHours(type, lead) * 60);
+  const jobPt = await geocodeOne(jobAddr, 'job:' + jobAddr);
+  if (!jobPt) { if (box) box.innerHTML = `<div style="font-size:12.5px;color:var(--red);padding:8px 0">Couldn't geocode the site address.</div>`; return; }
+  const homeAddr = ((typeof getPrefs === 'function' && getPrefs().homeBase) || GK_HOME_BASE_ADDR);
+  const homePt = await geocodeOne(homeAddr, '__home__');
+
+  // Business-day window starting tomorrow.
+  const days = [];
+  { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + 1);
+    while (days.length < _FS_WINDOW_DAYS) { if (d.getDay() !== 0 && d.getDay() !== 6) days.push(_fsDateKey(d)); d.setDate(d.getDate() + 1); } }
+  const from = new Date(days[0] + 'T00:00:00'); const to = new Date(days[days.length - 1] + 'T23:59:59');
+
+  // Live calendar read (same calendar + Prefer header as the sync).
+  let items = [];
+  let tgtCalId = '';
+  try {
+    const tgt = getSchedTargetCalendar();
+    tgtCalId = (tgt && tgt.id) || '';
+    const base = tgt && tgt.id ? `/me/calendars/${encodeURIComponent(tgt.id)}/calendarView` : '/me/calendarView';
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    const path = `${base}?startDateTime=${encodeURIComponent(_olLocalIso(from))}&endDateTime=${encodeURIComponent(_olLocalIso(to))}` +
+                 `&$select=id,subject,start,end,location,bodyPreview,isCancelled,isAllDay,showAs&$orderby=start/dateTime&$top=250`;
+    const data = await _graphFetch(path, { headers: { 'Prefer': 'outlook.timezone="' + tz + '"' } });
+    items = (data && data.value) || [];
+  } catch (e) {
+    console.warn('[GK] find-slot calendar read failed:', e);
+    if (box) box.innerHTML = `<div style="font-size:12.5px;color:var(--red);padding:8px 0">Couldn't read the Outlook calendar (sign in to Microsoft and try again).</div>`;
+    return;
+  }
+
+  // Bucket events by day.
+  const byDay = {}; days.forEach(k => byDay[k] = { stops: [], busy: [] });
+  for (const ev of items) {
+    if (!ev || ev.isCancelled || ev.isAllDay) continue;
+    const s = ev.start && ev.start.dateTime, e = ev.end && ev.end.dateTime; if (!s || !e) continue;
+    const key = s.slice(0, 10); if (!byDay[key]) continue;
+    if (String(ev.showAs || '').toLowerCase() === 'free') continue;
+    const sm = _fsHm(new Date(s)), em = _fsHm(new Date(e));
+    const tech = parseTechTag(ev.subject);
+    const addr = _fsEventAddress(ev);
+    const rec = { id: ev.id, subject: stripTechTag(ev.subject || ''), tech, addr, sm, em };
+    if (addr) byDay[key].stops.push(rec); else byDay[key].busy.push(rec);
+  }
+
+  // Geocode stops (cached by address).
+  for (const k of days) for (const st of byDay[k].stops) st.pt = await geocodeOne(st.addr, 'ol:' + st.addr);
+
+  const cands = [];
+  const techBusy = (day, tech, a, b) => (byDay[day].busy || []).some(x => x.tech && tech && (x.tech === tech || x.tech.includes(tech) || tech.includes(x.tech)) && a < x.em && b > x.sm);
+  for (let di = 0; di < days.length; di++) {
+    const day = days[di];
+    const stops = byDay[day].stops.filter(s => s.pt).sort((a, b) => a.sm - b.sm);
+    if (!stops.length) continue;
+    const pts = [jobPt].concat(stops.map(s => s.pt)); if (homePt) pts.push(homePt);
+    const M = await _fsMatrix(pts);
+    const J = 0, H = homePt ? pts.length - 1 : -1;
+    const dr = (a, b) => (a < 0 || b < 0) ? 0 : M[a][b];
+    const firstPass = di < R.firstPassDays;
+    const n = stops.length;
+    // Insert the new stop at position p (0 = before the first stop … n = after the
+    // last). Later stops slide only as far as they must ("squeeze", Jon 10/3 — no
+    // cap; the option SHOWS every new arrival time and the new end of day so the
+    // office can decide). pushes = [] means a clean fit.
+    for (let p = 0; p <= n; p++) {
+      const prev = p > 0 ? stops[p - 1] : null, ip = p;          // matrix index of prev stop = p
+      const next = p < n ? stops[p] : null, inx = p + 1;         // matrix index of next stop = p+1
+      let start;
+      if (prev) start = _fsRound15(prev.em + dr(ip, J));
+      else { start = next.sm - dr(J, inx) - onsiteMin; start = Math.floor(start / 5) * 5; if (start < R.earlyFloor) start = R.earliest; }   // too early even for an early start → start at the earliest and squeeze
+      if (start > R.latestStart) continue;
+      const early = start < R.earliest;
+      if (early && start < R.earlyFloor) continue;
+      const end = start + onsiteMin;
+      // Chain: every later stop starts at max(its own time, previous new end + drive).
+      const pushes = []; let prevEnd = end, prevIdx = J;
+      let lastStopEnd = prev ? prev.em : 0;
+      let prevMoved = true;                                        // the new stop itself is the first "moved" thing
+      for (let k = p; k < n; k++) {
+        const st = stops[k]; const ik = k + 1;
+        // Only a stop we moved can push the next one. Two jobs that were ALREADY
+        // back-to-back on the calendar are left exactly as booked.
+        const ns = prevMoved ? Math.max(st.sm, _fsRound15(prevEnd + dr(prevIdx, ik))) : st.sm;
+        const delta = ns - st.sm;
+        const ne = st.em + delta;
+        if (delta > 0) pushes.push({ stop: st, newStart: ns, newEnd: ne, delta });
+        prevMoved = delta > 0; prevEnd = ne; prevIdx = ik; lastStopEnd = ne;
+      }
+      const dayEnd = (p === n) ? end : lastStopEnd;                // when the last on-site work ends
+      const origDayEnd = stops[n - 1].em;
+      const homeArrive = dayEnd + dr(p === n ? J : n, H);
+      const tech = (prev && prev.tech) || (next && next.tech) || '';
+      if (techBusy(day, tech, start, end)) continue;
+      const added = (prev ? dr(ip, J) : dr(H, J)) + (next ? dr(J, inx) : dr(J, H)) - (prev && next ? dr(ip, inx) : (prev ? dr(ip, H) : dr(H, inx)));
+      const pushTotal = pushes.reduce((t, x) => t + x.delta, 0);
+      cands.push({ day, firstPass, start, end, early, tech, near: prev || next, pos: prev ? 'after' : 'before', next, pushes, pushTotal,
+                   dayEnd, origDayEnd, homeArrive, added: Math.max(0, Math.round(added)), estimated: !!M._estimated, calId: (tgtCalId || '') });
+    }
+  }
+  // Clean fits first (then first-pass window, then least added drive); squeezed
+  // options after, least total push first.
+  cands.sort((a, b) => ((a.pushTotal > 0) - (b.pushTotal > 0)) || (a.firstPass === b.firstPass ? 0 : (a.firstPass ? -1 : 1)) || (a.early === b.early ? 0 : (a.early ? 1 : -1)) || (a.pushTotal - b.pushTotal) || a.added - b.added || a.day.localeCompare(b.day) || a.start - b.start);
+  const clean = cands.filter(c => !c.pushTotal).slice(0, 3);
+  const squeezed = cands.filter(c => c.pushTotal > 0 && c.firstPass).slice(0, 3);
+  let picks = clean.concat(squeezed);
+
+  // Fallback rung 2: nothing near existing work → a day Jon has nothing tagged.
+  let fallback = false;
+  if (!picks.length) {
+    fallback = true;
+    const homeToJob = (homePt) ? (await _fsMatrix([homePt, jobPt]))[0][1] : 0;
+    for (const day of days) {
+      const jonBusy = byDay[day].stops.concat(byDay[day].busy).some(x => /jon/i.test(x.tech || ''));
+      if (jonBusy) continue;
+      const start = Math.max(R.earliest, _fsRound15(R.earliest + homeToJob));
+      if (start > R.latestStart) continue;
+      picks.push({ day, start, end: start + onsiteMin, tech: 'Jon', added: Math.round(homeToJob * 2), near: null, pos: 'standalone', firstPass: days.indexOf(day) < R.firstPassDays, pushes: [], pushTotal: 0 });
+      if (picks.length >= 3) break;
+    }
+  }
+
+  _fsLast[leadId] = { type, onsiteMin, picks };
+  if (!box) return;
+  if (!picks.length) { box.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No slot near existing work in the next ${_FS_WINDOW_DAYS} business days, and no day where Jon is free.</div>`; return; }
+  const row = (c, i) => {
+    const whenStr = `${_fsDayLabel(c.day)} · ${_fsMinTo12(c.start)}–${_fsMinTo12(c.end)}`;
+    let why;
+    if (c.pos === 'standalone') why = `Jon's own stop — nothing of Jon's on the calendar that day · ${Math.round(c.added/2)} min from the shop`;
+    else if (c.pos === 'before') why = `before ${escHtml(c.near.subject)} (${escHtml(c.near.addr)})`;
+    else why = `after ${escHtml(c.near.subject)} (${escHtml(c.near.addr)}) ends ${_fsMinTo12(c.near.em)}`;
+    const techStr = c.tech ? escHtml(c.tech) : '<span style="color:var(--amber,#f59e0b)">crew not tagged</span>';
+    let moves = '';
+    if (c.pushes && c.pushes.length) {
+      moves = `<div style="font-size:11.5px;color:var(--amber,#b45309);margin-top:2px">Moves: ` +
+        c.pushes.map(x => `<strong>${escHtml(x.stop.subject)}</strong> ${_fsMinTo12(x.stop.sm)} → <strong>${_fsMinTo12(x.newStart)}</strong> (+${x.delta} min)`).join(' · ') +
+        `</div>`;
+    } else if (c.pos !== 'standalone' && c.next) {
+      moves = `<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">No other jobs move · ${escHtml(c.next.subject)} still starts ${_fsMinTo12(c.next.sm)}</div>`;
+    }
+    const dayLine = (c.pos !== 'standalone' && Number.isFinite(c.dayEnd))
+      ? `<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">Day ends ${_fsMinTo12(c.dayEnd)}${c.dayEnd !== c.origDayEnd ? ` (was ${_fsMinTo12(c.origDayEnd)})` : ''}${Number.isFinite(c.homeArrive) ? ` · back at the shop ~${_fsMinTo12(c.homeArrive)}` : ''}</div>` : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">${whenStr}${c.early ? ' <span style="color:var(--amber,#f59e0b);font-weight:500">· early start — confirm with crew</span>' : ''}${c.firstPass ? '' : ' <span style="color:var(--text-muted);font-weight:500">· outside 3 days</span>'}</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:1px">${why} · adds ~${c.added} min drive${c.estimated ? ' (est.)' : ''} · ${techStr}</div>
+        ${moves}${dayLine}
+      </div>
+      <div style="display:flex;gap:5px;flex-shrink:0">
+        <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="findSlotText('${leadId}',${i})" title="Open Send Text with this day and time filled in">💬 Text this</button>
+        <button class="btn btn-p" style="padding:3px 9px;font-size:11px" onclick="findSlotBook('${leadId}',${i})" title="${c.pushes && c.pushes.length ? 'Shows the moves, then re-times those Outlook events and opens the Schedule window for this one (you still press Create). No customer texts are sent.' : 'Open the Schedule window with this date and time filled in (you still press Create)'}">📅 Book it</button>
+      </div>
+    </div>`;
+  };
+  const cleanRows = picks.map((c, i) => ({ c, i })).filter(x => !x.c.pushTotal).map(x => row(x.c, x.i)).join('');
+  const sqRows = picks.map((c, i) => ({ c, i })).filter(x => x.c.pushTotal > 0).map(x => row(x.c, x.i)).join('');
+  box.innerHTML = `<div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:6px">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Find a slot — ${escHtml(_apptLabel(type))}, ${onsiteMin >= 60 ? (onsiteMin/60).toFixed(onsiteMin % 60 ? 2 : 0).replace(/\.?0+$/, '') + ' h' : onsiteMin + ' min'} on site${fallback ? ' · no gap near existing work, so these are standalone days for Jon' : ''}</div>
+    ${cleanRows || (fallback ? '' : `<div style="font-size:12px;color:var(--text-muted);padding:4px 0">No clean fit in the next ${_FS_WINDOW_DAYS} business days.</div>`)}
+    ${sqRows ? `<div style="font-size:11px;color:var(--amber,#b45309);text-transform:uppercase;letter-spacing:.4px;margin:8px 0 2px">Squeeze in — other jobs move (next ${R.firstPassDays} business days)</div>${sqRows}` : ''}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Ranked against the live Outlook calendar (placeholders count). Nothing is booked until you press Create. When a squeeze option is booked, the CRM re-times the moved Outlook events and notes each job — <strong>you</strong> tell those customers; no automatic texts.</div>
+  </div>`;
+}
+const _fsLast = {};
+
+// "Text this" → Send Text modal with Jon's wording (10/3) filled in.
+function findSlotText(leadId, idx) {
+  const st = _fsLast[leadId]; const c = st && st.picks[idx]; if (!c) return;
+  const lead = getLead(leadId); const cust = lead && lead.customerId ? getCustomer(lead.customerId) : null;
+  const first = ((cust && cust.firstName) || lead.customerFirstName || String(lead.customerName || '').split(' ')[0] || '').trim();
+  const me = (S.user && S.user.name ? String(S.user.name).split(' ')[0] : 'Jon');
+  const msg = (st.type === 'walkdown')
+    ? `Hi ${first || 'there'}, this is ${me} with GreenKey. Thanks for reaching out for an EV charger installation quote. We will need to come by in order to get the information we need to provide it. We have a crew in the area on ${_fsDayLong(c.day)}. Are you available that day around ${_fsMinTo12(c.start).toLowerCase()}?`
+    : `Hi ${first || 'there'}, this is ${me} with GreenKey. We have a crew in your area on ${_fsDayLong(c.day)}. Would ${_fsMinTo12(c.start).toLowerCase()} work for your ${_apptLabel(st.type).toLowerCase()}?`;
+  openSMSModal(leadId);
+  setTimeout(() => { const ta = document.getElementById('sms-body'); if (ta) { ta.value = msg; try { _smsUpdateCount(); } catch (_) {} } }, 60);
+}
+
+// "Book it" → normal Schedule window, pre-filled; user still presses Create.
+// For a squeeze option: list the moves, confirm, PATCH those Outlook events
+// (start/end), update any CRM appointment that tracks them, note each job.
+// NO customer texts (Jon 10/3: auto-texts conflict with in-person conversations).
+async function findSlotBook(leadId, idx) {
+  const st = _fsLast[leadId]; const c = st && st.picks[idx]; if (!c) return;
+  if (c.pushes && c.pushes.length) {
+    const lines = c.pushes.map(x => `• ${x.stop.subject}: ${_fsMinTo12(x.stop.sm)} → ${_fsMinTo12(x.newStart)}  (+${x.delta} min)`).join('\n');
+    if (!confirm(`Squeeze this in on ${_fsDayLong(c.day)} at ${_fsMinTo12(c.start)}?\n\nThese Outlook events will be moved NOW:\n${lines}\n\nDay ends ${_fsMinTo12(c.dayEnd)} (was ${_fsMinTo12(c.origDayEnd)}).\n\nNo texts go out — tell those customers yourself.`)) return;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    const arr = getLeads(); let dirty = false; let ok = 0, fail = 0;
+    for (const x of c.pushes) {
+      if (!x.stop.id) { fail++; continue; }
+      const path = c.calId ? `/me/calendars/${encodeURIComponent(c.calId)}/events/${encodeURIComponent(x.stop.id)}` : `/me/events/${encodeURIComponent(x.stop.id)}`;
+      try {
+        await _graphFetch(path, { method: 'PATCH', body: JSON.stringify({ start: { dateTime: `${c.day}T${_fsMinToHHMM(x.newStart)}:00`, timeZone: tz }, end: { dateTime: `${c.day}T${_fsMinToHHMM(x.newEnd)}:00`, timeZone: tz } }) });
+        ok++;
+        // Update the CRM job that tracks this event (if any) + leave a trail.
+        const li = arr.findIndex(l => Array.isArray(l.appointments) && l.appointments.some(a => a.outlookEventId === x.stop.id));
+        if (li >= 0) {
+          const list = arr[li].appointments.slice(); const ai = list.findIndex(a => a.outlookEventId === x.stop.id);
+          list[ai] = { ...list[ai], date: c.day, time: _fsMinToHHMM(x.newStart) };
+          arr[li].appointments = list; _apptMirrorInstall(arr[li]);
+          arr[li].jobNotes = (arr[li].jobNotes || []).concat([{ id: 'note-fs-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+            text: `Moved by Find a slot: ${_apptLabel(list[ai].type)} on ${c.day} ${_fsMinTo12(x.stop.sm)} → ${_fsMinTo12(x.newStart)} to fit ${getLead(leadId)?.customerName || leadId} in before it. ⚠ Tell the customer — no text was sent.`,
+            authorName: (S.user && S.user.name) || 'Find a slot', timestamp: new Date().toISOString() }]);
+          arr[li].updatedAt = new Date().toISOString(); dirty = true;
+        }
+      } catch (e) { fail++; console.warn('[GK] find-slot move failed:', x.stop.subject, e); }
+    }
+    if (dirty) saveLeads(arr);
+    toast(fail ? `Moved ${ok} event${ok===1?'':'s'}, ${fail} FAILED — check Outlook before booking` : `Moved ${ok} Outlook event${ok===1?'':'s'} — remember to tell those customers`, fail ? 'error' : 'success', 7000);
+    if (fail && !confirm('Some moves failed. Open the Schedule window anyway?')) return;
+  }
+  // The crew already in the area does it — set the job's Technician if blank.
+  if (c.tech && !getLeadTech(getLead(leadId))) { const arr = getLeads(); const i = arr.findIndex(l => l.id === leadId); if (i >= 0) { arr[i].tech = c.tech; arr[i].updatedAt = new Date().toISOString(); saveLeads(arr); } }
+  const open = getApptsById(leadId).find(a => a.type === st.type && !_apptIsBooked(a) && !a.completedAt);
+  const a = open || upsertAppt(leadId, { type: st.type, date: '', time: '', hours: _apptHours(st.type) });
+  if (!a) return;
+  scheduleInOutlook(leadId, a.id);
+  setTimeout(() => {
+    const d = document.getElementById('sched-date-input'), s = document.getElementById('sched-start-input'), e = document.getElementById('sched-end-input');
+    if (d) d.value = c.day; if (s) s.value = _fsMinToHHMM(c.start); if (e) e.value = _fsMinToHHMM(c.start + st.onsiteMin);
+    try { _populateSchedFields(document.getElementById('sched-type')?.value || st.type); } catch (_) {}
+  }, 80);
 }
 
 function removeAppt(leadId, apptId) {
@@ -34426,7 +34848,7 @@ function _buildSchedContent(lead, cust, quote, type) {
   }
 
   return {
-    subject,
+    subject: withTechTag(subject, getLeadTech(lead)),   // crm-2026-10-03c: [Technician] tag
     body: sections.join('\n\n'),
     location: _schedIsRemote(type) ? _schedRemoteLocation(phone) : location
   };
@@ -34545,7 +34967,10 @@ async function openSchedInOutlook(_specOk) {
   if (!lead) { toast('Job not found', 'error'); return; }
 
   // Read modal inputs.
-  const subject   = document.getElementById('sched-subject')?.value?.trim() || '';
+  const _rawSubject = document.getElementById('sched-subject')?.value?.trim() || '';
+  // crm-2026-10-03c: keep the [Technician] tag on the event even if the subject was edited.
+  const _leadTech = getLeadTech(lead);
+  const subject   = (_leadTech && !parseTechTag(_rawSubject)) ? withTechTag(_rawSubject, _leadTech) : _rawSubject;
   const bodyPlain = document.getElementById('sched-body')?.value || '';
   const date      = document.getElementById('sched-date-input')?.value || '';
   const start     = document.getElementById('sched-start-input')?.value || '';
