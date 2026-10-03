@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-02a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1834,6 +1834,11 @@ function getJobType(id){ return JOB_TYPES.find(t => t.id === id) || null; }
 function defaultPermitFee(q){
   const t = getJobType(q?.jobType);
   if (t && t.noPermit) return 0;
+  // crm-2026-10-03a: EV swap / add-on-existing-circuit install types reuse a circuit
+  // that is already permitted → no permit. Without this the Permit box re-rendered
+  // the type default ($200) after the type change zeroed it, and the NEXT edit on
+  // the form read that $200 back in (the saved $0 never "stuck" visibly).
+  if (q?.jobType === 'ev-residential' && q?.qq?.evInstallType && q.qq.evInstallType !== 'full') return 0;
   const base = (q?.source==='Qmerit') ? (t?.permitQmerit ?? 250) : (t?.permitDefault ?? 200);
   return q?.specialJurisdiction ? Math.max(500, base) : base;
 }
@@ -6884,6 +6889,13 @@ function renderQuickQuoteForm(q){
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Breaker swap</div>
+          <div class="qq-sub">Replace the existing breaker (e.g. a 14-50 outlet's GFCI breaker when hardwiring a charger) · enter the price, $0 = none · folded into L&amp;M, prints under Inclusions</div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-brk-swap" value="${qq.breakerSwapFee||0}" min="0" step="5" oninput="onQQChange('${q.id}')" style="width:90px" title="Price for swapping the existing breaker (breaker + labor). 0 = no swap.">
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Custom add-on</div>
           <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
         </div>
@@ -7091,6 +7103,13 @@ function _renderQQ_HVAC(q) {
       </div>
       <div class="qq-row">
         <div>
+          <div class="qq-lbl">Breaker swap</div>
+          <div class="qq-sub">Replace the existing breaker (e.g. a 14-50 outlet's GFCI breaker when hardwiring a charger) · enter the price, $0 = none · folded into L&amp;M, prints under Inclusions</div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-brk-swap" value="${qq.breakerSwapFee||0}" min="0" step="5" oninput="onQQChange('${q.id}')" style="width:90px" title="Price for swapping the existing breaker (breaker + labor). 0 = no swap.">
+      </div>
+      <div class="qq-row">
+        <div>
           <div class="qq-lbl">Custom add-on</div>
           <div class="qq-sub">Prints on the customer's quote under this name — use it for things they're buying, like painting a post. Leave blank if unused.</div>
         </div>
@@ -7242,6 +7261,13 @@ function _renderQQ_CircuitReplacement(q) {
           <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
           <span style="font-size:11px;color:var(--text-muted)">covers</span>
         </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Breaker swap</div>
+          <div class="qq-sub">Replace the existing breaker (e.g. a 14-50 outlet's GFCI breaker when hardwiring a charger) · enter the price, $0 = none · folded into L&amp;M, prints under Inclusions</div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-brk-swap" value="${qq.breakerSwapFee||0}" min="0" step="5" oninput="onQQChange('${q.id}')" style="width:90px" title="Price for swapping the existing breaker (breaker + labor). 0 = no swap.">
       </div>
       <div class="qq-row">
         <div>
@@ -7425,6 +7451,13 @@ function _renderQQ_PanelReplacement(q) {
           <input class="li-inp num" type="number" id="qq-access-covers" value="${qq.accessCovers||0}" min="0" max="6" step="1" oninput="onQQChange('${q.id}')" style="width:70px" title="8×8 pop-in access covers — one per wall opening (above and/or below the panel). Priced into Labor & Materials; shows in Inclusions without a price.">
           <span style="font-size:11px;color:var(--text-muted)">covers</span>
         </div>
+      </div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Breaker swap</div>
+          <div class="qq-sub">Replace the existing breaker (e.g. a 14-50 outlet's GFCI breaker when hardwiring a charger) · enter the price, $0 = none · folded into L&amp;M, prints under Inclusions</div>
+        </div>
+        <input class="li-inp num" type="number" id="qq-brk-swap" value="${qq.breakerSwapFee||0}" min="0" step="5" oninput="onQQChange('${q.id}')" style="width:90px" title="Price for swapping the existing breaker (breaker + labor). 0 = no swap.">
       </div>
       <div class="qq-row">
         <div>
@@ -7673,7 +7706,8 @@ function _renderQQ_DetailedRedirect(q) {
 function onQQEVTypeChange(qid){
   const t=document.getElementById('qq-evtype')?.value||'full';
   const pEl=document.getElementById('qq-permit');
-  if(pEl) pEl.value = (t==='full') ? (defaultPermitFee(getQuote(qid))||200) : 0;
+  // Evaluate the default AS a full install — the saved quote still carries the old type here.
+  if(pEl){ const _q0=getQuote(qid)||{}; pEl.value = (t==='full') ? (defaultPermitFee({..._q0, qq:{...(_q0.qq||{}), evInstallType:'full'}})||200) : 0; }
   onQQChange(qid);
   const nq=getQuote(qid);
   if(nq && typeof renderQBForm==='function') renderQBForm(nq);
@@ -8358,6 +8392,9 @@ function _qqReadAddOns() {
   // Counts only with BOTH a name and a number — an unexplained charge on a
   // customer's quote is the thing this feature exists to prevent.
   const cFee = (cLabel && cAmt > 0) ? cAmt : 0;
+  // Breaker swap (crm-2026-10-03a, Jon): price typed per job, folded into L&M
+  // like the junction box; Inclusions names it (see autoInclusions).
+  const brkFee = Math.max(0, parseFloat(document.getElementById('qq-brk-swap')?.value) || 0);
   // Repaint the figure the way the travel line does; computing it only at
   // render time left it reading $0.00 while you typed.
   const el = document.getElementById('qq-jb-calc');
@@ -8365,8 +8402,8 @@ function _qqReadAddOns() {
   const acEl = document.getElementById('qq-ac-calc');
   if (acEl) acEl.textContent = '$' + acFee.toFixed(2);
   return {
-    total: jbFee + acFee + cFee,
-    patch: { jbLugs: lugs, jbFee, accessCovers: covers, accessCoverFee: acFee, customLabel: cLabel, customAmount: cAmt }
+    total: jbFee + acFee + cFee + brkFee,
+    patch: { jbLugs: lugs, jbFee, accessCovers: covers, accessCoverFee: acFee, customLabel: cLabel, customAmount: cAmt, breakerSwapFee: brkFee }
   };
 }
 
@@ -9306,6 +9343,9 @@ function autoInclusions(q){
     const _acN = q.qq.accessCovers;
     lines.push('• ' + (_acN > 1 ? _acN + ' flush wall-access covers' : 'Flush wall-access cover') + ' where wall access is needed at the panel');
   }
+  if ((parseFloat(q.qq?.breakerSwapFee) || 0) > 0) {
+    lines.push('• Replace the existing breaker with a new breaker sized and rated for the circuit');
+  }
   const _ciLbl = (q.qq?.customLabel || '').trim();
   if (_ciLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) lines.push('• ' + _ciLbl);
   return lines.join('\n');
@@ -9336,16 +9376,10 @@ function autoExclusions(q){
     lines.push('• Energy management hardware (customer or program-supplied unless line-itemed below)');
     lines.push('• Any work outside the device install (panel changes, new circuits, etc.) — separate scope');
   }
-  // Jonathan, 2026-07-30: "Painting a post cannot be warrantied work." Right —
-  // the two-year craftsmanship warranty covers workmanship on the electrical
-  // installation, and paint fails for reasons that have nothing to do with how
-  // well it was applied: sun, weather, the customer leaning a ladder on it. The
-  // add-on is still SOLD and still listed under Inclusions; this carves it out
-  // of the warranty specifically, rather than pretending it wasn't purchased.
-  const _cxLbl = (q.qq?.customLabel || '').trim();
-  if (_cxLbl && (parseFloat(q.qq?.customAmount) || 0) > 0) {
-    lines.push('• Warranty coverage on "' + _cxLbl + '" — cosmetic and finish work is provided as-is and is not covered by the GreenKey craftsmanship warranty');
-  }
+  // crm-2026-10-03a (Jon): the auto "not covered by the GreenKey craftsmanship
+  // warranty" exclusion for custom add-ons (added 2026-07-30 for painted posts)
+  // is REMOVED — it landed on every custom add-on and became a nuisance. Type a
+  // warranty note into Exclusions by hand when a custom item really needs one.
   if (['pedestal-existing','pedestal-newpad','pedestal-pad'].includes(q.qq?.mountType)) {
     lines.push('• The pedestal itself — quoted separately, as pricing varies by make and some are customer-supplied');
   }
