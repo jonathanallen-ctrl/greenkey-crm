@@ -23,6 +23,11 @@
   .muted{color:#8b93a1}
   .top{position:sticky;top:0;z-index:5;background:#0f1117;padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;border-bottom:1px solid #1d222c}
   .top .ttl{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  /* field-35 (Jon): header buttons were 11px chips jammed together — thumb-sized now */
+  .top .hbtns{display:flex;gap:12px;flex:0 0 auto}
+  .top .hbtn{font-size:15px;font-weight:600;min-height:44px;min-width:48px;padding:0 14px;border-radius:12px;background:#171b24;border:1px solid #2f3746;color:#dfe3ea;white-space:nowrap}
+  .top .hbtn:active{background:#232a37}
+  .top .brand{line-height:1.35}
   .brand{font-size:13px;font-weight:700;letter-spacing:.3px}
   .brand .b2{color:#36c777}
   .build{font-size:10px;color:#5d6675}
@@ -97,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-09-17 field-34';
+const BUILD = '2026-09-17 field-36';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -770,7 +775,7 @@ function renderLogin(){
 // inside the job and was easy to miss); the view name shrinks to a right label.
 function header(title, back){
   return '<div class="top"><div class="ttl"><div class="brand">Green<span class="b2">Key</span> Field <span class="muted" style="font-weight:500">'+esc(BUILD)+'</span></div>'
-    + '<div>'+(back?'':'<button class="chip" onclick="openVanStock()" style="margin-right:6px">🚐 Van</button>')+'<button class="chip" onclick="refresh()" style="margin-right:6px">↻</button><button class="chip" onclick="signOut()">Sign out</button></div></div>'
+    + '<div class="hbtns">'+(back?'':'<button class="hbtn" onclick="openVanStock()">🚐 Van</button>')+'<button class="hbtn" onclick="refresh()" aria-label="Refresh">↻</button></div></div>'
     + (back
        ? '<div class="h1row"><h1 class="hback" onclick="goJobs()">‹ My Jobs</h1><span class="hlab">'+esc(title)+'</span></div>'
        : '<h1>'+esc(title)+'</h1>')
@@ -806,7 +811,10 @@ function renderJobs(){
     + '<div class="wrap">'
     + '<input class="srch" placeholder="Search name, address, phone…" value="'+esc(_search)+'" oninput="_search=this.value;renderJobs()" '+(_search?'autofocus':'')+'>'
     + _pqListNote()
-    + body + '</div>';
+    + body
+    // field-35: Sign out moved OUT of the header (easy to hit by accident next to Refresh) to the foot of the list.
+    + '<div style="text-align:center;margin:28px 0 12px"><button class="chip" style="font-size:13px;padding:10px 18px" onclick="if(confirm(\'Sign out of GreenKey Field?\')) signOut()">Sign out</button></div>'
+    + '</div>';
   if(_search){ const i=$app().querySelector('.srch'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
 }
 // Dates read MM/DD/YYYY wherever a human sees one (2026-08-08, Sherri).
@@ -1091,12 +1099,20 @@ function renderDetail(id){
       + (hasAmt ? '<div style="font-size:14px;margin-bottom:10px">'+(c!=null?'Card <b>'+fmt$(c)+'</b>':'')+((c!=null&&n!=null&&n!==c)?' &nbsp;·&nbsp; Zelle/cash <b>'+fmt$(n)+'</b>':'')+'</div>'
                  : '<div class="muted" style="font-size:13px;margin-bottom:10px">No quote amount on file — you’ll enter it when recording.</div>')
       + (payLinkPending(l) ? '<div style="background:#16324a;border:1px solid #3498db;border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px;line-height:1.45">💳 <b>Pay link texted '+esc(new Date(l.paymentExpected.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))+' · '+fmt$(l.paymentExpected.amount)+'</b><br>It records itself when the customer pays — <b>nothing to enter here</b>. This job flips to “Paid” after the office CRM sees it.</div>' : '')
-      + '<button class="btn green" onclick="tapToPay(\''+esc(l.id)+'\')">💳 Tap to Pay'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
-      + '<div style="height:8px"></div>'
-      + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">✓ Tap to Pay done — record it'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
-      + '<div style="height:8px"></div>'
-      + '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">💳 Text pay link'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
-      + '<div style="height:8px"></div>'
+      // field-36 (Jon: "how will our techs know not to do that again — I did it and I helped
+      // build the thing"): a warning is not enough. While a pay link is out, the card
+      // buttons are simply NOT THERE. One small link covers the real exception (customer
+      // gave up on the link and tapped a card instead); Zelle / cash stay available.
+      + (payLinkPending(l)
+        ? '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">↻ Text the pay link again</button>'
+          + '<div style="height:8px"></div>'
+          + '<div style="text-align:center;margin:2px 0 8px"><a style="font-size:12.5px;color:#8ab4e8;text-decoration:underline" onclick="payLinkAbandon(\''+esc(l.id)+'\')">Customer isn’t using the link? Take the card another way</a></div>'
+        : '<button class="btn green" onclick="tapToPay(\''+esc(l.id)+'\')">💳 Tap to Pay'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+          + '<div style="height:8px"></div>'
+          + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'card\','+(c||0)+')">✓ Tap to Pay done — record it'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+          + '<div style="height:8px"></div>'
+          + '<button class="btn ghost" onclick="textPayLink(\''+esc(l.id)+'\')">💳 Text pay link'+(c!=null?(' · '+fmt$(c)):'')+'</button>'
+          + '<div style="height:8px"></div>')
       + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'zelle\','+(n||0)+')">Zelle paid'+(n!=null?(' · '+fmt$(n)):'')+'</button>'
       + '<div style="height:8px"></div>'
       + '<button class="btn ghost" onclick="doPayment(\''+esc(l.id)+'\',\'cash\',0)">Cash / check</button>'
@@ -1236,7 +1252,20 @@ function _vsMerge(localArr, spArr){
     if(!ex || String(r.updatedAt||'')>String(ex.updatedAt||'')) map.set(r.id,r); });
   return [...map.values()];
 }
-function vsItems(){ return getVS().filter(function(r){return r&&r.kind==='item'&&!r.deleted;}).sort(function(a,b){ return String(a.cat||'').localeCompare(String(b.cat||''))||String(a.name||'').localeCompare(String(b.name||'')); }); }
+// field-35 (Jon): walk order = breakers → wire → fittings & other hardware → batteries → tools.
+function _vsCatRank(c){
+  c=String(c||'').toLowerCase();
+  if(/breaker/.test(c)) return 1;
+  if(/wire|conduit|cable/.test(c)) return 2;
+  if(/fitting|connector/.test(c)) return 3;
+  if(/batter/.test(c)) return 5;
+  if(/power tool/.test(c)) return 6;
+  if(/hand tool/.test(c)) return 7;
+  if(/bit|driver/.test(c)) return 8;
+  if(/tool/.test(c)) return 9;
+  return 4;                                  // any other hardware / new category
+}
+function vsItems(){ return getVS().filter(function(r){return r&&r.kind==='item'&&!r.deleted;}).sort(function(a,b){ return (_vsCatRank(a.cat||'Other')-_vsCatRank(b.cat||'Other'))||String(a.cat||'').localeCompare(String(b.cat||''))||String(a.name||'').localeCompare(String(b.name||''),undefined,{numeric:true}); }); }
 function vsLists(){ return getVS().filter(function(r){return r&&r.kind==='list'&&!r.deleted;}).sort(function(a,b){ return String(b.createdAt||'').localeCompare(String(a.createdAt||'')); }); }
 function vsConfig(){ return getVS().find(function(r){return r&&r.kind==='config';})||{adminOnly:false}; }
 function vsUpsert(rec){ const arr=getVS(); const i=arr.findIndex(function(r){return r&&r.id===rec.id;}); rec.updatedAt=new Date().toISOString(); if(i>=0) arr[i]=Object.assign({},arr[i],rec); else arr.push(rec); saveVS(arr); _vsPushSoon(); }
@@ -1256,6 +1285,9 @@ async function pushVanStock(){
 function _vsTechName(){ try{ const a=_msal.getAllAccounts()[0]; if(a&&a.name) return a.name; }catch(e){} return 'tech'; }
 let _vsFlags={};
 function openVanStock(){ location.hash='#vs'; renderVanStock(); }
+// field-35: every tap re-rendered and snapped to the top ("it jumps around"). In-place
+// updates now put the scroll back where it was.
+function _keepScroll(fn){ const y=window.scrollY||document.documentElement.scrollTop||0; fn(); window.scrollTo(0,y); requestAnimationFrame(function(){ window.scrollTo(0,y); }); }
 function renderVanStock(){
   const items=vsItems(); const cfg=vsConfig();
   const open=vsLists().filter(function(l){return !l.closedAt;});
@@ -1275,7 +1307,7 @@ function renderVanStock(){
         +'<div style="flex:1;min-width:0"><div style="font-weight:600">'+esc(it.name)+'</div><div class="muted" style="font-size:12px">keep '+esc(String(it.qty||1))+' on van</div></div>'
         +'<div style="font-size:20px">'+(f?'🚩':'○')+'</div></div>'
         +(f?('<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap" onclick="event.stopPropagation()">'
-          +'<button class="chip" onclick="vsQty(\''+esc(it.id)+'\',-1)">−</button><span style="font-weight:700;min-width:26px;text-align:center">'+f.need+'</span><button class="chip" onclick="vsQty(\''+esc(it.id)+'\',1)">＋</button>'
+          +'<button class="chip" style="font-size:18px;min-width:44px;min-height:40px" onclick="vsQty(\''+esc(it.id)+'\',-1)">−</button><span style="font-weight:700;min-width:26px;text-align:center">'+f.need+'</span><button class="chip" style="font-size:18px;min-width:44px;min-height:40px" onclick="vsQty(\''+esc(it.id)+'\',1)">＋</button>'
           +'<button class="chip" style="'+(f.repl?'background:#e8b34a;color:#0d1117':'')+'" onclick="vsRepl(\''+esc(it.id)+'\')">🔧 Replace</button>'
           +'<input class="srch" style="margin-top:0;flex:1;min-width:110px;padding:7px 9px;font-size:13px" placeholder="note (brand, size…)" value="'+esc(f.note||'')+'" oninput="_vsFlags[\''+esc(it.id)+'\'].note=this.value">'
           +'</div>'):'')
@@ -1286,9 +1318,9 @@ function renderVanStock(){
     +(flagged?'<div style="position:fixed;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:#0d1117;border-top:1px solid #1d222c;z-index:5"><button class="btn green" onclick="vsCreateList()">Create restock list ('+flagged+')</button></div>':'');
   window.scrollTo(0,0);
 }
-function vsToggle(id){ if(_vsFlags[id]) delete _vsFlags[id]; else _vsFlags[id]={need:1,repl:false,note:''}; renderVanStock(); }
-function vsQty(id,d){ const f=_vsFlags[id]; if(!f) return; f.need=Math.max(1,(f.need||1)+d); renderVanStock(); }
-function vsRepl(id){ const f=_vsFlags[id]; if(!f) return; f.repl=!f.repl; renderVanStock(); }
+function vsToggle(id){ if(_vsFlags[id]) delete _vsFlags[id]; else _vsFlags[id]={need:1,repl:false,note:''}; _keepScroll(renderVanStock); }
+function vsQty(id,d){ const f=_vsFlags[id]; if(!f) return; f.need=Math.max(1,(f.need||1)+d); _keepScroll(renderVanStock); }
+function vsRepl(id){ const f=_vsFlags[id]; if(!f) return; f.repl=!f.repl; _keepScroll(renderVanStock); }
 function vsCreateList(){
   const items=vsItems(); const rows=[];
   Object.keys(_vsFlags).forEach(function(id){ const it=items.find(function(x){return x.id===id;}); const f=_vsFlags[id]; if(it&&f) rows.push({name:it.name,cat:it.cat||'Other',need:f.need||1,repl:!!f.repl,note:(f.note||'').trim(),filled:false}); });
@@ -1327,7 +1359,7 @@ function renderVanList(id){
 function vsFill(listId, idx){
   const arr=getVS(); const L=arr.find(function(r){return r&&r.id===listId;}); if(!L||!L.items||!L.items[idx]) return;
   L.items[idx].filled=!L.items[idx].filled; L.updatedAt=new Date().toISOString();
-  saveVS(arr); _vsPushSoon(); renderVanList(listId);
+  saveVS(arr); _vsPushSoon(); _keepScroll(function(){ renderVanList(listId); });
 }
 function vsCopy(listId){
   const L=vsLists().find(function(x){return x.id===listId;}); if(!L) return;
@@ -1384,17 +1416,17 @@ function vsmAdd(){
 }
 function vsmQty(id,v){ vsUpsert({id:id, kind:'item', qty:parseInt(v,10)||1}); }
 let _vsmEditId=null;
-function vsmEdit(id){ _vsmEditId=id; renderVanMaster(); }
-function vsmCancelEdit(){ _vsmEditId=null; renderVanMaster(); }
+function vsmEdit(id){ _vsmEditId=id; _keepScroll(renderVanMaster); }
+function vsmCancelEdit(){ _vsmEditId=null; _keepScroll(renderVanMaster); }
 function vsmSaveEdit(id){
   const name=(document.getElementById('vsm-ed-name').value||'').trim();
   const cat=(document.getElementById('vsm-ed-cat').value||'').trim()||'Other';
   const qty=parseInt(document.getElementById('vsm-ed-qty').value,10)||1;
   if(!name){ alert('The item needs a name.'); return; }
   vsUpsert({id:id, kind:'item', name:name, cat:cat, qty:qty});
-  _vsmEditId=null; renderVanMaster();
+  _vsmEditId=null; _keepScroll(renderVanMaster);
 }
-function vsmDel(id){ const it=vsItems().find(function(x){return x.id===id;}); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; vsUpsert({id:id, kind:'item', deleted:true}); renderVanMaster(); }
+function vsmDel(id){ const it=vsItems().find(function(x){return x.id===id;}); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; vsUpsert({id:id, kind:'item', deleted:true}); _keepScroll(renderVanMaster); }
 
 function goJobs(){ _stopFldSms(); closeLightbox(); location.hash=''; renderJobs(); }
 async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
@@ -1944,6 +1976,17 @@ function payLinkPending(l){
 }
 function recentLinkPayment(l){
   return ledgerPayments(l).find(function(p){ return p && p.method==='card-link' && p.collectedAt && (Date.now()-new Date(p.collectedAt).getTime() < 48*3600*1000); }) || null;
+}
+// field-36: the deliberate way out of "pay link pending" — clears the expectation so the
+// normal card buttons come back. The link itself stays valid at Stripe; if the customer
+// pays it later anyway, the office duplicate warning catches the pair.
+async function payLinkAbandon(jobId){
+  if(!confirm('Only do this if the customer will NOT pay with the texted link.\n\nIf they already paid by the link, press Cancel — it records itself and this job will show Paid shortly.\n\nOK = bring back Tap to Pay')) return;
+  try{
+    const arr=getLeads(); const j=arr.findIndex(x=>x.id===jobId);
+    if(j>=0){ delete arr[j].paymentExpected; arr[j].updatedAt=new Date().toISOString(); localStorage.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); }
+  }catch(e){ console.warn('[field] payLinkAbandon', e); }
+  renderDetail(jobId);
 }
 async function doPayment(jobId, method, amount){
   if(method==='card'){
