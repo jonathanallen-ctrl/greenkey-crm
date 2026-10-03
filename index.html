@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-09-28c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-02a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6588,6 +6588,7 @@ function renderQuoteBuilder(qid){
       </div>
       <div id="qb-sidebar">
         ${(typeof gkSiteViewThumbHTML==='function'?gkSiteViewThumbHTML(lead):'')}
+        ${(typeof gkEarthSnipsHTML==='function'?gkEarthSnipsHTML(lead):'')}
         <div class="card" style="padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0">Job Type</div>
           <select id="qb-jobtype" class="qb-sel" onchange="changeQuoteJobType('${q.id}', this.value)">
@@ -13642,12 +13643,18 @@ function _chipEditorHTML(leadId, key){
         // specific winning quote — that's how it knows WHICH one with multiples.
         const accSet=new Set(getAcceptedQuoteIds(lead));   // multi-scope accepts (2026-08-18g)
         const qrows=quotes.map(q=>{
-          const isAcc=accSet.has(q.id)||q.status==='approved'||q.status==='contingent-approved';
+          // crm-2026-10-02a: 'approved' alone no longer reads as accepted when the job
+          // HAS an accepted set and this quote isn't in it — that quote is NOT in the
+          // Job Value (Hillary Goldsmith: $4,425 scope showed "✓ Accepted" but the job
+          // counted only the $1,990 EV scope). Legacy jobs with no set keep old display.
+          const _appr=q.status==='approved'||q.status==='contingent-approved';
+          const isAcc=accSet.has(q.id)||(_appr&&!accSet.size);
+          const notCounted=_appr&&!isAcc;
           const qd=q.createdAt?new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
-          const lbl=`<span style="flex:1;min-width:0;font-size:12.5px"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qd?' · '+qd:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')}</span>`:''} — <strong>$${_quoteNet(q).toLocaleString()}</strong> <span style="color:var(--text-muted)">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</span></span>`;
+          const lbl=`<span style="flex:1;min-width:0;font-size:12.5px"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qd?' · '+qd:''}${q.external?` · <span style="color:var(--blue)">${escHtml(q.source||'External')}</span>`:''} — <strong>$${_quoteNet(q).toLocaleString()}</strong> <span style="color:var(--text-muted)">${escHtml(q.status||'draft')}${isAcc?' · accepted':''}</span>${notCounted?' <span style="color:var(--amber,#f59e0b);font-weight:600">· approved but NOT in Job Value</span>':''}</span>`;
           return row(lbl + (isAcc
             ? btn('✓ Accepted — undo',`unacceptJobQuote('${leadId}','${q.id}')`)
-            : btnP('Accept this quote',`acceptJobQuote('${leadId}','${q.id}')`)));
+            : btnP(notCounted?'＋ Add to Job Value':'Accept this quote',`acceptJobQuote('${leadId}','${q.id}')`)));
         }).join('');
         return _chipEditorShell('Quote', qrows
           + row(btn('+ Record outside quote',`openExternalQuote('${leadId}')`))
@@ -14100,13 +14107,18 @@ function _renderJobRail(lead){
       ${earthUrl?`<a id="jd-earth-${id}" href="${earthUrl}" target="_blank" rel="noopener" class="btn btn-g" style="padding:5px 10px;font-size:11.5px;text-decoration:none">🌎 Google Earth</a>`:''}
       <a id="jd-earthchrome-${id}" href="#" rel="noopener" class="btn btn-g" style="display:none;padding:5px 10px;font-size:11.5px;text-decoration:none" title="Safari can't run web Earth — this opens it in the Chrome app instead">🌎 Earth (Chrome)</a>
       <button class="btn btn-g" style="padding:5px 10px;font-size:11.5px" onclick="openSiteViewModal('${id}')">📐 Site View</button>
+      <button class="btn btn-g" style="padding:5px 10px;font-size:11.5px" onclick="openEarthSnip('${id}',{autoCapture:true})" title="Snip another tab or window (e.g. Google Earth), draw a box around what you want, mark it up, save it to the job. Or use Win+Shift+S and press Ctrl+V anywhere on the job.">✂️ Snip</button>
     </div>
     ${addr?'':'<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Add a site address to enable map views.</div>'}
   </div></div>`;
   const quotes=getQuotes().filter(q=>q.leadId===id).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
   const _accSet=new Set(getAcceptedQuoteIds(lead));    // multi-scope accepts (2026-08-18g)
   const qRows = quotes.length ? quotes.map(q=>{
-    const isAcc = _accSet.has(q.id) || q.status==='approved' || q.status==='contingent-approved';
+    // crm-2026-10-02a: see _chipEditorHTML — approved-but-not-in-the-accepted-set
+    // is shown as such, with a button that adds it to the Job Value.
+    const _appr = q.status==='approved' || q.status==='contingent-approved';
+    const isAcc = _accSet.has(q.id) || (_appr && !_accSet.size);
+    const notCounted = _appr && !isAcc;
     // An invoiced quote is finished business: it should not still be offering
     // "Accept" (Clifford Noe looked unfinished for exactly this reason), and it
     // must not be deletable — deleting it would orphan a real invoice number.
@@ -14129,13 +14141,13 @@ function _renderJobRail(lead){
         <div style="font-size:10.5px;color:var(--text-muted)"><span style="font-family:var(--mono)">${escHtml(q.id)}</span>${qDate?' · '+qDate:''}${q.external?' · <span style="color:var(--blue)">(outside)</span>':''}</div>
         <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${(()=>{const s=q.source||'';if(!s)return '';const plat=['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink'].includes(s);return ` <span style="font-size:10px;font-weight:700;letter-spacing:.3px;padding:1px 7px;border-radius:9px;vertical-align:1px;${plat?'background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)':'background:rgba(46,204,113,.12);color:var(--green);border:1px solid rgba(46,204,113,.3)'}">${escHtml(s)}</span>`;})()}${qLbl?' · '+escHtml(qLbl):''}</div>
         ${(q.source==='Qmerit'&&_quoteJobNet(q)!==_quoteNet(q))?`<div style="font-size:10.5px;color:var(--text-muted)">→ $${_quoteJobNet(q).toLocaleString()} to GreenKey after Qmerit's $${(_quoteNet(q)-_quoteJobNet(q)).toLocaleString()} admin fee</div>`:''}
-        <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${openHint}</div>
+        <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${notCounted?' · <span style="color:var(--amber,#f59e0b);font-weight:600">NOT in Job Value</span>':''}${openHint}</div>
         ${isInv?`<div style="font-size:10.5px;color:#a55ecc;margin-top:2px" title="Invoice generated from this quote. Use the buttons at right to re-download or re-send it.">🧾 <span style="font-family:var(--mono)">${escHtml(q.invoiceId||'')}</span>${q.invoiceDate?' · '+new Date(q.invoiceDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</div>`:''}
       </div>
       ${isInv
         ? `<button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#8e44ad;color:#a55ecc" onclick="event.stopPropagation();generateInvoice('${q.id}')" title="Re-download invoice ${escHtml(q.invoiceId||'')} as a PDF (same invoice number — it is not re-minted)">🧾 Invoice</button>
            <button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#3498db;color:#3498db" onclick="event.stopPropagation();emailInvoice('${q.id}')" title="Email invoice ${escHtml(q.invoiceId||'')} to the bill-to party with the PDF attached">✉ Send</button>`
-        : `<button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="${isAcc?`unacceptJobQuote('${id}','${q.id}')`:`acceptJobQuote('${id}','${q.id}')`}" title="${isAcc?'Click to un-accept this quote':''}">${isAcc?'✓ Accepted':'Accept'}</button>
+        : `<button class="btn ${isAcc?'btn-g':'btn-p'}" style="padding:3px 9px;font-size:11px;flex-shrink:0" onclick="${isAcc?`unacceptJobQuote('${id}','${q.id}')`:`acceptJobQuote('${id}','${q.id}')`}" title="${isAcc?'Click to un-accept this quote':(notCounted?'Approved, but not counted in the Job Value — click to add it as an additional scope (or replace)':'')}">${isAcc?'✓ Accepted':(notCounted?'＋ Add to Job Value':'Accept')}</button>
            ${isAcc?'':`<button class="btn btn-g" style="padding:3px 7px;font-size:11px;flex-shrink:0;color:var(--red)" onclick="event.stopPropagation();deleteQuoteFromJobDetail('${q.id}','${id}')" title="Delete this quote (removes its saved PDFs too)">×</button>`}`}
     </div>`;
   }).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">No quotes yet. <a onclick="openExternalQuote('${id}')" style="color:var(--green);cursor:pointer;text-decoration:underline">Record an outside quote</a> (Qmerit / Electrum / Treehouse fixed price).</div>`;
@@ -35577,8 +35589,14 @@ function gkStorageCheck(){
 async function init() {
   archiveOldLeads();
   seedImportData();
-  try { repairSeedStages20260914(); } catch (_) {}
-  try { repairAcceptedPointer20260917(); } catch (_) {}
+  // crm-2026-10-02a: the two boot repairs NO LONGER run here, before the first
+  // SharePoint pull. They bump updatedAt, so on a computer that hadn't synced in
+  // a while they stamped its STALE copy of a job as the newest version, and the
+  // merge then let that stale copy overwrite everyone else's edits. 9/19 ~9 PM ET
+  // this wiped Sherri's 9/18 fix on Hillary Goldsmith (and 4 other jobs were
+  // last-written the same way). They still run right after every pull
+  // (end of _pullFromSP), where the local copy is fresh. RULE: any repair that
+  // bumps updatedAt must only run AFTER a pull.
   try { setTimeout(gkStorageCheck, 15000); setInterval(gkStorageCheck, 30*60*1000); } catch (_) {}
   // Start the background quote-action poller. It self-throttles based on
   // tab visibility + current page so it's cheap when the user isn't on
@@ -35614,6 +35632,426 @@ async function init() {
 init();
 </script>
 <script>
+/* ── SNIP (crm-2026-09-30b; first cut 09-30a). Jon: "make it work just like the
+   snipping tool so we don't have to learn and remember something new … just open
+   it and draw a box around anything you want to save", plus simple drawing:
+   boxes, lines, text.
+   A web page is NOT allowed to draw over the whole screen the way Windows'
+   Snipping Tool does — the browser has to ask which screen/window/tab first.
+   So there are two paths, and both end in the same "draw a box" moment:
+     A. Use the real Snipping Tool (Win+Shift+S), then Ctrl+V ANYWHERE on an open
+        job or quote — the snip opens straight in the markup editor. Nothing new
+        to learn.
+     B. Click ✂️ Snip → the browser asks which screen/window/tab (pick it) → the
+        frozen picture fills the screen with a crosshair → draw a box → editor.
+   Editor tools: ▭ Box, ╱ Line, ➜ Arrow, ✏️ Pen, T Text, 4 colours, Undo.
+   Saved as a Site Photo on the job (IndexedDB + SharePoint like every job photo,
+   NOT localStorage). Newest 3 show in the quote-builder sidebar.
+   ── */
+(function(){
+  let st = null;
+  const MAX_W = 2400;
+  const COLORS = ['#ff2d2d', '#ffd400', '#ffffff', '#111111'];
+  const TOOLS = [['box','▭ Box'],['line','╱ Line'],['arrow','➜ Arrow'],['pen','✏️ Pen'],['text','T Text']];
+
+  const _el = id => document.getElementById(id);
+  const _addr = l => [l.siteStreet, l.siteCity, l.siteState || 'VA', l.siteZip].filter(Boolean).join(', ');
+  const _canCapture = () => !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  const _typing = t => !!(t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')));
+
+  function _modal(){
+    let m = _el('gk-snip-modal');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'gk-snip-modal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(15,20,30,.62);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px';
+    const toolBtns = TOOLS.map(([k, l]) => '<button id="gk-snip-t-' + k + '" class="btn btn-g" style="padding:5px 11px;font-size:12.5px" onclick="_snipTool(\'' + k + '\')">' + l + '</button>').join('');
+    const colBtns = COLORS.map((c, i) => '<button id="gk-snip-c-' + i + '" title="Colour" onclick="_snipColor(' + i + ')" style="width:24px;height:24px;border-radius:50%;border:2px solid #888;background:' + c + ';cursor:pointer;padding:0"></button>').join('');
+    m.innerHTML =
+      // full-screen "draw a box" layer (path B and chosen images)
+      '<div id="gk-snip-select" style="display:none;position:fixed;inset:0;background:#111;z-index:2;align-items:center;justify-content:center">' +
+        '<canvas id="gk-snip-selcv" style="cursor:crosshair;touch-action:none"></canvas>' +
+        '<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;display:flex;gap:10px;align-items:center;white-space:nowrap">' +
+          '<span>Draw a box around what you want to keep</span>' +
+          '<button class="btn btn-g" style="padding:3px 10px;font-size:12px" onclick="_snipKeepWhole()">Keep whole picture</button>' +
+          '<button class="btn btn-g" style="padding:3px 10px;font-size:12px" onclick="closeEarthSnip()">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="background:var(--bg-card,#fff);color:var(--text-primary,#1a1f2a);border-radius:10px;width:min(1180px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.35)">' +
+        '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border,#d7dde3)">' +
+          '<b style="color:var(--green,#2e7d32)">✂️ Snip</b><span id="gk-snip-label" style="font-size:12.5px;color:var(--text-muted,#5e6a78);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>' +
+          '<button class="btn btn-g" style="padding:5px 12px;font-size:12px" onclick="closeEarthSnip()">Close</button>' +
+        '</div>' +
+        '<div id="gk-snip-start" style="padding:22px 18px;text-align:center">' +
+          '<div style="font-size:14px;margin-bottom:6px"><b>Easiest:</b> use the Windows Snipping Tool (<b>Win + Shift + S</b>), then press <b>Ctrl + V</b> here.</div>' +
+          '<div style="font-size:12.5px;color:var(--text-muted,#5e6a78);margin-bottom:16px">You can also press Ctrl + V anywhere on an open job or quote — this window opens by itself.</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">' +
+            '<a id="gk-snip-earth" class="btn btn-g" target="_blank" rel="noopener" style="padding:8px 14px;font-size:13px;text-decoration:none">🌎 Open Google Earth</a>' +
+            '<button id="gk-snip-cap" class="btn btn-p" style="padding:8px 14px;font-size:13px" onclick="_snipCapture()">🎯 Snip another tab or window</button>' +
+            '<button class="btn btn-g" style="padding:8px 14px;font-size:13px" onclick="document.getElementById(\'gk-snip-file\').click()">📁 Choose image</button>' +
+            '<input type="file" id="gk-snip-file" accept="image/*" style="display:none" onchange="_snipFile(this)">' +
+          '</div>' +
+        '</div>' +
+        '<div id="gk-snip-edit" style="display:none;flex-direction:column;min-height:0">' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border,#d7dde3)">' +
+            toolBtns +
+            '<span style="width:10px"></span>' + colBtns + '<span style="width:10px"></span>' +
+            '<button class="btn btn-g" style="padding:5px 11px;font-size:12.5px" onclick="_snipUndo()">↶ Undo</button>' +
+            '<button class="btn btn-g" style="padding:5px 11px;font-size:12.5px" onclick="_snipRetake()">↺ New snip</button>' +
+          '</div>' +
+          '<div id="gk-snip-wrap" style="flex:1;min-height:0;overflow:auto;background:#2b3138;display:flex;align-items:center;justify-content:center;padding:10px">' +
+            '<div id="gk-snip-holder" style="position:relative;line-height:0"><canvas id="gk-snip-canvas" style="cursor:crosshair;touch-action:none"></canvas></div>' +
+          '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;border-top:1px solid var(--border,#d7dde3)">' +
+            '<input id="gk-snip-caption" class="fi" maxlength="80" placeholder="Caption (optional) — e.g. run from panel to garage" style="flex:1;min-width:200px">' +
+            '<button class="btn btn-p" style="padding:7px 16px;font-size:13px" onclick="_snipSave()">Save to job</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(m);
+    _wireSelect(_el('gk-snip-selcv'));
+    _wireEdit(_el('gk-snip-canvas'));
+    return m;
+  }
+
+  function _show(which){
+    _el('gk-snip-start').style.display = which === 'start' ? 'block' : 'none';
+    _el('gk-snip-edit').style.display  = which === 'edit'  ? 'flex'  : 'none';
+    _el('gk-snip-select').style.display = which === 'select' ? 'flex' : 'none';
+  }
+
+  // opts.autoCapture: go straight to the browser's screen/window/tab picker.
+  window.openEarthSnip = function(jobId, opts){
+    opts = opts || {};
+    let lead = null; try { lead = getLead(jobId); } catch (_) {}
+    if (!lead) { toast('Job not found', 'error'); return; }
+    const m = _modal();
+    st = { jobId, img:null, src:null, shapes:[], tool:'box', color:COLORS[0], scale:1, selScale:1, drag:null, sel:null };
+    let name = ''; try { const c = getCustomer(lead.customerId); name = c ? custFullName(c) : (lead.customerName || ''); } catch (_) {}
+    const addr = _addr(lead);
+    _el('gk-snip-label').textContent = [name, addr].filter(Boolean).join(' · ');
+    const earth = _el('gk-snip-earth');
+    if (addr) { earth.href = 'https://earth.google.com/web/search/' + encodeURIComponent(addr); earth.style.display = ''; } else earth.style.display = 'none';
+    _el('gk-snip-cap').style.display = _canCapture() ? '' : 'none';
+    _el('gk-snip-caption').value = '';
+    _el('gk-snip-file').value = '';
+    _show('start');
+    m.style.display = 'flex';
+    document.addEventListener('keydown', _onKey);
+    if (opts.autoCapture && _canCapture()) _snipCapture();   // same click = the gesture the browser needs
+  };
+  window.closeEarthSnip = function(){
+    const m = _el('gk-snip-modal'); if (m) m.style.display = 'none';
+    const s = _el('gk-snip-select'); if (s) s.style.display = 'none';
+    _killText();
+    document.removeEventListener('keydown', _onKey);
+    st = null;
+  };
+  function _onKey(e){
+    if (!st) return;
+    if (e.key === 'Escape') { if (_el('gk-snip-text')) { _killText(); return; } closeEarthSnip(); return; }
+    if (_el('gk-snip-select').style.display === 'flex' && e.key === 'Enter') { e.preventDefault(); _snipKeepWhole(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !_typing(e.target)) { e.preventDefault(); _snipUndo(); }
+  }
+
+  // ── Paste: inside the window, or ANYWHERE on an open job / quote ──
+  function _pastedImage(e){
+    const items = (e.clipboardData && e.clipboardData.items) ? Array.from(e.clipboardData.items) : [];
+    const it = items.find(i => i.kind === 'file' && /^image\//.test(i.type));
+    return it ? it.getAsFile() : null;
+  }
+  function _readThen(f, fn){ const fr = new FileReader(); fr.onload = () => fn(fr.result); fr.readAsDataURL(f); }
+  function _contextJobId(){
+    try {
+      if (window.S && S.jobDetailId && getLead(S.jobDetailId)) return S.jobDetailId;
+      if (window.S && S.page === 'quotes' && S.quoteId) { const q = getQuote(S.quoteId); if (q && q.leadId && getLead(q.leadId)) return q.leadId; }
+    } catch (_) {}
+    return null;
+  }
+  document.addEventListener('paste', function(e){
+    const f = _pastedImage(e); if (!f) return;
+    const open = st && _el('gk-snip-modal') && _el('gk-snip-modal').style.display === 'flex';
+    if (open) {
+      if (_typing(e.target) && e.target.id !== 'gk-snip-caption') return;
+      e.preventDefault(); _readThen(f, d => _loadEdit(d)); return;
+    }
+    if (_typing(e.target)) return;              // pasting into a note/field — leave it alone
+    const jid = _contextJobId(); if (!jid) return;
+    e.preventDefault();
+    openEarthSnip(jid);
+    _readThen(f, d => _loadEdit(d));           // a Snipping Tool snip is already cropped
+  });
+  window._snipFile = function(input){
+    const f = input.files && input.files[0]; if (!f) return;
+    if (!/^image\//.test(f.type)) { toast('Please choose an image', 'warning'); return; }
+    _readThen(f, d => _loadSelect(d));
+  };
+
+  // ── Path B: browser screen/window/tab picker → one frozen frame ──
+  window._snipCapture = async function(){
+    if (!_canCapture() || !st) return;
+    let stream = null;
+    try {
+      const opts = { video: true, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude', preferCurrentTab: false };
+      let ctl = null;
+      try { if (window.CaptureController) { ctl = new CaptureController(); opts.controller = ctl; } } catch (_) { ctl = null; }
+      stream = await navigator.mediaDevices.getDisplayMedia(opts);
+      try { if (ctl && ctl.setFocusBehavior) ctl.setFocusBehavior('no-focus-change'); } catch (_) {}
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.srcObject = stream;
+      await v.play();
+      await new Promise(r => setTimeout(r, 400));
+      if (!v.videoWidth) await new Promise(r => setTimeout(r, 700));
+      const c = document.createElement('canvas');
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0);
+      _loadSelect(c.toDataURL('image/png'));
+    } catch (e) {
+      if (e && e.name === 'NotAllowedError') return;   // picker cancelled — stay on the start screen
+      toast('Could not snip that: ' + ((e && e.message) || e), 'error');
+    } finally {
+      try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    }
+  };
+
+  function _img(dataUrl, fn){
+    const img = new Image();
+    img.onload = () => fn(img);
+    img.onerror = () => toast('That image could not be opened', 'error');
+    img.src = dataUrl;
+  }
+
+  // ── "Draw a box" layer ──
+  function _loadSelect(dataUrl){
+    if (!st) return;
+    _img(dataUrl, img => {
+      if (!st) return;
+      st.src = img; st.sel = null; st.drag = null;
+      const cv = _el('gk-snip-selcv');
+      st.selScale = Math.min(1, (window.innerWidth - 20) / img.width, (window.innerHeight - 20) / img.height);
+      cv.width = Math.round(img.width * st.selScale); cv.height = Math.round(img.height * st.selScale);
+      _show('select'); _drawSelect();
+    });
+  }
+  function _drawSelect(){
+    const cv = _el('gk-snip-selcv'); if (!cv || !st || !st.src) return;
+    const g = cv.getContext('2d'), k = st.selScale;
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.drawImage(st.src, 0, 0, cv.width, cv.height);
+    g.fillStyle = 'rgba(255,255,255,.35)';           // dim everything, like the Snipping Tool
+    const r = st.sel;
+    if (r && r.w > 2 && r.h > 2) {
+      g.fillRect(0, 0, cv.width, r.y * k);
+      g.fillRect(0, (r.y + r.h) * k, cv.width, cv.height - (r.y + r.h) * k);
+      g.fillRect(0, r.y * k, r.x * k, r.h * k);
+      g.fillRect((r.x + r.w) * k, r.y * k, cv.width - (r.x + r.w) * k, r.h * k);
+      g.strokeStyle = '#1e88e5'; g.lineWidth = 2; g.strokeRect(r.x * k, r.y * k, r.w * k, r.h * k);
+    } else g.fillRect(0, 0, cv.width, cv.height);
+  }
+  function _ptOn(cv, e, scale, img){
+    const b = cv.getBoundingClientRect();
+    const x = (e.clientX - b.left) * (cv.width / (b.width || cv.width)) / scale;
+    const y = (e.clientY - b.top) * (cv.height / (b.height || cv.height)) / scale;
+    return { x: Math.max(0, Math.min(img.width, x)), y: Math.max(0, Math.min(img.height, y)) };
+  }
+  function _wireSelect(cv){
+    cv.addEventListener('pointerdown', e => {
+      if (!st || !st.src) return;
+      try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      const p = _ptOn(cv, e, st.selScale, st.src);
+      st.drag = { x0: p.x, y0: p.y }; st.sel = { x: p.x, y: p.y, w: 0, h: 0 }; _drawSelect();
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!st || !st.drag) return;
+      const p = _ptOn(cv, e, st.selScale, st.src), d = st.drag;
+      st.sel = { x: Math.min(d.x0, p.x), y: Math.min(d.y0, p.y), w: Math.abs(p.x - d.x0), h: Math.abs(p.y - d.y0) };
+      _drawSelect();
+    });
+    const up = () => {
+      if (!st || !st.drag) return;
+      st.drag = null;
+      const r = st.sel;
+      if (!r || r.w < 8 || r.h < 8) { st.sel = null; _drawSelect(); return; }   // a click, not a box
+      _cropTo(r);
+    };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  }
+  window._snipKeepWhole = function(){ if (st && st.src) _cropTo({ x: 0, y: 0, w: st.src.width, h: st.src.height }); };
+  function _cropTo(r){
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(r.w)); c.height = Math.max(1, Math.round(r.h));
+    c.getContext('2d').drawImage(st.src, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+    _loadEdit(c.toDataURL('image/png'));
+  }
+
+  // ── Markup editor ──
+  function _loadEdit(dataUrl){
+    if (!st) return;
+    _img(dataUrl, img => {
+      if (!st) return;
+      st.img = img; st.shapes = []; st.drag = null;
+      _show('edit');
+      const cv = _el('gk-snip-canvas');
+      const maxW = Math.max(300, Math.min(window.innerWidth - 80, 1150));
+      const maxH = Math.max(240, window.innerHeight - 250);
+      st.scale = Math.min(1, maxW / img.width, maxH / img.height);
+      cv.width = Math.round(img.width * st.scale); cv.height = Math.round(img.height * st.scale);
+      _snipTool(st.tool || 'box'); _snipColor(Math.max(0, COLORS.indexOf(st.color)));
+      _drawEdit();
+    });
+  }
+  function _arrowHead(g, x1, y1, x2, y2, lw){
+    const a = Math.atan2(y2 - y1, x2 - x1), L = Math.max(10, lw * 4);
+    g.beginPath(); g.moveTo(x2, y2);
+    g.lineTo(x2 - L * Math.cos(a - 0.45), y2 - L * Math.sin(a - 0.45));
+    g.lineTo(x2 - L * Math.cos(a + 0.45), y2 - L * Math.sin(a + 0.45));
+    g.closePath(); g.fill();
+  }
+  // Draw every shape at scale k (k = display scale on screen, output scale on save).
+  function _paint(g, k, shapes){
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    shapes.forEach(s => {
+      g.strokeStyle = s.c; g.fillStyle = s.c; g.lineWidth = Math.max(1.5, s.lw * k);
+      if (s.t === 'box') g.strokeRect(s.x * k, s.y * k, s.w * k, s.h * k);
+      else if (s.t === 'line' || s.t === 'arrow') {
+        g.beginPath(); g.moveTo(s.x1 * k, s.y1 * k); g.lineTo(s.x2 * k, s.y2 * k); g.stroke();
+        if (s.t === 'arrow') _arrowHead(g, s.x1 * k, s.y1 * k, s.x2 * k, s.y2 * k, g.lineWidth);
+      } else if (s.t === 'pen' && s.pts.length > 1) {
+        g.beginPath(); g.moveTo(s.pts[0].x * k, s.pts[0].y * k); s.pts.forEach(p => g.lineTo(p.x * k, p.y * k)); g.stroke();
+      } else if (s.t === 'text' && s.s) {
+        const fs = Math.max(8, s.size * k);
+        g.font = '700 ' + fs + 'px -apple-system, "Segoe UI", Arial, sans-serif'; g.textBaseline = 'top';
+        g.lineWidth = Math.max(2, fs / 6); g.strokeStyle = (s.c === '#111111') ? '#ffffff' : '#000000';
+        g.strokeText(s.s, s.x * k, s.y * k); g.fillStyle = s.c; g.fillText(s.s, s.x * k, s.y * k);
+      }
+    });
+  }
+  function _drawEdit(){
+    const cv = _el('gk-snip-canvas'); if (!cv || !st || !st.img) return;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.drawImage(st.img, 0, 0, cv.width, cv.height);
+    _paint(g, st.scale, st.shapes);
+  }
+  function _wireEdit(cv){
+    cv.addEventListener('pointerdown', e => {
+      if (!st || !st.img) return;
+      const p = _ptOn(cv, e, st.scale, st.img);
+      const lw = 4 / st.scale;                       // 4 screen px, stored in picture px
+      if (st.tool === 'text') { e.preventDefault(); _textAt(p); return; }
+      try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+      let s;
+      if (st.tool === 'pen') s = { t: 'pen', pts: [p], c: st.color, lw };
+      else if (st.tool === 'box') s = { t: 'box', x: p.x, y: p.y, w: 0, h: 0, x0: p.x, y0: p.y, c: st.color, lw };
+      else s = { t: st.tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, c: st.color, lw };
+      st.shapes.push(s); st.drag = s; _drawEdit();
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!st || !st.drag) return;
+      const p = _ptOn(cv, e, st.scale, st.img), s = st.drag;
+      if (s.t === 'pen') s.pts.push(p);
+      else if (s.t === 'box') { s.x = Math.min(s.x0, p.x); s.y = Math.min(s.y0, p.y); s.w = Math.abs(p.x - s.x0); s.h = Math.abs(p.y - s.y0); }
+      else { s.x2 = p.x; s.y2 = p.y; }
+      _drawEdit();
+    });
+    const up = () => {
+      if (!st || !st.drag) return;
+      const s = st.drag; st.drag = null;
+      const tiny = (s.t === 'box' && (s.w < 4 || s.h < 4)) || ((s.t === 'line' || s.t === 'arrow') && Math.hypot(s.x2 - s.x1, s.y2 - s.y1) < 4) || (s.t === 'pen' && s.pts.length < 2);
+      if (tiny) st.shapes.pop();
+      _drawEdit();
+    };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  }
+  function _killText(){ const t = _el('gk-snip-text'); if (t) t.remove(); }
+  function _textAt(p){
+    _killText();
+    const holder = _el('gk-snip-holder');
+    const inp = document.createElement('input');
+    inp.id = 'gk-snip-text'; inp.placeholder = 'Type, then Enter';
+    const fsScreen = 22;
+    inp.style.cssText = 'position:absolute;z-index:3;left:' + (p.x * st.scale) + 'px;top:' + (p.y * st.scale) + 'px;font:700 ' + fsScreen + 'px -apple-system,"Segoe UI",Arial,sans-serif;color:' + st.color + ';background:rgba(0,0,0,.55);border:1px dashed #fff;padding:0 4px;min-width:160px;line-height:1.2;outline:none';
+    holder.appendChild(inp);
+    setTimeout(() => inp.focus(), 0);
+    let done = false;
+    const commit = () => {
+      if (done) return; done = true;
+      const v = (inp.value || '').trim();
+      inp.remove();
+      if (v && st) { st.shapes.push({ t: 'text', x: p.x, y: p.y, s: v.slice(0, 80), c: st.color, size: fsScreen / st.scale }); _drawEdit(); }
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } else if (e.key === 'Escape') { e.stopPropagation(); done = true; inp.remove(); } });
+    inp.addEventListener('blur', commit);
+  }
+
+  window._snipTool = function(t){
+    if (!st) return;
+    _killText();
+    st.tool = t;
+    TOOLS.forEach(([k]) => { const b = _el('gk-snip-t-' + k); if (b) { b.style.borderColor = (k === t) ? 'var(--green,#2e7d32)' : ''; b.style.fontWeight = (k === t) ? '700' : ''; } });
+    const cv = _el('gk-snip-canvas'); if (cv) cv.style.cursor = t === 'text' ? 'text' : 'crosshair';
+  };
+  window._snipColor = function(i){
+    if (!st) return;
+    st.color = COLORS[i] || COLORS[0];
+    COLORS.forEach((c, j) => { const b = _el('gk-snip-c-' + j); if (b) b.style.outline = (j === i) ? '3px solid var(--green,#2e7d32)' : 'none'; });
+  };
+  window._snipUndo = function(){ if (st && st.shapes.length) { st.shapes.pop(); _drawEdit(); } };
+  window._snipRetake = function(){
+    if (!st) return;
+    _killText();
+    st.img = null; st.src = null; st.shapes = [];
+    _el('gk-snip-file').value = '';
+    _show('start');
+  };
+
+  window._snipSave = async function(){
+    if (!st || !st.img) return;
+    _killText();
+    const img = st.img, k = Math.min(1, MAX_W / img.width);
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(img.width * k)); out.height = Math.max(1, Math.round(img.height * k));
+    const g = out.getContext('2d');
+    g.drawImage(img, 0, 0, out.width, out.height);
+    _paint(g, k, st.shapes);
+    const cap = (_el('gk-snip-caption').value || '').trim().replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 60);
+    const dataUrl = out.toDataURL('image/jpeg', 0.9);
+    const blob = await (await fetch(dataUrl)).blob();
+    const d = new Date(), pad = n => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes());
+    const name = 'Snip ' + stamp + (cap ? ' - ' + cap : '') + '.jpg';
+    const jobId = st.jobId;
+    try { addFileRecord(jobId, 'site', null, new File([blob], name, { type: 'image/jpeg' }), dataUrl); }
+    catch (e) { toast('Could not save the snip: ' + (e.message || e), 'error'); return; }
+    toast('Snip saved to the job\'s Site Photos', 'success');
+    closeEarthSnip();
+    try { if (typeof renderFilesPage === 'function' && document.getElementById('fm-grid')) renderFilesPage(); } catch (_) {}
+    try { if (window.S && S.jobDetailId === jobId && typeof renderJobDetail === 'function') renderJobDetail(jobId); } catch (_) {}
+    try { const sb = document.getElementById('gk-snips-sidebar-' + jobId); if (sb) sb.outerHTML = gkEarthSnipsHTML(getLead(jobId)); } catch (_) {}
+  };
+
+  // Quote-builder sidebar: newest 3 snips for this job.
+  window.gkEarthSnipsHTML = function(lead){
+    if (!lead) return '';
+    let snips = [];
+    try { snips = (getJobFiles(lead.id) || []).filter(f => /^(Earth )?snip \d{4}-/i.test(f.name || '') || /_(Earth_)?snip_\d{4}/i.test(f.spName || '')); } catch (_) {}
+    snips.sort((a, b) => String(b.uploadedAt || '').localeCompare(String(a.uploadedAt || '')));
+    const head = '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px">' +
+      '<div style="font-size:11px;font-weight:600;color:var(--text-muted,#888);text-transform:uppercase;letter-spacing:.5px">Snips' + (snips.length ? ' (' + snips.length + ')' : '') + '</div>' +
+      '<button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="openEarthSnip(\'' + escHtml(lead.id) + '\')">✂️ New snip</button></div>';
+    const body = snips.length
+      ? snips.slice(0, 3).map(f => {
+          const src = f.dataUrl || '';
+          const cap = String(f.name || '').replace(/^(Earth )?snip \d{4}-\d{2}-\d{2} \d{2}-\d{2}( - )?/i, '').replace(/\.(jpe?g|png)$/i, '');
+          return src
+            ? '<a href="' + escHtml(src) + '" target="_blank" title="Open full size" style="display:block;margin-bottom:6px"><img src="' + escHtml(src) + '" style="width:100%;border-radius:6px;border:1px solid var(--border,#ddd);display:block">' + (cap ? '<div style="font-size:11px;color:var(--text-muted,#888);margin-top:2px">' + escHtml(cap) + '</div>' : '') + '</a>'
+            : (f.spUrl ? '<a href="' + escHtml(f.spUrl) + '" target="_blank" style="font-size:12px;display:block;margin-bottom:4px">' + escHtml(f.name || 'Snip') + '</a>' : '');
+        }).join('')
+      : '<div style="font-size:12px;color:var(--text-muted,#888)">None yet. Snip with Win + Shift + S, then press Ctrl + V on this page.</div>';
+    return '<div class="card" id="gk-snips-sidebar-' + escHtml(lead.id) + '" style="padding:10px 12px;margin-bottom:8px">' + head + body + '</div>';
+  };
+})();
+
 /* ── Site View (Mapbox satellite measure) — load-on-demand modal launched from the job screen.
    Heavy code lives in siteview.html (iframe); this is the thin CRM hook. Same-origin, so the
    widget's screenshot thumbnail lands in localStorage and shows on the estimate screen. ── */
