@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -34376,14 +34376,37 @@ async function findSlotForJob(leadId, type) {
     const J = 0, H = homePt ? pts.length - 1 : -1;
     const dr = (a, b) => (a < 0 || b < 0) ? 0 : M[a][b];
     const firstPass = di < R.firstPassDays;
-    const n = stops.length;
+    stops.forEach((st, k) => { st.mi = k + 1; });                 // matrix index of each stop
+    // ── crm-2026-10-05c (Jon 10/5): a day can hold MORE THAN ONE CREW. Red E
+    // Charge [Jon] 9:30–12:30 overlapped Njunge 8:30–11:00 (Chase), and the old
+    // single-sequence logic saw "Njunge → Red E Charge" and found no gap after
+    // Njunge. Now the day's stops are split into CHAINS: a stop joins the chain
+    // whose last stop ends before it starts (same crew tag preferred; a tagged
+    // stop never joins a differently-tagged chain), otherwise it starts a new
+    // chain. Each chain is one crew's route, and gaps are found per chain.
+    const chains = [];
+    for (const st of stops) {
+      const tag = (st.tech || '').trim();
+      let best = null;
+      for (const ch of chains) {
+        const last = ch[ch.length - 1];
+        if (last.em > st.sm) continue;                           // overlaps → not this crew
+        const chTag = (ch.tag || '').trim();
+        if (tag && chTag && tag !== chTag) continue;             // different tagged crews
+        if (!best || (tag && chTag === tag && (best.tag || '') !== tag)) best = ch;
+      }
+      if (best) { best.push(st); if (tag && !best.tag) best.tag = tag; }
+      else { const ch = [st]; ch.tag = tag; chains.push(ch); }
+    }
+    for (const chain of chains) {
+    const n = chain.length;
     // Insert the new stop at position p (0 = before the first stop … n = after the
     // last). Later stops slide only as far as they must ("squeeze", Jon 10/3 — no
     // cap; the option SHOWS every new arrival time and the new end of day so the
     // office can decide). pushes = [] means a clean fit.
     for (let p = 0; p <= n; p++) {
-      const prev = p > 0 ? stops[p - 1] : null, ip = p;          // matrix index of prev stop = p
-      const next = p < n ? stops[p] : null, inx = p + 1;         // matrix index of next stop = p+1
+      const prev = p > 0 ? chain[p - 1] : null, ip = prev ? prev.mi : -1;
+      const next = p < n ? chain[p] : null, inx = next ? next.mi : -1;
       let start;
       if (prev) start = _fsRound15(prev.em + dr(ip, J));
       else { start = next.sm - dr(J, inx) - onsiteMin; start = Math.floor(start / 5) * 5; if (start < R.earlyFloor) start = R.earliest; }   // too early even for an early start → start at the earliest and squeeze
@@ -34396,7 +34419,7 @@ async function findSlotForJob(leadId, type) {
       let lastStopEnd = prev ? prev.em : 0;
       let prevMoved = true;                                        // the new stop itself is the first "moved" thing
       for (let k = p; k < n; k++) {
-        const st = stops[k]; const ik = k + 1;
+        const st = chain[k]; const ik = st.mi;
         // Only a stop we moved can push the next one. Two jobs that were ALREADY
         // back-to-back on the calendar are left exactly as booked.
         const ns = prevMoved ? Math.max(st.sm, _fsRound15(prevEnd + dr(prevIdx, ik))) : st.sm;
@@ -34405,17 +34428,20 @@ async function findSlotForJob(leadId, type) {
         if (delta > 0) pushes.push({ stop: st, newStart: ns, newEnd: ne, delta });
         prevMoved = delta > 0; prevEnd = ne; prevIdx = ik; lastStopEnd = ne;
       }
-      const dayEnd = (p === n) ? end : lastStopEnd;                // when the last on-site work ends
-      const origDayEnd = stops[n - 1].em;
-      const homeArrive = dayEnd + dr(p === n ? J : n, H);
-      const tech = (prev && prev.tech) || (next && next.tech) || '';
+      const dayEnd = (p === n) ? end : lastStopEnd;                // when this crew's last on-site work ends
+      const origDayEnd = chain[n - 1].em;
+      const homeArrive = dayEnd + dr(p === n ? J : chain[n - 1].mi, H);
+      const tech = (chain.tag || '') || (prev && prev.tech) || (next && next.tech) || '';
       if (techBusy(day, tech, start, end)) continue;
       const added = (prev ? dr(ip, J) : dr(H, J)) + (next ? dr(J, inx) : dr(J, H)) - (prev && next ? dr(ip, inx) : (prev ? dr(ip, H) : dr(H, inx)));
       const pushTotal = pushes.reduce((t, x) => t + x.delta, 0);
       cands.push({ day, firstPass, start, end, early, tech, near: prev || next, pos: prev ? 'after' : 'before', next, pushes, pushTotal,
-                   dayEnd, origDayEnd, homeArrive, added: Math.max(0, Math.round(added)), estimated: !!M._estimated, calId: (tgtCalId || '') });
+                   dayEnd, origDayEnd, homeArrive, added: Math.max(0, Math.round(added)), estimated: !!M._estimated, calId: (tgtCalId || ''),
+                   crewCount: chains.length });
+    }
     }
   }
+
   // Clean fits first (then first-pass window, then least added drive); squeezed
   // options after, least total push first.
   cands.sort((a, b) => ((a.pushTotal > 0) - (b.pushTotal > 0)) || (a.firstPass === b.firstPass ? 0 : (a.firstPass ? -1 : 1)) || (a.early === b.early ? 0 : (a.early ? 1 : -1)) || (a.pushTotal - b.pushTotal) || a.added - b.added || a.day.localeCompare(b.day) || a.start - b.start);
