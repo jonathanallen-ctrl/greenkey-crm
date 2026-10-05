@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -35840,10 +35840,15 @@ async function _hydrateSmsMedia(container){
         const v = document.createElement('video');
         v.src = obj; v.controls = true; v.playsInline = true; v.preload = 'metadata';
         v.style.cssText = 'max-width:220px;max-height:220px;border-radius:8px;margin:0 0 1px;display:block;border:1px solid var(--border);background:#000';
-        const open = document.createElement('a');
-        open.href = obj; open.target = '_blank'; open.textContent = '🎬 open video full size';
-        open.style.cssText = 'font-size:11px;display:block;margin:2px 0 4px';
-        img.replaceWith(v); v.insertAdjacentElement('afterend', open);
+        // crm-2026-10-05b: phones send MMS video as 3GP / HEVC, which Edge and
+        // Chrome cannot decode — so give a real DOWNLOAD (right extension) to
+        // open in VLC or on a phone, instead of a blob tab that plays nothing.
+        const ext = ((blob.type || '').split('/')[1] || 'mp4').replace('3gpp', '3gp').replace('quicktime', 'mov').toLowerCase();
+        const dl = document.createElement('a');
+        dl.href = obj; dl.download = 'customer-video-' + Date.now().toString(36) + '.' + ext;
+        dl.textContent = '⬇ Download video (' + ext.toUpperCase() + ') — open with VLC or on your phone';
+        dl.style.cssText = 'font-size:11px;display:block;margin:2px 0 4px;color:var(--green);text-decoration:underline';
+        img.replaceWith(v); v.insertAdjacentElement('afterend', dl);
         return;
       }
       img.src = obj; img.alt = '📷 picture';

@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-10-05 field-37';
+const BUILD = '2026-10-05 field-38';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -1707,7 +1707,10 @@ async function _hydrateFldMedia(root){
       if(/^video\//i.test(b.type||'')){   // field-37: customer VIDEO → playable, not a broken image
         const v=document.createElement('video'); v.src=obj; v.controls=true; v.playsInline=true; v.preload='metadata';
         v.style.cssText='max-width:220px;max-height:220px;border-radius:8px;display:block;margin:2px 0;background:#000';
-        n.replaceWith(v); continue;
+        const ext=((b.type||'').split('/')[1]||'mp4').replace('3gpp','3gp').replace('quicktime','mov').toLowerCase();
+        const dl=document.createElement('a'); dl.href=obj; dl.download='customer-video.'+ext; dl.textContent='⬇ Save video ('+ext.toUpperCase()+')';
+        dl.style.cssText='font-size:12px;display:block;margin:2px 0 6px;color:#6dc230;text-decoration:underline';
+        n.replaceWith(v); v.insertAdjacentElement('afterend', dl); continue;
       }
       const img=document.createElement('img'); img.src=obj; img.alt='photo';
       img.style.cssText='max-width:150px;border-radius:8px;display:block;margin:2px 0';
