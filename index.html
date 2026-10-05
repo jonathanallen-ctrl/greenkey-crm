@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-03f</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -34876,6 +34876,31 @@ function _buildSchedContent(lead, cust, quote, type) {
     return notes.length ? `Latest note: ${notes[0].text}` : '';
   })();
 
+  // crm-2026-10-03g (Jon, Red E Charge): a BUSINESS customer gets a commercial
+  // calendar entry — company name in the subject, site + request + quote + PO
+  // + billing terms in the body, and none of the homeowner / EV-charger text.
+  const _isComCust = !!(cust && cust.propertyType === 'commercial' && (cust.businessName || '').trim());
+  if (_isComCust && !_schedIsRemote(type) && type !== 'material-pickup') {
+    const biz = cust.businessName.trim();
+    const typeLbl = (typeof _apptLabel === 'function') ? _apptLabel(type) : type;
+    const subjectC = `${biz} — ${typeLbl}${lead.siteCity ? ' (' + lead.siteCity + ')' : ''}`;
+    const sec = [];
+    sec.push(`${typeLbl} for ${biz}.`);
+    if (location) sec.push('Site: ' + location);
+    const req = scope || desc || (quote && quote.scope) || '';
+    if (req) sec.push('Request / scope:\n' + req);
+    if (quote) sec.push(`Quote: ${quote.id || ''}${quote.quoteTotal ? ' — $' + Number(quote.quoteTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}${quote.poNumber ? ' · PO ' + quote.poNumber : ''}`);
+    if (recentNote) sec.push(recentNote);
+    if (type === 'troubleshoot') sec.push('Bring multimeter, ladder, basic hand tools. Photo the equipment dataplate / serial and anything out of spec. Report findings to the site contact before leaving.');
+    else if (type === 'walkdown') sec.push('Site visit — measure, photo the panel / equipment and the route, confirm access and any site rules (check-in, PPE, hours).');
+    else if (type === 'inspection') sec.push('Be on site to walk the inspector through the work. Bring permit copy and drawings.');
+    const terms = (cust.paymentTerms || '').trim();
+    sec.push(`Billing: invoice ${biz}${terms ? ' — ' + terms : ''}. Do NOT collect payment on site.`);
+    const _attn = (fullName && fullName !== 'Unnamed' && fullName !== 'Unknown') ? 'Attn: ' + fullName : '';
+    sec.push([biz, _attn, phone, email].filter(Boolean).join('\n'));
+    return { subject: withTechTag(subjectC, getLeadTech(lead)), body: sec.join('\n\n'), location };
+  }
+
   let subject, sections = [];
   switch (type) {
     case 'walkdown': {
@@ -35808,10 +35833,23 @@ async function _hydrateSmsMedia(container){
       if (!r.ok) throw new Error('media ' + r.status);
       const blob = await r.blob();
       const obj = URL.createObjectURL(blob);
+      // crm-2026-10-05a (Jon — Almazayen's video): a VIDEO attachment was being
+      // dropped into an <img>, which is a broken image on a PC. Swap in a
+      // <video> with controls instead; pictures behave exactly as before.
+      if (/^video\//i.test(blob.type || '')) {
+        const v = document.createElement('video');
+        v.src = obj; v.controls = true; v.playsInline = true; v.preload = 'metadata';
+        v.style.cssText = 'max-width:220px;max-height:220px;border-radius:8px;margin:0 0 1px;display:block;border:1px solid var(--border);background:#000';
+        const open = document.createElement('a');
+        open.href = obj; open.target = '_blank'; open.textContent = '🎬 open video full size';
+        open.style.cssText = 'font-size:11px;display:block;margin:2px 0 4px';
+        img.replaceWith(v); v.insertAdjacentElement('afterend', open);
+        return;
+      }
       img.src = obj; img.alt = '📷 picture';
       img.onclick = () => window.open(obj, '_blank');
     } catch(e) {
-      img.alt = '📷 (could not load picture)';
+      img.alt = '📷 (could not load attachment)';
       img.style.minHeight = '';
     }
   });
@@ -36016,8 +36054,9 @@ async function renderSMSThread(leadId, quiet) {
             const u = (it && it.url) ? String(it.url) : '';
             if (!u) return '';
             const st = 'max-width:140px;max-height:150px;border-radius:8px;margin:0 0 1px;display:block;border:1px solid var(--border);cursor:pointer';
+            const _isVid = /^video\//i.test(String((it && it.contentType) || ''));
             return /twilio\.com/i.test(u)
-              ? `<img data-twmedia="${escHtml(u)}" alt="📷 loading…" style="${st};min-height:38px;background:var(--bg-elevated)">`
+              ? `<img data-twmedia="${escHtml(u)}" alt="${_isVid ? '🎬 video loading…' : '📷 loading…'}" style="${st};min-height:38px;background:var(--bg-elevated)">`
               : `<img src="${escHtml(u)}" alt="📷 picture" style="${st}" onclick="window.open(this.src,'_blank')">`;
           }).join('');
         } catch(_){}
