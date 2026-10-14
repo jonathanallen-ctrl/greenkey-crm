@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-14a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-14b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1670,7 +1670,7 @@ const CK = 'gk_customers', LK = 'gk_leads';
 // guard throws "Cannot access before initialization" if the declaration
 // hasn't run yet — declaring it here keeps it ahead of every reference.
 const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
-// crm-2026-10-14a: check remittance (Jon: "how do they know how to get us the money?").
+// crm-2026-10-14b: check remittance (Jon: "how do they know how to get us the money?").
 // Editable in Settings → Pricing & Tax → Payment Processing.
 const GK_CHECK_PAYEE_DEFAULT   = 'GreenKey Richmond VA, LLC';
 const GK_REMIT_ADDRESS_DEFAULT = '4195 Anderson Hwy #111, Powhatan, VA 23139';
@@ -3801,7 +3801,7 @@ function saveSets() {
     const v = parseFloat(cb.value);
     if (!isNaN(v) && v >= 0 && v <= 5) p.cashBuffer = v;
   }
-  // crm-2026-10-14a: where checks go (invoice PDF + invoice email "How to pay")
+  // crm-2026-10-14b: where checks go (invoice PDF + invoice email "How to pay")
   { const pe = document.getElementById('set-check-payee'); if (pe) p.checkPayee = (pe.value || '').trim();
     const ra = document.getElementById('set-remit-addr');  if (ra) p.remitAddress = (ra.value || '').trim(); }
   // Email CC: empty string = explicit disable. Trim whitespace.
@@ -9511,6 +9511,7 @@ function _qqScopeRead(){
     ft:    Math.max(parseInt(g('qqs-ft')?.value)||0,0),
     run:   g('qqs-run')?.value   || 'surface',
     mount: g('qqs-mount')?.value || 'wall',
+    amps:  parseInt(g('qqs-amps')?.value)||60,
     nemaLoc: g('qqs-nemaloc')?.value || 'inside',
     loc:   (g('qqs-loc')?.value||'').trim().slice(0,160),
     panelText: (g('qqs-paneltext')?.value||'').trim().slice(0,120)
@@ -9537,55 +9538,70 @@ function _qqScopeText(o){
     return `Install a dedicated 240-volt, 50-amp circuit from ${from} with #6 ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, protected by a 50-amp GFCI breaker and terminating at a NEMA 14-50 outlet on ${loc}. Includes breaker, wire, conduit, fittings, and outlet. All work is performed to NEC and local code.`;
   }
   const mountTxt = o.mount==='post' ? ' on a new 4x4 post' : o.mount==='pedestal-existing' ? ' on a pedestal on the existing pad' : o.mount==='pedestal-newpad' ? ' on a pedestal on a new concrete pad' : '';
-  return `Install a customer-supplied Level 2 EV charger on ${loc}${mountTxt}. Install a dedicated 240-volt, 60-amp circuit from ${from} with #6 ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, hardwired to the charger. Includes breaker, wire, conduit, fittings, mounting, connection, and setup of the charger. All work is performed to NEC and local code.`;
+  const amps = o.amps||60, gauge = amps<=40 ? '#8' : '#6', chg = amps<=40 ? 32 : amps<=50 ? 40 : 48;
+  return `Install a customer-supplied Level 2 EV charger on ${loc}${mountTxt}. Install a dedicated 240-volt, ${amps}-amp circuit from ${from} with ${gauge} ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, hardwired to the charger (charger set to ${chg} A). Includes breaker, wire, conduit, fittings, mounting, connection, and setup of the charger. All work is performed to NEC and local code.`;
 }
 function _qqScopeDesc(o){
-  const kind = o.kind==='nema' ? `NEMA 14-50 outlet (${o.nemaLoc})` : 'Level 2 EV charger, hardwired';
+  const kind = o.kind==='nema' ? `NEMA 14-50 outlet (${o.nemaLoc})` : `Level 2 EV charger, hardwired, ${o.amps||60} A circuit`;
   const run  = o.ft>0 ? `, ${o.ft} ft ${o.run.replace('-',' ')} run` : ', at the panel';
   const mount = (o.kind!=='nema' && o.mount!=='wall') ? `, ${o.mount.replace('pedestal-','pedestal / ').replace('newpad','new pad').replace('existing','existing pad')}` : '';
   return `EV circuit — ${kind}${run}${mount} (all-in, Quick Quote pricing)`;
 }
+const _qqsDraft = {};   // qid → last values typed into the Quick-Quote EV card (survives form redraws)
+let _qqsOpenQid = null;
 function qqScopeRefresh(){
   const o=_qqScopeRead();
+  if(_qqsOpenQid) _qqsDraft[_qqsOpenQid]=o;
   const pr=document.getElementById('qqs-price'); if(pr) pr.textContent='$'+_qqScopePrice(o).toLocaleString();
   const nemaRow=document.getElementById('qqs-nema-row'); if(nemaRow) nemaRow.style.display = o.kind==='nema' ? '' : 'none';
   const mountRow=document.getElementById('qqs-mount-row'); if(mountRow) mountRow.style.display = o.kind==='nema' ? 'none' : '';
+  const ampsRow=document.getElementById('qqs-amps-row'); if(ampsRow) ampsRow.style.display = o.kind==='nema' ? 'none' : '';
   const prev=document.getElementById('qqs-preview'); if(prev) prev.textContent=_qqScopeText(o);
 }
-function openQQScopeForm(qid){
+function openQQScopeForm(qid, prev){
   const row=document.getElementById('dq-stack-row'); if(!row){ toast('Open the Detailed Quote form first','error'); return; }
   const old=document.getElementById('dq-qqscope-form'); if(old) old.remove();
+  _qqsOpenQid=qid;
+  const d = prev || _qqsDraft[qid] || {};
+  const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
   const sel=(id,opts,val)=>`<select class="fsel" id="${id}" onchange="qqScopeRefresh()" style="width:100%">${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}</select>`;
   const html=`<div id="dq-qqscope-form" class="card" style="margin:0 0 12px;padding:14px 16px;border:1px solid var(--accent, #2e7d32);background:var(--bg-elev, rgba(46,125,50,.05))">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:700">EV charger circuit — Quick Quote pricing (one all-in line)</div>
       <div style="font-size:18px;font-weight:700;color:var(--accent, #2e7d32)">Price: <span id="qqs-price">$0</span></div>
     </div>
-    <div class="frow3">
-      <div class="fg"><div class="fl">Connection</div>${sel('qqs-kind',[['hardwired','Hardwired Level 2 charger'],['nema','NEMA 14-50 outlet']],'hardwired')}</div>
-      <div class="fg"><div class="fl">Panel feeding it</div>${sel('qqs-panel',[['garage','In the garage / same space ($'+getQQPricing().garage+')'],['interior','Inside the house ($'+getQQPricing().interior+')']],'garage')}</div>
-      <div class="fg"><div class="fl">Call the panel…</div><input class="fi" id="qqs-paneltext" placeholder="e.g. the new sub-panel in the garage" oninput="qqScopeRefresh()"></div>
+    <div class="frow2">
+      <div class="fg"><div class="fl">Connection</div>${sel('qqs-kind',[['hardwired','Hardwired Level 2 charger'],['nema','NEMA 14-50 outlet']],d.kind||'hardwired')}</div>
+      <div class="fg" id="qqs-amps-row"><div class="fl">Circuit size</div>${sel('qqs-amps',[['60','60 A — #6 Cu (48 A charger)'],['50','50 A — #6 Cu (40 A charger)'],['40','40 A — #8 Cu (32 A charger)']],String(d.amps||60))}</div>
+      <div class="fg"><div class="fl">Panel feeding it</div>${sel('qqs-panel',[['garage','In the garage / same space ($'+getQQPricing().garage+')'],['interior','Inside the house ($'+getQQPricing().interior+')']],d.panel||'garage')}</div>
+      <div class="fg"><div class="fl">Call the panel…</div><input class="fi" id="qqs-paneltext" value="${esc(d.panelText)}" placeholder="e.g. the new sub-panel in the garage" oninput="qqScopeRefresh()"></div>
     </div>
     <div class="frow3">
-      <div class="fg"><div class="fl">Run beyond the first 5 ft (ft)</div><input class="fi" id="qqs-ft" type="number" min="0" step="5" value="0" oninput="qqScopeRefresh()"></div>
-      <div class="fg"><div class="fl">Run type</div>${sel('qqs-run',[['surface','Surface conduit'],['unfinished','Unfinished space'],['crawl','Crawl space'],['attic','Attic'],['hand-trench','Hand-dug trench'],['machine-trench','Machine trench']],'surface')}</div>
-      <div class="fg" id="qqs-mount-row"><div class="fl">Mount</div>${sel('qqs-mount',[['wall','Wall'],['post','4x4 post (+$'+getQQPricing().post+')'],['pedestal-existing','Pedestal — existing pad'],['pedestal-newpad','Pedestal — new pad']],'wall')}</div>
-      <div class="fg" id="qqs-nema-row" style="display:none"><div class="fl">Outlet location</div>${sel('qqs-nemaloc',[['inside','Inside'],['outside','Outside']],'inside')}</div>
+      <div class="fg"><div class="fl">Run beyond the first 5 ft (ft)</div><input class="fi" id="qqs-ft" type="number" min="0" step="5" value="${parseInt(d.ft)||0}" oninput="qqScopeRefresh()"></div>
+      <div class="fg"><div class="fl">Run type</div>${sel('qqs-run',[['surface','Surface conduit'],['unfinished','Unfinished space'],['crawl','Crawl space'],['attic','Attic'],['hand-trench','Hand-dug trench'],['machine-trench','Machine trench']],d.run||'surface')}</div>
+      <div class="fg" id="qqs-mount-row"><div class="fl">Mount</div>${sel('qqs-mount',[['wall','Wall'],['post','4x4 post (+$'+getQQPricing().post+')'],['pedestal-existing','Pedestal — existing pad'],['pedestal-newpad','Pedestal — new pad']],d.mount||'wall')}</div>
+      <div class="fg" id="qqs-nema-row" style="display:none"><div class="fl">Outlet location</div>${sel('qqs-nemaloc',[['inside','Inside'],['outside','Outside']],d.nemaLoc||'inside')}</div>
     </div>
-    <div class="fg"><div class="fl">Charger / outlet location (customer wording)</div><input class="fi" id="qqs-loc" placeholder="e.g. the garage wall beside the sub-panel" oninput="qqScopeRefresh()" style="width:100%"></div>
+    <div class="fg"><div class="fl">Charger / outlet location (customer wording)</div><input class="fi" id="qqs-loc" value="${esc(d.loc)}" placeholder="e.g. the garage wall beside the sub-panel" oninput="qqScopeRefresh()" style="width:100%"></div>
     <div id="qqs-preview" style="font-size:12px;color:var(--text-secondary);margin:8px 0 10px;line-height:1.45"></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-p" onclick="addQQScopeToQuote('${qid}')">Add to quote</button>
-      <button class="btn btn-g" onclick="document.getElementById('dq-qqscope-form')?.remove()">Cancel</button>
+      <button class="btn btn-g" onclick="closeQQScopeForm()">Cancel</button>
       <span style="font-size:11px;color:var(--text-muted)">Same math as Quick Quote. No permit added (this quote already has one). Not buffered 10%.</span>
     </div>
   </div>`;
   row.insertAdjacentHTML('afterend',html);
   qqScopeRefresh();
 }
+function closeQQScopeForm(){
+  if(_qqsOpenQid) delete _qqsDraft[_qqsOpenQid];
+  _qqsOpenQid=null;
+  document.getElementById('dq-qqscope-form')?.remove();
+}
 function addQQScopeToQuote(qid){
   const q=getQuote(qid); if(!q) return;
   const o=_qqScopeRead();
+  delete _qqsDraft[qid]; _qqsOpenQid=null;
   const price=_qqScopePrice(o);
   const stamp=Date.now();
   const lines=[...(q.lines||[])];
@@ -9809,6 +9825,8 @@ function renderDetailedQuoteForm(q){
       </div>
       ${_renderPreInstallSection(q)}
     </div>`;
+  // 2026-10-14b: a Quick-Quote EV card that was open survives the redraw (auto-sync / line edits re-render this form).
+  try { if (typeof _qqsDraft==='object' && _qqsDraft[q.id]) openQQScopeForm(q.id, _qqsDraft[q.id]); } catch(e) { console.warn('[GK] qq-scope restore', e); }
 }
 
 // Pre-install items captured on the quote — Miss Utility flag + special
@@ -11595,7 +11613,7 @@ async function emailInvoice(qid){
     ? ((_billTo&&(_billTo.salutation||_billTo.firstName))||(_billTo&&_billTo.businessName?_billTo.businessName.replace(/,?\s*(LLC|Inc|Corp|Co)\.?$/i,'').trim()+' team':'there'))
     : ((cust&&cust.firstName)||(lead&&lead.customerName&&lead.customerName.split(' ')[0])||'there');
   const totals=calcQuoteTotals(q);
-  // crm-2026-10-14a: the email ALWAYS quoted q.quoteTotal (the card-inclusive
+  // crm-2026-10-14b: the email ALWAYS quoted q.quoteTotal (the card-inclusive
   // price) even when the invoice was generated at the no-fee price — Red E
   // Charge INV-2026-0007 read $365 in the email vs $354 on the PDF (Jon 10/6).
   // Follow the same mode the PDF uses (q.invoiceNoFee: true | false | 'both').
@@ -11654,7 +11672,7 @@ async function emailInvoice(qid){
       })
     });
     upsertQuote({...getQuote(qid),invoiceEmailedAt:new Date().toISOString(),invoiceEmailedTo:to});
-    // crm-2026-10-14a: leave a trail the office can see without opening Sent Items —
+    // crm-2026-10-14b: leave a trail the office can see without opening Sent Items —
     // a bell notification (per-user ack, so it waits in Sherri's bell) + a job note.
     try{
       const _who=(S.user&&S.user.name)||'CRM';
@@ -13117,7 +13135,7 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
     }
     y += 108;
   } else if (!paidInfo) {
-    // crm-2026-10-14a: the single-method invoices used to print the total and
+    // crm-2026-10-14b: the single-method invoices used to print the total and
     // nothing about HOW to pay it (Red E Charge INV-2026-0007, Jon 10/6).
     y += 14;
     _b(96);
@@ -18399,7 +18417,47 @@ async function notifyMentionCompletion(task) {
 
 // ── NOTIFICATION CRUD ──
 function getNotifications() { try { return JSON.parse(localStorage.getItem(NK)||'[]'); } catch{ return []; } }
-function saveNotifications(arr) { localStorage.setItem(NK, JSON.stringify(arr)); queueSPSync(); }
+// ── NOTIFICATION PRUNING (crm-2026-10-14b) ──────────────────────────────────
+// 2026-10-14: Jon's browser storage hit 101% of the ~5.2 M cap — gk_notifications
+// alone was 0.91 M because every acknowledged text was kept forever. setItem
+// THREW (QuotaExceededError) inside saveNotifications, so Dismiss did nothing
+// and, after a reload, the bell badge went dark. Rule, applied identically on
+// every machine AND to the SharePoint copy at merge time (so pruned records
+// can't come back through the union merge):
+//   • anything older than 90 days is dropped;
+//   • anything acknowledged (status != pending, or ackedBy has anyone) and older
+//     than 21 days is dropped;
+//   • newest 400 kept at most.
+// Pending, un-acknowledged notices younger than 90 days are never touched.
+const NOTIF_KEEP_DAYS = 90, NOTIF_ACKED_KEEP_DAYS = 21, NOTIF_CAP = 400;
+function _notifTs(n) { const t = Date.parse(n && (n.at || n.createdAt || n.updatedAt) || ''); return isNaN(t) ? Date.now() : t; }
+function pruneNotifications(arr) {
+  if (!Array.isArray(arr)) return [];
+  const now = Date.now(), d = 86400000;
+  const kept = arr.filter(n => {
+    if (!n) return false;
+    const age = (now - _notifTs(n)) / d;
+    if (age > NOTIF_KEEP_DAYS) return false;
+    const acked = n.status !== 'pending' || Object.keys(n.ackedBy || {}).length > 0;
+    if (acked && age > NOTIF_ACKED_KEEP_DAYS) return false;
+    return true;
+  });
+  if (kept.length > NOTIF_CAP) { kept.sort((a, b) => _notifTs(b) - _notifTs(a)); kept.length = NOTIF_CAP; }
+  return kept;
+}
+// Save survives a full store: prune, retry, and if it STILL won't fit, say so
+// loudly instead of throwing out of the click handler.
+function saveNotifications(arr) {
+  const pruned = pruneNotifications(arr);
+  try { localStorage.setItem(NK, JSON.stringify(pruned)); }
+  catch (e) {
+    console.warn('[GK] saveNotifications: storage full — pruning harder', e);
+    const tight = pruned.filter(n => n.status === 'pending' && !Object.keys(n.ackedBy || {}).length).slice(-150);
+    try { localStorage.setItem(NK, JSON.stringify(tight)); }
+    catch (e2) { toast('⚠ Browser storage is full — the CRM cannot save. Tell Jon / Claude now.', 'error'); throw e2; }
+  }
+  queueSPSync();
+}
 function getNotification(id) { return getNotifications().find(n=>n.id===id)||null; }
 
 // ── CUSTOMER-ACTIVITY NOTIFICATIONS (drive the header bell) ──
@@ -18412,7 +18470,7 @@ function getNotification(id) { return getNotifications().find(n=>n.id===id)||nul
 const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
   'cust-quote-accepted', 'cust-quote-declined',
-  'cust-invoice-sent', // crm-2026-10-14a: an invoice went out by email — office visibility
+  'cust-invoice-sent', // crm-2026-10-14b: an invoice went out by email — office visibility
   'web-lead',
   'insp-sms',         // inspector replied to a permitting text (2026-07-20)
   'ops-folder-ambiguous' // same-surname folder collision — photos paused until a rename (2026-08-18c). Not customer activity, but the bell is the one surface someone actually watches.
@@ -25699,6 +25757,7 @@ async function _syncFromSP() {
         nonMergeCount++;
         continue;
       }
+      if (key === 'gk_notifications' && typeof pruneNotifications === 'function') { remoteArr = pruneNotifications(remoteArr); localArr = pruneNotifications(localArr); }   // 10-14b: age rule on BOTH sides so pruned notices can't resurrect
       const { merged, remoteAdded, remoteUpdated } = _mergeArrayByIdAndTs(localArr, remoteArr);
       const wasLocalN = localArr.length, isMergedN = merged.length;
       // If the merge would PRESERVE local-only records, queue a push so SP
@@ -25957,7 +26016,7 @@ async function _syncToSP() {
           const localArr = JSON.parse(val);
           if (Array.isArray(spArr) && Array.isArray(localArr)) {
             const { merged } = _mergeArrayByIdAndTs(localArr, spArr);
-            val = JSON.stringify(merged);
+            val = JSON.stringify(key === 'gk_notifications' && typeof pruneNotifications === 'function' ? pruneNotifications(merged) : merged);
             // Also update local so subsequent reads have the merged view.
             localStorage.setItem(key, val);
           }
@@ -28005,7 +28064,7 @@ function _trySyncFromSP(reason) {
     }
     // crm-2026-10-03d: never redraw under an open pop-up (Send Text, Schedule,
     // snip editor, …) — the redraw is what made them close / the page jump.
-    try { if (document.querySelector('.moverlay.show, [id$="-modal"][style*="display: flex"], [id$="-modal"][style*="display:flex"]')) { console.log('[GK] post-sync re-render skipped: a pop-up is open'); return; } } catch (_) {}
+    try { if (document.querySelector('.moverlay.show, [id$="-modal"][style*="display: flex"], [id$="-modal"][style*="display:flex"], #dq-qqscope-form')) { console.log('[GK] post-sync re-render skipped: a pop-up is open'); return; } } catch (_) {}
     // crm-2026-10-03d: if the open job is byte-identical after the pull, there
     // is nothing new to show — leave the screen exactly where it is.
     try {
@@ -36505,6 +36564,11 @@ function gkStorageCheck(){
 
 // ── INIT ──
 async function init() {
+  // crm-2026-10-14b: storage hygiene FIRST, before anything tries to write.
+  // gk_restore_rollback (0.58 M on Jon's machine) is an orphan from an old
+  // restore — nothing reads it. Then prune the notifications store by age.
+  try { if (localStorage.getItem('gk_restore_rollback') != null) { localStorage.removeItem('gk_restore_rollback'); console.log('[GK] removed orphan gk_restore_rollback'); } } catch (_) {}
+  try { const _n0 = getNotifications(); const _n1 = pruneNotifications(_n0); if (_n1.length !== _n0.length) { localStorage.setItem(NK, JSON.stringify(_n1)); console.log('[GK] notifications pruned at boot: ' + _n0.length + ' → ' + _n1.length); } } catch (e) { console.warn('[GK] boot prune failed', e); }
   archiveOldLeads();
   seedImportData();
   // crm-2026-10-02a: the two boot repairs NO LONGER run here, before the first
