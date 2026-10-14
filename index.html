@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-05c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-14a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1670,6 +1670,12 @@ const CK = 'gk_customers', LK = 'gk_leads';
 // guard throws "Cannot access before initialization" if the declaration
 // hasn't run yet — declaring it here keeps it ahead of every reference.
 const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
+// crm-2026-10-14a: check remittance (Jon: "how do they know how to get us the money?").
+// Editable in Settings → Pricing & Tax → Payment Processing.
+const GK_CHECK_PAYEE_DEFAULT   = 'GreenKey Richmond VA, LLC';
+const GK_REMIT_ADDRESS_DEFAULT = '4195 Anderson Hwy #111, Powhatan, VA 23139';
+function gkCheckPayee(){ const p=(typeof getPrefs==='function')?getPrefs():{}; return (p.checkPayee||'').trim()||GK_CHECK_PAYEE_DEFAULT; }
+function gkRemitAddress(){ const p=(typeof getPrefs==='function')?getPrefs():{}; return (p.remitAddress||'').trim()||GK_REMIT_ADDRESS_DEFAULT; }
 
 // ── MAPBOX (2026-06-12) ──
 // Replaces Nominatim for geocoding + address autocomplete. Free tier covers
@@ -3060,6 +3066,8 @@ const SECS = {
     <div class="srow"><div><div class="srl">Payment processing buffer (%)</div><div class="srd">Added to every new quote as a separate line so card payments break even. <strong>Direct jobs only</strong> — not applied to Qmerit, Electrum, or Treehouse (those platforms pay us directly). Existing quotes keep their current value.</div></div><input class="sinput" id="set-payment-buffer" type="number" step="0.1" min="0" max="10" style="width:80px" value="${(typeof getPrefs==='function' && typeof getPrefs().paymentBuffer==='number') ? getPrefs().paymentBuffer : 3}"></div>
     <div class="srow"><div><div class="srl">ACH buffer (%)</div><div class="srd">Effective buffer baked into the ACH price tier (between the CC price and the cash/Zelle price). Typical: 1.</div></div><input class="sinput" id="set-ach-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.achBuffer==='number')return p.achBuffer;return 1;})()}"></div>
     <div class="srow"><div><div class="srl">Cash / Zelle / Check buffer (%)</div><div class="srd">Effective buffer for cash, Zelle, or check payments. Usually 0 — the customer gets the un-marked-up base price.</div></div><input class="sinput" id="set-cash-buffer" type="number" step="0.1" min="0" max="5" style="width:80px" value="${(()=>{const p=(typeof getPrefs==='function')?getPrefs():{};if(typeof p.cashBuffer==='number')return p.cashBuffer;return 0;})()}"></div>
+    <div class="srow"><div><div class="srl">Checks payable to</div><div class="srd">Printed on invoices and in the invoice email under "How to pay".</div></div><input class="sinput" id="set-check-payee" style="width:260px" value="${escHtml((()=>{const p=(typeof getPrefs==='function')?getPrefs():{};return p.checkPayee||GK_CHECK_PAYEE_DEFAULT;})())}"></div>
+    <div class="srow"><div><div class="srl">Mail checks to</div><div class="srd">One line, e.g. 4195 Anderson Hwy #111, Powhatan, VA 23139.</div></div><input class="sinput" id="set-remit-addr" style="width:300px" value="${escHtml((()=>{const p=(typeof getPrefs==='function')?getPrefs():{};return p.remitAddress||GK_REMIT_ADDRESS_DEFAULT;})())}"></div>
     <div style="margin:18px 0 6px 0;padding-top:14px;border-top:1px solid var(--border);font-size:12px;font-weight:600;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">Email Notifications</div>
     <div class="srow"><div><div class="srl">CC email for customer-facing messages</div><div class="srd">CC'd on every customer-facing email the CRM sends (quote sends, scheduling confirmations, consent requests). Office gets visibility without needing to use the CRM. Leave blank to disable CC.</div></div><input class="sinput" id="set-cc-email" type="email" placeholder="sherri.allen@greenkey-usa.com" style="width:260px" value="${escHtml((()=>{const p=(typeof getPrefs==='function')?getPrefs():{};return (p.ccOutboundEmail===undefined)?(typeof DEFAULT_CC_OUTBOUND_EMAIL==='string'?DEFAULT_CC_OUTBOUND_EMAIL:'sherri.allen@greenkey-usa.com'):(p.ccOutboundEmail||'');})())}"></div>
     <div style="margin-top:20px"><button class="btn btn-p" onclick="saveSets()">Save Changes</button></div>`,
@@ -3793,6 +3801,9 @@ function saveSets() {
     const v = parseFloat(cb.value);
     if (!isNaN(v) && v >= 0 && v <= 5) p.cashBuffer = v;
   }
+  // crm-2026-10-14a: where checks go (invoice PDF + invoice email "How to pay")
+  { const pe = document.getElementById('set-check-payee'); if (pe) p.checkPayee = (pe.value || '').trim();
+    const ra = document.getElementById('set-remit-addr');  if (ra) p.remitAddress = (ra.value || '').trim(); }
   // Email CC: empty string = explicit disable. Trim whitespace.
   const ccEl = document.getElementById('set-cc-email');
   if (ccEl) {
@@ -9438,21 +9449,22 @@ function autoExclusions(q){
 // Seed costs are starting points; pick each line from the catalog to pull
 // verified pricing. Scope narrative is appended to the editable Scope textarea.
 const SCOPE_TEMPLATES = {
-  'ev-charger': { label:'EV Charger — Level 2',
+  'ev-quick': { label:'EV Charger — Quick Quote price (all-in)', quick:true, scope:'', lines:[] },
+  'ev-charger': { label:'EV Charger — Level 2 (itemised)',
     scope:'Furnish and install a dedicated 240-volt, 60-amp branch circuit for a Level 2 EV charger, including mounting, connection, and setup of the charger. All work is performed to NEC and local code.',
-    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:30,unit:'per foot',unitCost:1.10,markup:30},
-            {desc:'2" PVC conduit — per ft',qty:30,unit:'per foot',unitCost:0.91,markup:30},
+    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:30,unit:'per foot',unitCost:1.28,markup:30},
+            {desc:'3/4" EMT conduit — per ft',qty:30,unit:'per foot',unitCost:0.90,markup:30},
             {desc:'60A 2-pole breaker',qty:1,unit:'each',unitCost:18,markup:40},
             {desc:'EV charger install labor allowance',qty:1,unit:'per job',unitCost:0,markup:0} ] },
   'nema-1450': { label:'NEMA 14-50 Outlet',
     scope:'Furnish and install a dedicated 240-volt, 50-amp circuit protected by a 50-amp GFCI breaker, terminating at a NEMA 14-50 outlet. All work is performed to NEC and local code.',
-    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:25,unit:'per foot',unitCost:1.10,markup:30},
+    lines:[ {desc:'#6 THHN/THWN-2 (Cu) wire — per ft',qty:25,unit:'per foot',unitCost:1.28,markup:30},
             {desc:'NEMA 14-50 receptacle + box',qty:1,unit:'each',unitCost:25,markup:40},
             {desc:'50A GFCI breaker',qty:1,unit:'each',unitCost:100,markup:40} ] },
   'service-upgrade': { label:'Service Upgrade',
     scope:'Upgrade the existing electrical service to a higher amperage, including new meter base, service-entrance conductors, main panel, grounding, and utility coordination. All work is performed to NEC and local code.',
     lines:[ {desc:'200A meter base / main panel',qty:1,unit:'each',unitCost:300,markup:30},
-            {desc:'Service-entrance conductors (set)',qty:1,unit:'per job',unitCost:150,markup:30},
+            {desc:'Service-entrance conductors (set)',qty:1,unit:'per job',unitCost:185,markup:30},
             {desc:'Grounding electrode system',qty:1,unit:'per job',unitCost:75,markup:30} ] },
   'panel-replacement': { label:'Panel Replacement',
     scope:'Remove and replace the existing main electrical panel with a new load center, re-terminating all branch circuits like-for-like, including panel hardware, main breaker, ground bar kit, and a whole-home Type 2 surge protector. All work is performed to NEC and local code.',
@@ -9467,7 +9479,7 @@ const SCOPE_TEMPLATES = {
   'subpanel': { label:'Subpanel / Feeder',
     scope:'Furnish and install a subpanel fed from the main panel with a properly sized 4-wire feeder, including the feeder breaker, raceway pathway as specified, and all required bonding and grounding. For a detached structure this includes a main-breaker disconnect, a grounding electrode system at the structure, and removal or re-feed of any existing 120-volt line so the building keeps a single source of power as required by code (NEC 225.30) — delete what does not apply for a subpanel adjacent to the main panel. All work is performed to NEC and local code.',
     lines:[ {desc:'100A main-breaker subpanel (12–20 space)',qty:1,unit:'each',unitCost:150,markup:30},
-            {desc:'Feeder conductors, 4-wire — per ft',qty:60,unit:'per foot',unitCost:3.00,markup:30},
+            {desc:'Feeder conductors, 4-wire — per ft',qty:60,unit:'per foot',unitCost:3.70,markup:30},
             {desc:'Sch 40 PVC conduit + fittings — per ft',qty:60,unit:'per foot',unitCost:1.20,markup:30},
             {desc:'Feeder breaker (2-pole) in main panel',qty:1,unit:'each',unitCost:70,markup:40},
             {desc:'Grounding electrode system (2 rods + GEC)',qty:1,unit:'per job',unitCost:75,markup:30} ] },
@@ -9482,9 +9494,115 @@ const SCOPE_TEMPLATES = {
   'custom': { label:'Custom Scope', scope:'',
     lines:[ {desc:'',qty:1,unit:'each',unitCost:0,markup:30} ] }
 };
+// ── QUICK-QUOTE-PRICED EV SCOPE inside a Detailed Quote (2026-10-14, Jon) ──
+// Jon: "I'd much prefer that the EV charger part be treated like the quick
+// quote rather than itemized." Richard's two sub-panel options each carry an
+// EV circuit; itemising it (wire / conduit / breaker lines) reads wrong next
+// to the sub-panel scope. This drops ONE all-in line priced with the same
+// getQQPricing() constants Quick Quote uses (base by panel location + per-10-ft
+// run + mount / outlet adders) plus the scope narrative. The line is flagged
+// allIn:true so the 10% materials buffer skips it. No permit is added — the
+// detailed quote already has one.
+function _qqScopeRead(){
+  const g=id=>document.getElementById(id);
+  return {
+    kind:  g('qqs-kind')?.value  || 'hardwired',
+    panel: g('qqs-panel')?.value || 'garage',
+    ft:    Math.max(parseInt(g('qqs-ft')?.value)||0,0),
+    run:   g('qqs-run')?.value   || 'surface',
+    mount: g('qqs-mount')?.value || 'wall',
+    nemaLoc: g('qqs-nemaloc')?.value || 'inside',
+    loc:   (g('qqs-loc')?.value||'').trim().slice(0,160),
+    panelText: (g('qqs-paneltext')?.value||'').trim().slice(0,120)
+  };
+}
+function _qqScopePrice(o){
+  const p=getQQPricing();
+  let lm = o.panel==='interior' ? p.interior : p.garage;
+  const ft=Math.max(parseInt(o.ft)||0,0);
+  if(o.run==='surface'||o.run==='crawl'||o.run==='attic'||o.run==='unfinished') lm+=(ft/10)*p.addl10Surface;
+  else if(o.run==='hand-trench') lm+=(ft/10)*p.handDig10;
+  else if(o.run==='machine-trench'){ const mft=Math.max(ft,50); lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10; }
+  if(o.kind==='nema') lm+=(o.nemaLoc==='outside'?p.nema1450Outside:p.nema1450Inside);
+  else { if(o.mount==='post') lm+=p.post; else if(o.mount==='pedestal-existing') lm+=p.pedestalExistingPad; else if(o.mount==='pedestal-newpad') lm+=p.pedestalNewPad; }
+  return Math.round(lm);
+}
+function _qqScopeText(o){
+  const RUN={surface:'in surface-mounted conduit',unfinished:'through the unfinished space',crawl:'through the crawl space',attic:'through the attic','hand-trench':'in conduit through a hand-dug trench','machine-trench':'in conduit through a machine-dug trench'};
+  const INS={surface:'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2',crawl:'SEU',attic:'SEU',unfinished:'SEU'};
+  const from = o.panelText || (o.panel==='interior' ? 'the main panel' : 'the panel in the garage');
+  const loc  = o.loc || '[INSERT CHARGER LOCATION]';
+  const ftTxt = o.ft>0 ? `, approximately ${o.ft+5} ft` : '';
+  if(o.kind==='nema'){
+    return `Install a dedicated 240-volt, 50-amp circuit from ${from} with #6 ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, protected by a 50-amp GFCI breaker and terminating at a NEMA 14-50 outlet on ${loc}. Includes breaker, wire, conduit, fittings, and outlet. All work is performed to NEC and local code.`;
+  }
+  const mountTxt = o.mount==='post' ? ' on a new 4x4 post' : o.mount==='pedestal-existing' ? ' on a pedestal on the existing pad' : o.mount==='pedestal-newpad' ? ' on a pedestal on a new concrete pad' : '';
+  return `Install a customer-supplied Level 2 EV charger on ${loc}${mountTxt}. Install a dedicated 240-volt, 60-amp circuit from ${from} with #6 ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, hardwired to the charger. Includes breaker, wire, conduit, fittings, mounting, connection, and setup of the charger. All work is performed to NEC and local code.`;
+}
+function _qqScopeDesc(o){
+  const kind = o.kind==='nema' ? `NEMA 14-50 outlet (${o.nemaLoc})` : 'Level 2 EV charger, hardwired';
+  const run  = o.ft>0 ? `, ${o.ft} ft ${o.run.replace('-',' ')} run` : ', at the panel';
+  const mount = (o.kind!=='nema' && o.mount!=='wall') ? `, ${o.mount.replace('pedestal-','pedestal / ').replace('newpad','new pad').replace('existing','existing pad')}` : '';
+  return `EV circuit — ${kind}${run}${mount} (all-in, Quick Quote pricing)`;
+}
+function qqScopeRefresh(){
+  const o=_qqScopeRead();
+  const pr=document.getElementById('qqs-price'); if(pr) pr.textContent='$'+_qqScopePrice(o).toLocaleString();
+  const nemaRow=document.getElementById('qqs-nema-row'); if(nemaRow) nemaRow.style.display = o.kind==='nema' ? '' : 'none';
+  const mountRow=document.getElementById('qqs-mount-row'); if(mountRow) mountRow.style.display = o.kind==='nema' ? 'none' : '';
+  const prev=document.getElementById('qqs-preview'); if(prev) prev.textContent=_qqScopeText(o);
+}
+function openQQScopeForm(qid){
+  const row=document.getElementById('dq-stack-row'); if(!row){ toast('Open the Detailed Quote form first','error'); return; }
+  const old=document.getElementById('dq-qqscope-form'); if(old) old.remove();
+  const sel=(id,opts,val)=>`<select class="fsel" id="${id}" onchange="qqScopeRefresh()" style="width:100%">${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}</select>`;
+  const html=`<div id="dq-qqscope-form" class="card" style="margin:0 0 12px;padding:14px 16px;border:1px solid var(--accent, #2e7d32);background:var(--bg-elev, rgba(46,125,50,.05))">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:700">EV charger circuit — Quick Quote pricing (one all-in line)</div>
+      <div style="font-size:18px;font-weight:700;color:var(--accent, #2e7d32)">Price: <span id="qqs-price">$0</span></div>
+    </div>
+    <div class="frow3">
+      <div class="fg"><div class="fl">Connection</div>${sel('qqs-kind',[['hardwired','Hardwired Level 2 charger'],['nema','NEMA 14-50 outlet']],'hardwired')}</div>
+      <div class="fg"><div class="fl">Panel feeding it</div>${sel('qqs-panel',[['garage','In the garage / same space ($'+getQQPricing().garage+')'],['interior','Inside the house ($'+getQQPricing().interior+')']],'garage')}</div>
+      <div class="fg"><div class="fl">Call the panel…</div><input class="fi" id="qqs-paneltext" placeholder="e.g. the new sub-panel in the garage" oninput="qqScopeRefresh()"></div>
+    </div>
+    <div class="frow3">
+      <div class="fg"><div class="fl">Run beyond the first 5 ft (ft)</div><input class="fi" id="qqs-ft" type="number" min="0" step="5" value="0" oninput="qqScopeRefresh()"></div>
+      <div class="fg"><div class="fl">Run type</div>${sel('qqs-run',[['surface','Surface conduit'],['unfinished','Unfinished space'],['crawl','Crawl space'],['attic','Attic'],['hand-trench','Hand-dug trench'],['machine-trench','Machine trench']],'surface')}</div>
+      <div class="fg" id="qqs-mount-row"><div class="fl">Mount</div>${sel('qqs-mount',[['wall','Wall'],['post','4x4 post (+$'+getQQPricing().post+')'],['pedestal-existing','Pedestal — existing pad'],['pedestal-newpad','Pedestal — new pad']],'wall')}</div>
+      <div class="fg" id="qqs-nema-row" style="display:none"><div class="fl">Outlet location</div>${sel('qqs-nemaloc',[['inside','Inside'],['outside','Outside']],'inside')}</div>
+    </div>
+    <div class="fg"><div class="fl">Charger / outlet location (customer wording)</div><input class="fi" id="qqs-loc" placeholder="e.g. the garage wall beside the sub-panel" oninput="qqScopeRefresh()" style="width:100%"></div>
+    <div id="qqs-preview" style="font-size:12px;color:var(--text-secondary);margin:8px 0 10px;line-height:1.45"></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-p" onclick="addQQScopeToQuote('${qid}')">Add to quote</button>
+      <button class="btn btn-g" onclick="document.getElementById('dq-qqscope-form')?.remove()">Cancel</button>
+      <span style="font-size:11px;color:var(--text-muted)">Same math as Quick Quote. No permit added (this quote already has one). Not buffered 10%.</span>
+    </div>
+  </div>`;
+  row.insertAdjacentHTML('afterend',html);
+  qqScopeRefresh();
+}
+function addQQScopeToQuote(qid){
+  const q=getQuote(qid); if(!q) return;
+  const o=_qqScopeRead();
+  const price=_qqScopePrice(o);
+  const stamp=Date.now();
+  const lines=[...(q.lines||[])];
+  lines.push({id:'ln-'+stamp+'-h',header:true,label: o.kind==='nema' ? 'NEMA 14-50 Outlet (all-in)' : 'EV Charger — Level 2 (all-in)'});
+  lines.push({id:'ln-'+stamp+'-0',desc:_qqScopeDesc(o),qty:1,unit:'per job',unitCost:price,markup:0,allIn:true,qqScope:o});
+  let scope=(q.scope||'').trim();
+  const txt=_qqScopeText(o);
+  scope = scope ? (scope+'\n\n'+txt) : txt;
+  upsertQuote({...q,lines,scope});
+  onDQChange(qid);
+  renderDetailedQuoteForm(getQuote(qid));
+  toast('EV circuit added at $'+price.toLocaleString()+' (all-in)','success');
+}
 function addScopeToQuote(qid,key){
   const q=getQuote(qid); if(!q) return;
   const t=SCOPE_TEMPLATES[key]; if(!t) return;
+  if(t.quick){ openQQScopeForm(qid); return; }   // 2026-10-14: Quick-Quote-priced EV scope → inline form, not seed lines
   const lines=[...(q.lines||[])];
   const stamp=Date.now();
   lines.push({id:'ln-'+stamp+'-h',header:true,label:t.label});
@@ -9587,7 +9705,7 @@ function renderDetailedQuoteForm(q){
           <span>Show line items on the quote PDF</span>
         </label>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
+      <div id="dq-stack-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
         <span style="font-size:12px;color:var(--text-muted);font-weight:600">Stack a scope:</span>
         <select class="fsel" id="dq-scope-pick" style="max-width:220px;flex:0 1 auto">
           ${Object.keys(SCOPE_TEMPLATES).map(k=>`<option value="${k}">${SCOPE_TEMPLATES[k].label}</option>`).join('')}
@@ -9981,7 +10099,9 @@ function onDQChange(qid){
   const _skipMatAllowance = (typeof q.skipMatAllowance === 'boolean')
     ? q.skipMatAllowance
     : (q.jobType === 'energy-management' || q.jobType === 'custom');
-  const matAllowance = _skipMatAllowance ? 0 : (matSub*p.materialsBuffer);
+  // All-in lines (Quick-Quote-priced EV scope, 2026-10-14) already carry their materials — no buffer on top of them.
+  const _matSubBuffered = lines.reduce((s,ln)=>s+((ln&&ln.allIn)?0:calcLine(ln)),0);
+  const matAllowance = _skipMatAllowance ? 0 : (_matSubBuffered*p.materialsBuffer);
   const matTotal=matSub+matAllowance;
   const laborTotal=laborLines.reduce((s,l)=>s+((parseFloat(l.hours)||0)*(parseFloat(l.rate)||160)),0);
   const rentalTotal=rentals.reduce((s,r)=>s+(parseFloat(r.cost)||0),0);
@@ -11475,7 +11595,37 @@ async function emailInvoice(qid){
     ? ((_billTo&&(_billTo.salutation||_billTo.firstName))||(_billTo&&_billTo.businessName?_billTo.businessName.replace(/,?\s*(LLC|Inc|Corp|Co)\.?$/i,'').trim()+' team':'there'))
     : ((cust&&cust.firstName)||(lead&&lead.customerName&&lead.customerName.split(' ')[0])||'there');
   const totals=calcQuoteTotals(q);
-  const amtStr='$'+Number(totals.quoteTotal||0).toLocaleString('en-US');
+  // crm-2026-10-14a: the email ALWAYS quoted q.quoteTotal (the card-inclusive
+  // price) even when the invoice was generated at the no-fee price — Red E
+  // Charge INV-2026-0007 read $365 in the email vs $354 on the PDF (Jon 10/6).
+  // Follow the same mode the PDF uses (q.invoiceNoFee: true | false | 'both').
+  const _fee=totals.paymentProcessingFee||0;
+  const _net=Math.max(0,(totals.quoteTotal||0)-_fee), _card=(totals.quoteTotal||0);
+  const _mode=(typeof q.invoiceNoFee!=='undefined'&&q.invoiceNoFee!==null)?q.invoiceNoFee:true;
+  const _both=(_mode==='both'), _noFee=_both?true:!!_mode;
+  const _amt=_noFee?_net:_card;
+  const amtStr='$'+Math.round(_amt).toLocaleString('en-US');
+  const _memo=payMemoCode((lead&&lead.id)||q.leadId||'');
+  const _payee=gkCheckPayee(), _remit=gkRemitAddress();
+  const _zelleB64=(GK_ZELLE_QR_B64||'').split(',')[1]||'';
+  const _payHtml = _both
+    ? `<div style="border:1px solid #d8e6dc;border-radius:8px;padding:12px 14px;margin:0 0 10px"><div style="font-weight:700;color:#1f7a46;font-size:14px">Option 1 — Zelle, check or cash: $${Math.round(_net).toLocaleString('en-US')} (no fee)</div>
+        <div style="font-size:13px;color:#555;margin-top:4px">Zelle: send to <strong>${escHtml(GK_ZELLE_EMAIL)}</strong> or scan the code below. Check: payable to <strong>${escHtml(_payee)}</strong>, mailed to ${escHtml(_remit)}.</div>
+        <div style="font-size:13px;color:#1f7a46;font-weight:700;margin-top:4px">Please include this code with your payment: ${escHtml(_memo)}</div>
+        ${_zelleB64?`<img src="cid:gkzelleqr" alt="Zelle QR" width="120" height="120" style="display:block;margin-top:8px">`:''}</div>
+       <div style="border:1px solid #d8e6dc;border-radius:8px;padding:12px 14px;margin:0 0 14px"><div style="font-weight:700;color:#1f7a46;font-size:14px">Option 2 — Credit card: $${Math.round(_card).toLocaleString('en-US')} (includes ${totals.paymentBuffer||3}% processing)</div>
+        ${q.invoiceCardUrl?`<a href="${q.invoiceCardUrl}" style="display:inline-block;background:#1f7a46;color:#ffffff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:600;font-size:13px;margin-top:8px">Pay by card &rarr;</a>`:`<div style="font-size:13px;color:#555;margin-top:4px">Reply to this email or call (804) 770-2210 and we will send a secure card link.</div>`}</div>`
+    : _noFee
+    ? `<div style="border:1px solid #d8e6dc;border-radius:8px;padding:12px 14px;margin:0 0 14px"><div style="font-weight:700;color:#1f7a46;font-size:14px">How to pay — ${amtStr} (no processing fee)</div>
+        <div style="font-size:13px;color:#555;margin-top:6px"><strong>Zelle:</strong> send to <strong>${escHtml(GK_ZELLE_EMAIL)}</strong> or scan the code below.</div>
+        <div style="font-size:13px;color:#555;margin-top:4px"><strong>Check:</strong> payable to <strong>${escHtml(_payee)}</strong>, mailed to ${escHtml(_remit)}.</div>
+        <div style="font-size:13px;color:#555;margin-top:4px"><strong>Cash:</strong> accepted on site.</div>
+        <div style="font-size:13px;color:#1f7a46;font-weight:700;margin-top:6px">Please include this code with your payment: ${escHtml(_memo)}</div>
+        ${_zelleB64?`<img src="cid:gkzelleqr" alt="Zelle QR" width="120" height="120" style="display:block;margin-top:8px">`:''}
+        <div style="font-size:12px;color:#888;margin-top:8px">Prefer a card? Reply to this email or call (804) 770-2210 and we will send a secure card link (${totals.paymentBuffer||3}% processing applies).</div></div>`
+    : `<div style="border:1px solid #d8e6dc;border-radius:8px;padding:12px 14px;margin:0 0 14px"><div style="font-weight:700;color:#1f7a46;font-size:14px">How to pay — ${amtStr} by credit card (includes ${totals.paymentBuffer||3}% processing)</div>
+        ${q.invoiceCardUrl?`<a href="${q.invoiceCardUrl}" style="display:inline-block;background:#1f7a46;color:#ffffff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:600;font-size:13px;margin-top:8px">Pay by card &rarr;</a>`:`<div style="font-size:13px;color:#555;margin-top:4px">Reply to this email or call (804) 770-2210 and we will send a secure card link.</div>`}
+        <div style="font-size:13px;color:#1f7a46;font-weight:700;margin-top:6px">Please include this code with your payment: ${escHtml(_memo)}</div></div>`;
   const addr=(lead&&lead.siteStreet)?`${lead.siteStreet}, ${lead.siteCity||''}`:'';
   const wnotes=(q.notes||(q.qq&&q.qq.scNotes)||'').trim();
   const html=`<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;color:#1a1a1a">
@@ -11484,7 +11634,7 @@ async function emailInvoice(qid){
     <p style="font-size:14px;margin:0 0 12px">Thank you for having GreenKey out${addr?` to ${escHtml(addr)}`:''}. Invoice <strong>${escHtml(q.invoiceId)}</strong> for <strong>${amtStr}</strong> is attached — due upon receipt.</p>
     ${wnotes?`<p style="font-size:12px;margin:0 0 6px;color:#888;font-weight:600;letter-spacing:0.4px">WORK PERFORMED</p>
     <p style="font-size:13px;margin:0 0 14px;color:#444;border-left:3px solid #7fc242;padding-left:10px;white-space:pre-wrap">${escHtml(wnotes)}</p>`:''}
-    <p style="font-size:14px;margin:0 0 12px">You can pay by check, Zelle, or cash — or reply to this email or call us at (804) 770-2210 to pay by card.</p>
+    ${_payHtml}
     <p style="font-size:14px;margin:0 0 18px">Thank you for your business!</p>
     <p style="font-size:12px;color:#666;margin:18px 0 0;border-top:1px solid #eee;padding-top:10px">GreenKey · Class A Electrical Contractor · (804) 770-2210 · greenkey-usa.com</p>
   </div>`;
@@ -11496,12 +11646,30 @@ async function emailInvoice(qid){
           subject:`Invoice ${q.invoiceId} from GreenKey — ${amtStr}`,
           body:{contentType:'HTML',content:html},
           toRecipients:[{emailAddress:{address:to}}],
+          ccRecipients:(typeof _buildCCRecipients==='function')?_buildCCRecipients().filter(r=>r.emailAddress.address.toLowerCase()!==to.toLowerCase()):[],
           attachments:[{'@odata.type':'#microsoft.graph.fileAttachment',name:res.filename,contentType:'application/pdf',contentBytes:b64}]
+            .concat((_zelleB64&&_payHtml.includes('cid:gkzelleqr'))?[{'@odata.type':'#microsoft.graph.fileAttachment',name:'zelle-qr.png',contentType:'image/png',contentBytes:_zelleB64,isInline:true,contentId:'gkzelleqr'}]:[])
         },
         saveToSentItems:true
       })
     });
     upsertQuote({...getQuote(qid),invoiceEmailedAt:new Date().toISOString(),invoiceEmailedTo:to});
+    // crm-2026-10-14a: leave a trail the office can see without opening Sent Items —
+    // a bell notification (per-user ack, so it waits in Sherri's bell) + a job note.
+    try{
+      const _who=(S.user&&S.user.name)||'CRM';
+      const _custNm=_isRef&&_billTo?(_billTo.businessName||custFullName(_billTo)):(cust?custFullName(cust):(lead&&lead.customerName)||'Customer');
+      const _modeLbl=_both?'both ways to pay shown':(_noFee?'Zelle / check / cash price':'card price');
+      if(typeof upsertNotification==='function') upsertNotification({
+        id:'inv-sent-'+Date.now(), type:'cust-invoice-sent',
+        title:'🧾 Invoice '+q.invoiceId+' emailed — '+_custNm+' '+amtStr,
+        description:'Sent by '+_who+' to '+to+' ('+_modeLbl+'). Watch for the payment and record it on the job'+(lead?' '+lead.id:'')+'.',
+        jobId:(lead&&lead.id)||q.leadId||''
+      });
+      if(lead){ const arr=getLeads(); const li=arr.findIndex(l=>l.id===lead.id);
+        if(li>=0){ arr[li].jobNotes=(arr[li].jobNotes||[]).concat([{id:'note-inv-'+Date.now().toString(36),text:'Invoice '+q.invoiceId+' ('+amtStr+', '+_modeLbl+') emailed to '+to+'.',authorName:_who,timestamp:new Date().toISOString()}]);
+          arr[li].updatedAt=new Date().toISOString(); saveLeads(arr); } }
+    }catch(e){ console.warn('[GK] invoice-sent trail failed:',e); }
     toast('✅ Invoice '+q.invoiceId+' emailed to '+to,'success');
     renderQuoteBuilder(qid);
   }catch(e){
@@ -12948,6 +13116,33 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
       doc.text('Ask us for a card payment link and we will text or email it.', 48, y+86);
     }
     y += 108;
+  } else if (!paidInfo) {
+    // crm-2026-10-14a: the single-method invoices used to print the total and
+    // nothing about HOW to pay it (Red E Charge INV-2026-0007, Jon 10/6).
+    y += 14;
+    _b(96);
+    const _memo = payMemoCode((lead && lead.id) || q.leadId || '');
+    doc.setDrawColor(...LGRAY); doc.setLineWidth(0.8);
+    doc.roundedRect(36, y, W-72, 82, 4, 4);
+    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(...DARK);
+    doc.text('HOW TO PAY', 48, y+18);
+    if (_noFee) {
+      try { doc.addImage(GK_ZELLE_QR_B64,'PNG',W-124,y+8,66,66); } catch(_){}
+      doc.setFontSize(9); doc.setTextColor(31,122,70);
+      doc.text('Zelle: send $'+Math.round(_invTotal).toLocaleString('en-US')+' to '+GK_ZELLE_EMAIL+' (or scan the code)', 48, y+34);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+      doc.text('Include this code in the payment note: '+_memo, 48, y+46);
+      doc.text(doc.splitTextToSize('Check: payable to '+gkCheckPayee()+', mailed to '+gkRemitAddress()+'. Cash accepted on site.', W-72-110), 48, y+60);
+    } else {
+      doc.setFontSize(9); doc.setTextColor(31,122,70);
+      doc.text('Credit card: $'+Math.round(_invTotal).toLocaleString('en-US')+'  (includes '+(_totalsInv.paymentBuffer||3)+'% processing)', 48, y+34);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+      const _cardLink = (q && q.invoiceCardUrl) || '';
+      if(_cardLink){ doc.setTextColor(31,122,70); doc.textWithLink('Pay by card \u2192', 48, y+46, {url:_cardLink}); }
+      else doc.text('Reply to the invoice email or call (804) 770-2210 and we will send a secure card link.', 48, y+46);
+      doc.text('Include this code with your payment: '+_memo, 48, y+60);
+    }
+    y += 94;
   }
   const _wnotes = q.notes || q.qq?.scNotes;
   if(_wnotes){
@@ -13086,6 +13281,9 @@ function renderMaterialsLibrary(){
       <button class="btn btn-g" onclick="openMaterialExcelImport()" title="Import from Capital Electric Most Purchased Excel export">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import Excel
       </button>
+      ${_wireAdjPending() ? `<button class="btn btn-g" onclick="adjustWirePrices20261012()" title="One-time: raise every wire unit cost by 23% (copper went up — #6 THWN-2 now $1.28/ft). This button disappears once every wire item has been adjusted.">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12l4-4 3 3 5-6M10 5h4v4"/></svg>Wire +23%
+      </button>` : ''}
       <button class="btn btn-g" onclick="openMaterialImport()" title="Import from materials_seed.json">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>Import JSON
       </button>
@@ -13359,6 +13557,29 @@ function _guessCategoryFromName(name) {
   if (/(connector|bushing|locknut|strap|clamp|fitting|sweep)/.test(n)) return 'Fittings';
   if (/(screw|washer|anchor|tape|hardware)/.test(n)) return 'Hardware';
   return 'Other';
+}
+
+// 2026-10-12 (Jon): copper is up — #6 THWN-2 now $640/500 ft = $1.28/ft vs
+// $1.04 in the library. Quick fix until a fresh Capital Electric Excel import:
+// multiply every Wire-category unitCost by 1.23 ONCE. Each item is stamped
+// (wireAdj20261012) so a second click — or a second computer after sync —
+// skips it. Non-wire categories untouched. Saves + queues SharePoint sync.
+const _isWireMat = m => (m.category||'').toLowerCase()==='wire' || /\b(thhn|thwn|xhhw|ser|seu|use|nm-b|uf-b|mc cable|bare copper)\b/i.test(m.name||'');
+// True while any wire item is still at the old price — drives the button's visibility (Jon: no permanent button).
+function _wireAdjPending(){ try { return getMaterials().some(m => _isWireMat(m) && !m.wireAdj20261012 && isFinite(+m.unitCost) && +m.unitCost>0); } catch { return false; } }
+function adjustWirePrices20261012(){
+  const mats = getMaterials();
+  const isWire = _isWireMat;
+  const todo = mats.filter(m => isWire(m) && !m.wireAdj20261012 && isFinite(+m.unitCost) && +m.unitCost>0);
+  const done = mats.filter(m => isWire(m) && m.wireAdj20261012).length;
+  if (!todo.length) { toast(done ? `All ${done} wire items already adjusted — nothing to do` : 'No wire items found in the library', 'info'); return; }
+  const preview = todo.slice(0,6).map(m => `• ${m.name}: $${(+m.unitCost).toFixed(2)} → $${(+m.unitCost*1.23).toFixed(2)}`).join('\n') + (todo.length>6 ? `\n… and ${todo.length-6} more` : '');
+  if (!confirm(`Raise ${todo.length} wire item${todo.length===1?'':'s'} by 23%?\n\n${preview}\n\nThis runs once per item (already-adjusted items are skipped).`)) return;
+  const stamp = new Date().toISOString().slice(0,10);
+  todo.forEach(m => { m.unitCost = Math.round(+m.unitCost*1.23*100)/100; m.wireAdj20261012 = true; m.lastUpdated = stamp; m.source = ((m.source||'') + ' | +23% ' + stamp).trim(); });
+  saveMaterials(mats);
+  toast(`${todo.length} wire price${todo.length===1?'':'s'} raised 23%`, 'success');
+  try { const sp = document.getElementById('spanel'); if (sp) sp.innerHTML = renderMaterialsLibrary(); } catch(e) { console.warn('[GK] wire adj re-render', e); }
 }
 
 async function openMaterialImport(){
@@ -14321,7 +14542,7 @@ function _renderJobRail(lead){
         <div style="font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${qLbl?escHtml(qLbl)+' — ':''}${titleTxt}">$${_quoteNet(q).toLocaleString()}${(()=>{const s=q.source||'';if(!s)return '';const plat=['Qmerit','Electrum','Treehouse','AF1','Tesla','ChargePoint','Blink'].includes(s);return ` <span style="font-size:10px;font-weight:700;letter-spacing:.3px;padding:1px 7px;border-radius:9px;vertical-align:1px;${plat?'background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)':'background:rgba(46,204,113,.12);color:var(--green);border:1px solid rgba(46,204,113,.3)'}">${escHtml(s)}</span>`;})()}${qLbl?' · '+escHtml(qLbl):''}</div>
         ${(q.source==='Qmerit'&&_quoteJobNet(q)!==_quoteNet(q))?`<div style="font-size:10.5px;color:var(--text-muted)">→ $${_quoteJobNet(q).toLocaleString()} to GreenKey after Qmerit's $${(_quoteNet(q)-_quoteJobNet(q)).toLocaleString()} admin fee</div>`:''}
         <div style="font-size:10.5px;color:${stColor}">${(q.external&&q.status==='delivered')?'pending approval':escHtml(q.status||'draft')}${isAcc?' · accepted':''}${notCounted?' · <span style="color:var(--amber,#f59e0b);font-weight:600">NOT in Job Value</span>':''}${openHint}</div>
-        ${isInv?`<div style="font-size:10.5px;color:#a55ecc;margin-top:2px" title="Invoice generated from this quote. Use the buttons at right to re-download or re-send it.">🧾 <span style="font-family:var(--mono)">${escHtml(q.invoiceId||'')}</span>${q.invoiceDate?' · '+new Date(q.invoiceDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</div>`:''}
+        ${isInv?`<div style="font-size:10.5px;color:#a55ecc;margin-top:2px" title="Invoice generated from this quote. Use the buttons at right to re-download or re-send it.">🧾 <span style="font-family:var(--mono)">${escHtml(q.invoiceId||'')}</span>${q.invoiceDate?' · '+new Date(q.invoiceDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}${q.invoiceEmailedAt?' · ✉ emailed '+new Date(q.invoiceEmailedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})+(q.invoiceEmailedTo?' to '+escHtml(q.invoiceEmailedTo):''):''}</div>`:''}
       </div>
       ${isInv
         ? `<button class="btn btn-g" style="padding:3px 9px;font-size:11px;flex-shrink:0;border-color:#8e44ad;color:#a55ecc" onclick="event.stopPropagation();generateInvoice('${q.id}')" title="Re-download invoice ${escHtml(q.invoiceId||'')} as a PDF (same invoice number — it is not re-minted)">🧾 Invoice</button>
@@ -18191,6 +18412,7 @@ function getNotification(id) { return getNotifications().find(n=>n.id===id)||nul
 const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
   'cust-quote-accepted', 'cust-quote-declined',
+  'cust-invoice-sent', // crm-2026-10-14a: an invoice went out by email — office visibility
   'web-lead',
   'insp-sms',         // inspector replied to a permitting text (2026-07-20)
   'ops-folder-ambiguous' // same-surname folder collision — photos paused until a rename (2026-08-18c). Not customer activity, but the bell is the one surface someone actually watches.
@@ -34398,6 +34620,19 @@ async function findSlotForJob(leadId, type) {
       if (best) { best.push(st); if (tag && !best.tag) best.tag = tag; }
       else { const ch = [st]; ch.tag = tag; chains.push(ch); }
     }
+    // crm-2026-10-05d: with a two-person roster, if one chain is tagged with
+    // one tech and another chain is untagged, the untagged chain is (almost
+    // certainly) the other tech → show it as "<Name> (likely)".
+    try {
+      const roster = getTechRoster();
+      if (roster.length === 2) {
+        const tagged = chains.filter(c => c.tag).map(c => c.tag);
+        const untagged = chains.filter(c => !c.tag);
+        if (tagged.length === 1 && untagged.length === 1 && roster.includes(tagged[0])) {
+          untagged[0].tagInferred = roster.find(r => r !== tagged[0]) || '';
+        }
+      }
+    } catch (_) {}
     for (const chain of chains) {
     const n = chain.length;
     // Insert the new stop at position p (0 = before the first stop … n = after the
@@ -34431,13 +34666,14 @@ async function findSlotForJob(leadId, type) {
       const dayEnd = (p === n) ? end : lastStopEnd;                // when this crew's last on-site work ends
       const origDayEnd = chain[n - 1].em;
       const homeArrive = dayEnd + dr(p === n ? J : chain[n - 1].mi, H);
-      const tech = (chain.tag || '') || (prev && prev.tech) || (next && next.tech) || '';
+      const tech = (chain.tag || '') || (prev && prev.tech) || (next && next.tech) || (chain.tagInferred || '');
+      const techInferred = !chain.tag && !(prev && prev.tech) && !(next && next.tech) && !!chain.tagInferred;
       if (techBusy(day, tech, start, end)) continue;
       const added = (prev ? dr(ip, J) : dr(H, J)) + (next ? dr(J, inx) : dr(J, H)) - (prev && next ? dr(ip, inx) : (prev ? dr(ip, H) : dr(H, inx)));
       const pushTotal = pushes.reduce((t, x) => t + x.delta, 0);
       cands.push({ day, firstPass, start, end, early, tech, near: prev || next, pos: prev ? 'after' : 'before', next, pushes, pushTotal,
                    dayEnd, origDayEnd, homeArrive, added: Math.max(0, Math.round(added)), estimated: !!M._estimated, calId: (tgtCalId || ''),
-                   crewCount: chains.length });
+                   crewCount: chains.length, techInferred });
     }
     }
   }
@@ -34468,7 +34704,9 @@ async function findSlotForJob(leadId, type) {
   if (!box) return;
   if (!picks.length) { box.innerHTML = `<div style="font-size:12.5px;color:var(--text-muted);padding:8px 0">No slot near existing work in the next ${_FS_WINDOW_DAYS} business days, and no day where Jon is free.</div>`; return; }
   const row = (c, i) => {
-    const techStr = c.tech ? escHtml(c.tech) : '<span style="color:var(--amber,#f59e0b);font-weight:500">crew not tagged</span>';
+    const techStr = c.tech
+      ? (c.techInferred ? `${escHtml(c.tech)} <span style="color:var(--text-muted);font-weight:500" title="No [tag] on these calendar events — inferred because the other crew that day is tagged. Set Technician on those jobs to confirm.">(likely)</span>` : escHtml(c.tech))
+      : '<span style="color:var(--amber,#f59e0b);font-weight:500">crew not tagged</span>';
     const whenStr = `${_fsDayLabel(c.day)} · ${_fsMinTo12(c.start)}–${_fsMinTo12(c.end)} · ${techStr}`;
     let why;
     if (c.pos === 'standalone') why = `Jon's own stop — nothing of Jon's on the calendar that day · ${Math.round(c.added/2)} min from the shop`;
