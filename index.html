@@ -12073,14 +12073,27 @@ function _buildDirectQuoteEmail(ctx) {
   // No-permit — circuit replacement, energy-management add-ons, custom one-offs,
   // service calls / maintenance (10-03f: these used to fall through to the
   // permit-required story — "we apply for your permit … installation day").
-  if (q.jobType === 'circuit-replacement' ||
+  // crm-2026-10-14b (Jon, Carly Burroughs sub-panel + EV): the job type was
+  // 'custom' (AI Estimator guess 'other'), so the email said "No permit is
+  // required for this scope of work" on a quote that CARRIES a $200 permit.
+  // The quote's own permit fee is the truth, not the job type: permitFee > 0 →
+  // permit-required email; permitFee == 0 → no-permit email.
+  const _hasPermit = parseFloat(q.permitFee) > 0;
+  if (!_hasPermit && (
+      q.jobType === 'circuit-replacement' ||
       q.jobType === 'energy-management' ||
       q.jobType === 'troubleshooting' ||
       q.jobType === 'maintenance-visit' ||
-      q.jobType === 'custom') {
+      q.jobType === 'custom' ||
+      q.jobType === 'other')) {
     return _injectCustomerNote(_buildNoPermitEmail(ctx));
   }
-  // Default — permit-required-standard (HVAC circuit, panel replacement, anything else)
+  if (!_hasPermit) {
+    // A permit-type job quoted with no permit fee (e.g. HVAC tie-in on an
+    // existing circuit) must not promise "we apply for your permit".
+    return _injectCustomerNote(_buildNoPermitEmail(ctx));
+  }
+  // Default — permit-required-standard (HVAC circuit, panel replacement, sub-panels, anything carrying a permit)
   return _injectCustomerNote(_buildPermitStandardEmail(ctx));
 }
 
@@ -12310,7 +12323,7 @@ Here's how the process works:
      Once the permit is in hand, we'll reach out to get you on the calendar
      for installation day.
 
-Total timeline from start to finish: typically 2–3 weeks.
+Total timeline from start to finish: typically {timeline}.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -12708,6 +12721,17 @@ function _buildEVStyleQuoteEmail({ q, custFirst, projectPhrase, total, addr, isE
   return { subject: _emailTplSubject('evStyle', ctx), body: _emailTplText('evStyle', ctx) };
 }
 
+// crm-2026-10-14b — {timeline} in the permit-required email (Jon, Carly
+// Burroughs sub-panel: "start to finish in 3 weeks is extremely optimistic …
+// 4–6 is more accurate for this scope"). Standard HVAC / panel-swap jobs keep
+// 2–3 weeks; custom / other permitted work (sub-panels, feeders, AI-Estimator
+// drafts) says 4–6 weeks. A quote can override with q.timelineText.
+function _quoteTimelineText(q) {
+  const o = (q && q.timelineText || '').trim();
+  if (o) return o;
+  const big = q && (q.jobType === 'custom' || q.jobType === 'other' || q.jobType === 'service-upgrade' || q.jobType === 'new-service');
+  return big ? '4–6 weeks' : '2–3 weeks';
+}
 // HVAC circuit / panel replacement — permit required, no equipment to deliver.
 function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr }) {
   const noteKey = (q.jobType === 'hvac-circuit') ? 'noteHvac'
@@ -12718,9 +12742,14 @@ function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr })
     jobTypeNote: _emailTplText(noteKey, {}),
     scopeBlock: _buildScopeText(q),
     paymentBlock: _buildPaymentScheduleText(q),
+    timeline: _quoteTimelineText(q),
     signoff: _emailSignoffText()
   };
-  return { subject: _emailTplSubject('permitStandard', ctx), body: _emailTplText('permitStandard', ctx) };
+  // If the template was customised in Settings before {timeline} existed, the
+  // saved body still carries the literal '2–3 weeks' — swap it so the rule applies.
+  let _body = _emailTplText('permitStandard', ctx);
+  if (ctx.timeline !== '2–3 weeks') _body = _body.replace(/Total timeline from start to finish: typically 2[–-]3 weeks\./, 'Total timeline from start to finish: typically ' + ctx.timeline + '.');
+  return { subject: _emailTplSubject('permitStandard', ctx), body: _body };
 }
 
 // Circuit replacement — no permit, fast turnaround.
