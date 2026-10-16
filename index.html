@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-14b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-16a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1670,7 +1670,7 @@ const CK = 'gk_customers', LK = 'gk_leads';
 // guard throws "Cannot access before initialization" if the declaration
 // hasn't run yet — declaring it here keeps it ahead of every reference.
 const DEFAULT_CC_OUTBOUND_EMAIL = 'sherri.allen@greenkey-usa.com';
-// crm-2026-10-14b: check remittance (Jon: "how do they know how to get us the money?").
+// crm-2026-10-16a: check remittance (Jon: "how do they know how to get us the money?").
 // Editable in Settings → Pricing & Tax → Payment Processing.
 const GK_CHECK_PAYEE_DEFAULT   = 'GreenKey Richmond VA, LLC';
 const GK_REMIT_ADDRESS_DEFAULT = '4195 Anderson Hwy #111, Powhatan, VA 23139';
@@ -3801,7 +3801,7 @@ function saveSets() {
     const v = parseFloat(cb.value);
     if (!isNaN(v) && v >= 0 && v <= 5) p.cashBuffer = v;
   }
-  // crm-2026-10-14b: where checks go (invoice PDF + invoice email "How to pay")
+  // crm-2026-10-16a: where checks go (invoice PDF + invoice email "How to pay")
   { const pe = document.getElementById('set-check-payee'); if (pe) p.checkPayee = (pe.value || '').trim();
     const ra = document.getElementById('set-remit-addr');  if (ra) p.remitAddress = (ra.value || '').trim(); }
   // Email CC: empty string = explicit disable. Trim whitespace.
@@ -6183,7 +6183,15 @@ function getLeadCustomerAction(leadId) {
   // Latest by customerActionAt — most recent action wins. If they declined
   // an old quote and accepted a newer one, the newer one is what counts.
   quotes.sort((a, b) => new Date(b.customerActionAt) - new Date(a.customerActionAt));
-  const q = quotes[0];
+  // crm-2026-10-16a (Jon, Richard Milby): accepting Option B auto-declined
+  // Option A a moment LATER, so the decline was the "latest action" and the
+  // job wore a red "Quote declined — hold off on follow-ups" banner over an
+  // accepted $3,025 job. A live acceptance (or contingent acceptance) always
+  // outranks a decline — a decline is only the job's state when NOTHING on
+  // the job is accepted.
+  const _actOf = x => x.customerActionAction || (x.status === 'declined' ? 'declined' : 'accepted');
+  const live = quotes.find(x => _actOf(x) !== 'declined' && x.status !== 'declined');
+  const q = live || quotes[0];
   return {
     action:  q.customerActionAction || (q.status === 'declined' ? 'declined' : 'accepted'),
     at:      q.customerActionAt,
@@ -11613,7 +11621,7 @@ async function emailInvoice(qid){
     ? ((_billTo&&(_billTo.salutation||_billTo.firstName))||(_billTo&&_billTo.businessName?_billTo.businessName.replace(/,?\s*(LLC|Inc|Corp|Co)\.?$/i,'').trim()+' team':'there'))
     : ((cust&&cust.firstName)||(lead&&lead.customerName&&lead.customerName.split(' ')[0])||'there');
   const totals=calcQuoteTotals(q);
-  // crm-2026-10-14b: the email ALWAYS quoted q.quoteTotal (the card-inclusive
+  // crm-2026-10-16a: the email ALWAYS quoted q.quoteTotal (the card-inclusive
   // price) even when the invoice was generated at the no-fee price — Red E
   // Charge INV-2026-0007 read $365 in the email vs $354 on the PDF (Jon 10/6).
   // Follow the same mode the PDF uses (q.invoiceNoFee: true | false | 'both').
@@ -11672,7 +11680,7 @@ async function emailInvoice(qid){
       })
     });
     upsertQuote({...getQuote(qid),invoiceEmailedAt:new Date().toISOString(),invoiceEmailedTo:to});
-    // crm-2026-10-14b: leave a trail the office can see without opening Sent Items —
+    // crm-2026-10-16a: leave a trail the office can see without opening Sent Items —
     // a bell notification (per-user ack, so it waits in Sherri's bell) + a job note.
     try{
       const _who=(S.user&&S.user.name)||'CRM';
@@ -12073,7 +12081,7 @@ function _buildDirectQuoteEmail(ctx) {
   // No-permit — circuit replacement, energy-management add-ons, custom one-offs,
   // service calls / maintenance (10-03f: these used to fall through to the
   // permit-required story — "we apply for your permit … installation day").
-  // crm-2026-10-14b (Jon, Carly Burroughs sub-panel + EV): the job type was
+  // crm-2026-10-16a (Jon, Carly Burroughs sub-panel + EV): the job type was
   // 'custom' (AI Estimator guess 'other'), so the email said "No permit is
   // required for this scope of work" on a quote that CARRIES a $200 permit.
   // The quote's own permit fee is the truth, not the job type: permitFee > 0 →
@@ -12721,7 +12729,7 @@ function _buildEVStyleQuoteEmail({ q, custFirst, projectPhrase, total, addr, isE
   return { subject: _emailTplSubject('evStyle', ctx), body: _emailTplText('evStyle', ctx) };
 }
 
-// crm-2026-10-14b — {timeline} in the permit-required email (Jon, Carly
+// crm-2026-10-16a — {timeline} in the permit-required email (Jon, Carly
 // Burroughs sub-panel: "start to finish in 3 weeks is extremely optimistic …
 // 4–6 is more accurate for this scope"). Standard HVAC / panel-swap jobs keep
 // 2–3 weeks; custom / other permitted work (sub-panels, feeders, AI-Estimator
@@ -13164,7 +13172,7 @@ function generateInvoicePDF(q,cust,lead,invNum,paidInfo,returnDataUrl,noFee){
     }
     y += 108;
   } else if (!paidInfo) {
-    // crm-2026-10-14b: the single-method invoices used to print the total and
+    // crm-2026-10-16a: the single-method invoices used to print the total and
     // nothing about HOW to pay it (Red E Charge INV-2026-0007, Jon 10/6).
     y += 14;
     _b(96);
@@ -18446,7 +18454,7 @@ async function notifyMentionCompletion(task) {
 
 // ── NOTIFICATION CRUD ──
 function getNotifications() { try { return JSON.parse(localStorage.getItem(NK)||'[]'); } catch{ return []; } }
-// ── NOTIFICATION PRUNING (crm-2026-10-14b) ──────────────────────────────────
+// ── NOTIFICATION PRUNING (crm-2026-10-16a) ──────────────────────────────────
 // 2026-10-14: Jon's browser storage hit 101% of the ~5.2 M cap — gk_notifications
 // alone was 0.91 M because every acknowledged text was kept forever. setItem
 // THREW (QuotaExceededError) inside saveNotifications, so Dismiss did nothing
@@ -18499,7 +18507,7 @@ function getNotification(id) { return getNotifications().find(n=>n.id===id)||nul
 const CUST_NOTIF_TYPES = new Set([
   'cust-sms', 'cust-sched-confirmed', 'cust-sched-reschedule',
   'cust-quote-accepted', 'cust-quote-declined',
-  'cust-invoice-sent', // crm-2026-10-14b: an invoice went out by email — office visibility
+  'cust-invoice-sent', // crm-2026-10-16a: an invoice went out by email — office visibility
   'web-lead',
   'insp-sms',         // inspector replied to a permitting text (2026-07-20)
   'ops-folder-ambiguous' // same-surname folder collision — photos paused until a rename (2026-08-18c). Not customer activity, but the bell is the one surface someone actually watches.
@@ -36593,7 +36601,7 @@ function gkStorageCheck(){
 
 // ── INIT ──
 async function init() {
-  // crm-2026-10-14b: storage hygiene FIRST, before anything tries to write.
+  // crm-2026-10-16a: storage hygiene FIRST, before anything tries to write.
   // gk_restore_rollback (0.58 M on Jon's machine) is an orphan from an old
   // restore — nothing reads it. Then prune the notifications store by age.
   try { if (localStorage.getItem('gk_restore_rollback') != null) { localStorage.removeItem('gk_restore_rollback'); console.log('[GK] removed orphan gk_restore_rollback'); } } catch (_) {}
