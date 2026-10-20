@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-16a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6867,6 +6867,13 @@ function renderQuickQuoteForm(q){
                 <option value="inside"${(qq.nemaLocation||'inside')==='inside'?' selected':''}>Inside (+$200)</option>
                 <option value="outside"${qq.nemaLocation==='outside'?' selected':''}>Outside (+$200)</option>
               </select>
+            </div>
+            <div class="fg"><div class="fl">Outlet Mount</div>
+              <select class="fsel" id="qq-mount" onchange="onQQChange('${q.id}');var _c=document.getElementById('qq-mount-custom');if(_c)_c.style.display=(this.value==='custom'?'':'none')">
+                <option value="wall"${qq.mountType!=='custom'?' selected':''}>Standard wall mount (included)</option>
+                <option value="custom"${qq.mountType==='custom'?' selected':''}>Custom — describe below</option>
+              </select>
+              <input class="li-inp" type="text" id="qq-mount-custom" value="${escHtml(qq.mountCustom||'')}" placeholder="e.g. on a 4×4 post beside the driveway" oninput="onQQChange('${q.id}')" style="width:100%;margin-top:6px;${qq.mountType==='custom'?'':'display:none'}" title="Goes into the scope of work. No price change — price any extra work with the Custom add-on or the Difficulty Fee.">
             </div>`
           : `<div class="fg"><div class="fl">Charger Mount</div>
               <select class="fsel" id="qq-mount" onchange="onQQChange('${q.id}')">
@@ -9189,7 +9196,13 @@ function _autoScopePrimary(q){
     const _tn = qq.tandemBreakers || 0;
     const _tW = ['', 'One', 'Two', 'Three'];
     const s3 = _tn > 0 ? ` ${_tW[_tn] || _tn} ${(_nBrand && _nBrand !== 'Other') ? _nBrand + ' ' : ''}tandem breaker${_tn > 1 ? 's are' : ' is'} required to make space in the panel.` : '';
-    return `${s1} ${s2}${s3} All work is performed to NEC and local code.`;
+    // crm-2026-10-20a (Jon, Steve Moulson): NEMA gets the same 'Custom — describe
+    // below' mount the EV form has, so nobody flips the quote to EV Charger just
+    // to reach it (that flip is what put hardwired-charger wording in his email).
+    const _nMount = (qq.mountType==='custom' && (qq.mountCustom||'').trim())
+      ? ' The outlet is mounted as follows: ' + (qq.mountCustom||'').trim().replace(/\.*$/, '') + '.'
+      : '';
+    return `${s1} ${s2}${s3}${_nMount} All work is performed to NEC and local code.`;
   }
 
   // EV Charger — swap / existing-circuit install types (2026-07-11)
