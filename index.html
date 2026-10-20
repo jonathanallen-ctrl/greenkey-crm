@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2139,6 +2139,7 @@ function getCustomer(id) {
 }
 
 function upsertCustomer(data) {
+  data = _prettyPhoneFields(data, ['phone','altPhone','phone2']);   // crm-2026-10-20b
   const arr = getCustomers();
   const idx = arr.findIndex(c=>c.id===data.id);
   const now = new Date().toISOString();
@@ -2346,6 +2347,7 @@ function saveUnmatchedPayments(arr){ localStorage.setItem(UPK, JSON.stringify(ar
 function getLead(id) { return getLeads().find(l=>l.id===id)||null; }
 
 function upsertLead(data) {
+  data = _prettyPhoneFields(data, ['customerPhone','phone']);       // crm-2026-10-20b
   const arr = getLeads();
   const idx = arr.findIndex(l=>l.id===data.id);
   const now = new Date().toISOString();
@@ -2548,6 +2550,35 @@ function getUsers() {
   return [];
 }
 function saveUsers(u) { localStorage.setItem(UK, JSON.stringify(u)); }
+
+// crm-2026-10-20b (Jon: "why does the phone number show up different when it
+// comes from intake or AI compared to when we enter it?"): the website form,
+// post-call intake and AI text intake hand us E.164 (+18045551234) while
+// everything typed in the CRM is (804) 555-1234. STORAGE format for every
+// customer / job phone is now the typed one. Safe because every comparison in
+// the CRM is digits-only (last 10) and the worker runs toE164() before sending.
+// Anything that isn't a plain 10-digit US number (letters, extensions,
+// international) is returned untouched.
+function _prettyPhoneUS(raw) {
+  if (raw == null) return raw;
+  const s = String(raw).trim();
+  if (!s || /[a-z]/i.test(s)) return raw;
+  let d = s.replace(/\D/g, '');
+  if (d.length === 11 && d[0] === '1') d = d.slice(1);
+  if (d.length !== 10) return raw;
+  return '(' + d.slice(0,3) + ') ' + d.slice(3,6) + '-' + d.slice(6);
+}
+function _prettyPhoneFields(o, keys) {
+  if (!o || typeof o !== 'object') return o;
+  let out = o;
+  keys.forEach(k => {
+    if (o[k]) {
+      const p = _prettyPhoneUS(o[k]);
+      if (p !== o[k]) { if (out === o) out = { ...o }; out[k] = p; }
+    }
+  });
+  return out;
+}
 
 // Normalize phone to E.164 US format (+1XXXXXXXXXX). Returns '' if it can't.
 function toE164US(raw) {
