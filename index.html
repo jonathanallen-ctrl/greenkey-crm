@@ -596,7 +596,10 @@
   #lb-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1500;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.2s}
   #lb-overlay.show{opacity:1;pointer-events:all}
   #lb-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%;padding:20px 72px;position:relative;max-height:calc(100vh - 80px);min-height:0;overflow:hidden;touch-action:none}
-  #lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;display:block;cursor:zoom-in;transform-origin:center center;will-change:transform;user-select:none;-webkit-user-drag:none}
+  /* crm-2026-10-21a: NO will-change/scale here — zoom resizes the image for real
+     (see _applyLBTransform). will-change:transform made Chrome/Edge stretch the
+     screen-sized bitmap, which is why every zoomed photo went blurry. */
+  #lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;display:block;flex-shrink:0;cursor:zoom-in;user-select:none;-webkit-user-drag:none}
   #lb-img.zoomed{cursor:grab}
   #lb-img.panning{cursor:grabbing}
   #lb-zoom-ctrls{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-right:6px}
@@ -736,6 +739,7 @@
       <input type="file" id="sms-image-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" style="display:none" onchange="_smsOnAttachPick(this)">
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="document.getElementById('sms-image-input').click()" title="Pictures go as picture messages (up to 5). PDFs / Word / Excel go as a download link good for 30 days (up to 3).">📎 Attach pictures or files</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="_smsInsertPaymentOptions()" title="Fill in a payment request: Zelle QR (no fee) and/or a credit-card link (+3%). Review, then Send.">💳 Payment options</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="_smsInsertQuote()" title="Text a quote: attaches the quote PDF and the customer's one-time Accept / Decline links (same as the quote email). Review, then Send.">📋 Send quote</button>
       <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a smile" onclick="_smsInsertEmoji('🙂')">🙂</button>
       <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a thumbs up" onclick="_smsInsertEmoji('👍')">👍</button>
     </div>
@@ -1289,7 +1293,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-21b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -17769,6 +17773,10 @@ function openFMDocPreview(jobId, idx) {
   if (!files.length) return;
   LBFiles = files;
   LBIdx = Math.min(idx, files.length-1);
+  // crm-2026-10-21a: Documents previews never wired the zoom (wheel/drag/pinch)
+  // and could open still zoomed from the last photo — same setup as openLightbox.
+  _setupLightboxZoom();
+  _resetLBZoom();
   renderLB();
   document.getElementById('lb-overlay').classList.add('show');
   document.body.style.overflow = 'hidden';
@@ -18055,6 +18063,7 @@ function closeLightbox() {
     try { vidEl.load(); } catch(_){}
   }
   _resetLBZoom();
+  _lbLoadSeq++;                // cancel any full-res swap still in flight
   LBFiles = []; LBIdx = 0;
 }
 
@@ -18077,10 +18086,57 @@ let _LBPanning = false, _LBPanStartX = 0, _LBPanStartY = 0;
 let _LBPinchStartDist = 0, _LBPinchStartZoom = 1;
 let _LBZoomListenersWired = false;
 
+// crm-2026-10-21a (Jon — "zoom in and it gets blurry", long-standing, every
+// photo): zoom used to be CSS `scale()` on an element marked
+// will-change:transform. Chrome/Edge rasterize such a layer ONCE at its
+// on-screen (fit) size and then stretch that bitmap, so zooming only ever
+// magnified a ~800px picture no matter how sharp the file was. Now zoom sets
+// the image's real width/height (fit size × zoom) so the browser redraws it
+// from the full-resolution pixels; translate() is used only for panning.
+// LBZoom keeps its old meaning (1 = fit to window).
+function _lbFitSize(img) {
+  const wrap = document.getElementById('lb-img-wrap');
+  const nw = img.naturalWidth || 0, nh = img.naturalHeight || 0;
+  if (!wrap || !nw || !nh) return null;
+  const cs = getComputedStyle(wrap);
+  const aw = wrap.clientWidth  - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  const ah = wrap.clientHeight - (parseFloat(cs.paddingTop)  || 0) - (parseFloat(cs.paddingBottom) || 0);
+  if (aw <= 0 || ah <= 0) return null;
+  const k = Math.min(1, aw / nw, ah / nh);   // same rule as max-width/max-height:100%
+  return { w: nw * k, h: nh * k };
+}
+// Zoom to `z`, keeping the point under (cx, cy) still. No point → zoom about
+// the centre (buttons, keyboard).
+function _lbZoomTo(z, cx, cy) {
+  z = Math.max(1, Math.min(8, z));
+  let dx = 0, dy = 0;
+  const wrap = document.getElementById('lb-img-wrap');
+  if (wrap && cx != null && cy != null) {
+    const r = wrap.getBoundingClientRect();
+    dx = cx - (r.left + r.width / 2);
+    dy = cy - (r.top + r.height / 2);
+  }
+  const ratio = z / (LBZoom || 1);
+  LBPanX = dx - (dx - LBPanX) * ratio;
+  LBPanY = dy - (dy - LBPanY) * ratio;
+  LBZoom = z;
+  if (LBZoom <= 1.001) { LBZoom = 1; LBPanX = 0; LBPanY = 0; }
+  _applyLBTransform();
+}
 function _applyLBTransform() {
   const img = document.getElementById('lb-img');
   if (!img) return;
-  img.style.transform = `translate(${LBPanX}px, ${LBPanY}px) scale(${LBZoom})`;
+  const fit = LBZoom > 1 ? _lbFitSize(img) : null;
+  if (fit) {
+    img.style.maxWidth  = 'none';
+    img.style.maxHeight = 'none';
+    img.style.width  = Math.round(fit.w * LBZoom) + 'px';
+    img.style.height = Math.round(fit.h * LBZoom) + 'px';
+  } else {
+    img.style.maxWidth = ''; img.style.maxHeight = '';
+    img.style.width = '';    img.style.height = '';
+  }
+  img.style.transform = (LBPanX || LBPanY) ? `translate(${LBPanX}px, ${LBPanY}px)` : '';
   img.classList.toggle('zoomed', LBZoom > 1);
   const pctEl = document.getElementById('lb-zoom-pct');
   if (pctEl) pctEl.textContent = Math.round(LBZoom * 100) + '%';
@@ -18091,8 +18147,8 @@ function _resetLBZoom() {
   const img = document.getElementById('lb-img');
   if (img) img.classList.remove('panning');
 }
-function lbZoomIn()    { LBZoom = Math.min(8, LBZoom * 1.4); _applyLBTransform(); }
-function lbZoomOut()   { LBZoom = Math.max(1, LBZoom / 1.4); if (LBZoom <= 1.001) { LBPanX = 0; LBPanY = 0; } _applyLBTransform(); }
+function lbZoomIn()    { _lbZoomTo(LBZoom * 1.4); }
+function lbZoomOut()   { _lbZoomTo(LBZoom / 1.4); }
 function lbZoomReset() { _resetLBZoom(); }
 
 function _setupLightboxZoom() {
@@ -18107,16 +18163,20 @@ function _setupLightboxZoom() {
     if ((e.target && e.target.id === 'lb-video')) return;
     e.preventDefault();
     const factor = e.deltaY > 0 ? 1/1.15 : 1.15;
-    LBZoom = Math.max(1, Math.min(8, LBZoom * factor));
-    if (LBZoom <= 1.001) { LBZoom = 1; LBPanX = 0; LBPanY = 0; }
-    _applyLBTransform();
+    _lbZoomTo(LBZoom * factor, e.clientX, e.clientY);   // zoom toward the cursor
   }, { passive: false });
 
-  // Double-click on image to toggle zoom.
+  // Double-click on image to toggle zoom (into the spot that was clicked).
   img.addEventListener('dblclick', (e) => {
     e.preventDefault();
     if (LBZoom > 1) _resetLBZoom();
-    else { LBZoom = 2.5; _applyLBTransform(); }
+    else _lbZoomTo(2.5, e.clientX, e.clientY);
+  });
+
+  // Window resized → the fit size changed; re-apply so a zoomed image keeps its zoom.
+  window.addEventListener('resize', () => {
+    const ov = document.getElementById('lb-overlay');
+    if (ov && ov.classList.contains('show') && LBZoom > 1) _applyLBTransform();
   });
 
   // Mouse drag to pan when zoomed.
@@ -18160,9 +18220,9 @@ function _setupLightboxZoom() {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      LBZoom = Math.max(1, Math.min(8, _LBPinchStartZoom * (dist / _LBPinchStartDist)));
-      if (LBZoom <= 1.001) { LBZoom = 1; LBPanX = 0; LBPanY = 0; }
-      _applyLBTransform();
+      _lbZoomTo(_LBPinchStartZoom * (dist / _LBPinchStartDist),
+        (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        (e.touches[0].clientY + e.touches[1].clientY) / 2);
     } else if (e.touches.length === 1 && _LBPanning) {
       e.preventDefault();
       LBPanX = e.touches[0].clientX - _LBPanStartX;
@@ -18191,6 +18251,47 @@ function _setupLightboxZoom() {
   _LBZoomListenersWired = true;
 }
 
+// crm-2026-10-21a: the lightbox shows whatever copy is quickest (the local
+// preview, which is downscaled for CRM uploads), then swaps in the SharePoint
+// original if it has more pixels — so zooming has the real detail to show.
+// Asks Graph for a fresh download link by item id (stored links expire after
+// ~1 hour). HEIC is skipped: Chrome/Edge cannot decode it, so the Graph JPEG
+// rendition stays. Any failure leaves the preview on screen.
+let _lbLoadSeq = 0;
+async function _lbUpgradeToFullRes(f, seq) {
+  try {
+    if (!f) return;
+    const _heic = /\.(heic|heif)$/i.test(String(f.name||'')) || /hei[cf]/.test(String(f.mimeType||'').toLowerCase());
+    if (_heic || !String(f.mimeType||'').toLowerCase().startsWith('image/')) return;
+    let url = null;
+    if (f.spDriveItemId && typeof _spDrive !== 'undefined' && _spDrive) {
+      try {
+        if (typeof _msal !== 'undefined' && _msal) {
+          const accts = _msal.getAllAccounts();
+          if (accts && accts.length) { const tr = await _msal.acquireTokenSilent({ account: accts[0], scopes: GRAPH_SCOPES }); if (tr && tr.accessToken) _gToken = tr.accessToken; }
+        }
+      } catch (_) {}
+      if (_gToken) {
+        const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${f.spDriveItemId}?select=id,@microsoft.graph.downloadUrl`,
+          { headers: { Authorization: 'Bearer ' + _gToken } });
+        if (r.ok) { const j = await r.json(); url = j && j['@microsoft.graph.downloadUrl'] || null; }
+      }
+    }
+    if (!url) return;
+    if (seq !== _lbLoadSeq) return;
+    const probe = new Image();
+    probe.onload = () => {
+      const imgEl = document.getElementById('lb-img');
+      if (seq !== _lbLoadSeq || !imgEl) return;
+      const cur = (imgEl.naturalWidth || 0) * (imgEl.naturalHeight || 0);
+      if (probe.naturalWidth * probe.naturalHeight > cur) imgEl.src = url;   // onload re-measures + updates px label
+    };
+    probe.src = url;
+  } catch (e) {
+    console.warn('[GK] Lightbox full-res fetch skipped:', e);
+  }
+}
+
 function renderLB() {
   const f = LBFiles[LBIdx];
   if (!f) return;
@@ -18212,10 +18313,20 @@ function renderLB() {
       if (imgEl) imgEl.style.display = 'block';
     }
   }
-  if (imgEl && !_isVid)  imgEl.src = _imgSrc(f);
+  const _seq = ++_lbLoadSeq;
+  if (imgEl && !_isVid) {
+    imgEl.onload = () => {
+      if (_seq !== _lbLoadSeq) return;
+      const px = document.getElementById('lb-px');
+      if (px && imgEl.naturalWidth) px.textContent = ' · ' + imgEl.naturalWidth + ' × ' + imgEl.naturalHeight + ' px';
+      if (LBZoom > 1) _applyLBTransform();   // full-res swap while zoomed: re-measure
+    };
+    imgEl.src = _imgSrc(f);
+    _lbUpgradeToFullRes(f, _seq);
+  }
   if (infoEl) infoEl.innerHTML = `
     <span style="font-weight:500;color:white;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(f.name)}</span>
-    <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${mdy(f.uploadedAt)||'—'} · ${escHtml(f.uploadedBy||'—')}</span>`;
+    <span style="color:rgba(255,255,255,0.45);font-size:11px">${fmtSize(f.size)} · ${mdy(f.uploadedAt)||'—'} · ${escHtml(f.uploadedBy||'—')}<span id="lb-px"></span></span>`;
   if (ctrEl)  ctrEl.textContent = `${LBIdx+1} / ${LBFiles.length}`;
   const prevEl = document.getElementById('lb-prev');
   const nextEl = document.getElementById('lb-next');
@@ -26725,7 +26836,22 @@ async function _uploadPhotoToSP(jobId, category, file, dataUrl) {
   // through to the original blob on any error (e.g. decoder unsupported,
   // genuine video file).
   let uploadName, uploadType, blob;
-  try {
+  // crm-2026-10-21a: keep the ORIGINAL in SharePoint whenever we still hold
+  // the real file and it is a format every browser shows (JPEG/PNG/WebP).
+  // Before this, CRM uploads went 1600px@82% (local preview) → 2048px@88% —
+  // shrunk and compressed twice, so zooming in later had no detail to show.
+  // The local preview (dataUrl) stays small to protect device storage; the
+  // lightbox pulls this original when someone zooms (_lbUpgradeToFullRes).
+  // Retries (refreshPhotosFromSP passes a plain {name,type,size}) and HEIC
+  // still take the resize path below — the original bytes are gone/undecodable.
+  const _origOk = (typeof Blob !== 'undefined') && (file instanceof Blob) && file.size > 0 &&
+                  /^image\/(jpeg|jpg|pjpeg|png|webp)$/i.test(file.type || '');
+  if (_origOk) {
+    uploadName = file.name || 'photo.jpg';
+    uploadType = file.type;
+    blob       = file;
+    console.log(`[GK] Photo uploading at full resolution: ${uploadName} (${(file.size/1024/1024).toFixed(1)} MB)`);
+  } else try {
     const conv = await _resizeAndConvertImage(file, dataUrl, { maxDimension: 2048, quality: 0.88 });
     uploadName = conv.name;
     uploadType = conv.mimeType;
@@ -28962,7 +29088,7 @@ async function loadCallThread(key) {
       return `<div style="display:flex;justify-content:${out?'flex-end':'flex-start'};margin:5px 0">
         <div style="max-width:80%;padding:7px 10px;border-radius:10px;font-size:12.5px;line-height:1.45;
              background:${out?'rgba(46,204,113,.12)':'var(--bg-elevated)'};border:1px solid ${out?'rgba(46,204,113,.3)':'var(--border)'}">
-          <div style="white-space:pre-wrap">${escHtml(m.body||'')}</div>
+          <div style="white-space:pre-wrap">${_smsBodyHtml(m.body||'')}</div>
           <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px">${escHtml(t)}${out&&m.status?' · '+escHtml(m.status):''}</div>
         </div></div>`;
     }).join('');
@@ -36217,6 +36343,7 @@ function _smsClearImage() {
   _smsAttachments.forEach(a => { if (a && a.thumb && String(a.thumb).startsWith('blob:')) { try { URL.revokeObjectURL(a.thumb); } catch(_){} } });
   _smsAttachments = [];
   _smsPayExpect = null;
+  _smsQuoteSend = null;
   _smsRenderAttachments();
   const inp = document.getElementById('sms-image-input'); if (inp) inp.value = '';
 }
@@ -36315,6 +36442,161 @@ async function _smsInsertPaymentOptions() {
   toast('Payment options added — check it over, then press Send', 'success');
 }
 
+// ── TEXT BODY → HTML (crm-2026-10-21b, Jon: "make our text message screen
+// properly render pdf links so there is no confusion on what is being sent") ──
+// Escapes the message, then turns the long links we send into labelled chips:
+//   📄 <name>: …/sms/media-out/<id>/<name>  → "📄 <name> · Open" (file link)
+//   …/quote/view?token=…&action=accept|decline → "✓ Accept link" / "✗ Decline link"
+//     (NOT clickable on purpose — it is the customer's own link; opening it
+//      from the office could confirm the quote on their behalf)
+//   any other http(s) link → a clickable, shortened link
+// The customer's phone still shows the plain text that was sent — this only
+// changes how OUR thread displays it.
+function _smsBodyHtml(body) {
+  const raw = String(body == null ? '' : body);
+  const re = /https?:\/\/[^\s<>"]+/g;
+  const chip = 'display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:2px 8px;margin:2px 0;border-radius:6px;font-size:12px;line-height:1.3;white-space:normal;vertical-align:middle;';
+  let out = '', last = 0, m;
+  while ((m = re.exec(raw))) {
+    let url = m[0];
+    const trail = (url.match(/[.,;:!?)\]]+$/) || [''])[0];   // "…pdf." → keep the dot as text
+    if (trail) url = url.slice(0, -trail.length);
+    let pre = raw.slice(last, m.index);
+    last = m.index + m[0].length - trail.length;
+    re.lastIndex = last;
+    let html;
+    let u; try { u = new URL(url); } catch (_) { u = null; }
+    const path = u ? u.pathname : '';
+    if (u && /^\/sms\/media-out\//.test(path)) {
+      // Our own texted-file link. Use the "📄 name:" label in front of it if present.
+      let name = '';
+      const lm = pre.match(/📄\s*([^\n]*?):\s*$/);
+      if (lm) { name = lm[1]; pre = pre.slice(0, lm.index); }
+      if (!name) { try { name = decodeURIComponent(path.split('/')[4] || ''); } catch (_) { name = ''; } }
+      const ext = (String(name).split('.').pop() || '').toUpperCase();
+      html = `<a href="${escHtml(url)}" target="_blank" rel="noopener" title="Open the file exactly as the customer sees it (link works 30 days after sending)" style="${chip}background:var(--bg-card,#fff);border:1px solid var(--border);color:var(--text-primary);text-decoration:none">`
+           + `<span style="font-size:15px">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px">${escHtml(name || 'File')}</span>`
+           + `<span style="color:var(--green);font-weight:600;white-space:nowrap">${ext && ext.length <= 4 ? ext + ' · ' : ''}Open ↗</span></a>`;
+    } else if (u && path === '/quote/view' && u.searchParams.get('token')) {
+      const dec = u.searchParams.get('action') === 'decline';
+      html = `<span title="The customer's one-time ${dec ? 'decline' : 'accept'} link for this quote. Not clickable here so it can't be confirmed from the office by mistake." style="${chip}${dec ? 'background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.35);color:#c0392b' : 'background:rgba(46,204,113,.10);border:1px solid rgba(46,204,113,.45);color:var(--green)'};font-weight:600">${dec ? '✗ Decline link' : '✓ Accept link'}</span>`;
+    } else {
+      const shown = url.replace(/^https?:\/\//, '');
+      html = `<a href="${escHtml(url)}" target="_blank" rel="noopener" style="color:var(--green);word-break:break-all">${escHtml(shown.length > 48 ? shown.slice(0, 45) + '…' : shown)}</a>`;
+    }
+    out += escHtml(pre) + html;
+  }
+  out += escHtml(raw.slice(last));
+  return out;
+}
+
+// ── 📋 SEND QUOTE BY TEXT (crm-2026-10-21b, Jon: "is there any way for the
+// approval to work over text like it does with email?") ──
+// Text twin of the quote email: attaches the quote PDF (as the 30-day file
+// link) and the SAME one-time Accept / Decline links the email carries
+// (_mintQuoteActionToken → worker /quote/view → /quote/confirm). The customer
+// taps, sees the confirmation page, confirms — the office gets the usual
+// "Quote accepted by …" email and the CRM applies it exactly as for email
+// (activity feed → hydrateQuoteStatusFromServer, works even on a 'draft').
+// Fills the composer only — nothing sends until Send is pressed. On send the
+// quote is marked delivered, the job advances to Awaiting Customer and the PDF
+// is saved to the customer's SharePoint folder, same as emailing it.
+let _smsQuoteSend = null;   // { quoteId, leadId, b64, filename } — applied after a successful send
+async function _smsInsertQuote() {
+  const lead = getLead(_smsLeadId); if (!lead) return;
+  const _fmt = n => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
+  const _net = x => { try { return (typeof _quoteNet === 'function') ? _quoteNet(x) : (calcQuoteTotals(x).quoteTotal || 0); } catch (_) { return x.quoteTotal || 0; } };
+  const qs = getQuotes().filter(x => x && x.leadId === lead.id && !x.deleted && !x.external && !['declined', 'invoiced'].includes(x.status))
+                        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  if (!qs.length) { toast('No quote on this job to send. Build one first (outside quotes have no PDF to text).', 'warning'); return; }
+  let q = qs[0];
+  if (qs.length > 1) {
+    const list = qs.map((x, i) => `${i + 1} = ${((x.label || '').trim() || x.id)} — ${_fmt(_net(x))} (${x.status || 'draft'})`).join('\n');
+    const pick = prompt('Which quote do you want to text?\n\n' + list + '\n\nType the number:', '1');
+    if (pick === null) return;
+    const n = parseInt(pick, 10);
+    if (!(n >= 1 && n <= qs.length)) { toast('Type one of the numbers listed', 'error'); return; }
+    q = qs[n - 1];
+  }
+  const _plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(q.source);
+  let wantLinks = true;
+  if (_plat) {
+    wantLinks = confirm(`This quote is marked ${q.source} — normally ${q.source} handles approval and payment.\n\nOK = include Accept / Decline links anyway (you are quoting the customer directly)\nCancel = text the PDF only`);
+  } else if (typeof enforceMarginFloor === 'function' && !enforceMarginFloor(q)) {
+    return;   // same margin-floor gate as emailing a quote
+  }
+  const ta = document.getElementById('sms-body');
+  if (ta && ta.value.trim() && !confirm('Replace the message you have typed with the quote text?')) return;
+
+  const qLead = getLead(q.leadId) || lead;
+  const qCust = getCustomer(q.customerId) || getCustomer(qLead.customerId);
+  let pdf = null;
+  try { pdf = generateQuotePDF(q, qCust, qLead, true); } catch (e) { console.warn('[GK] text-quote PDF failed:', e); }
+  if (!pdf || !pdf.dataUrl) { toast('Could not build the quote PDF', 'error'); return; }
+  const b64 = String(pdf.dataUrl).split(',')[1] || '';
+  if (!b64 || b64.length > 1500000) { toast('This quote PDF is too large to text — email it instead', 'warning'); return; }
+
+  let links = null;
+  if (wantLinks) {
+    toast('Creating the accept / decline links…', 'info');
+    try { links = await _mintQuoteActionToken(q); } catch (e) { links = { _err: (e && e.message) || String(e) }; }
+    if (!(links && links.acceptUrl && links.declineUrl)) {
+      if (!confirm('Could not create the Accept / Decline links' + (links && links._err ? ' (' + links._err + ')' : '') + '.\n\nOK = text the PDF without them\nCancel = stop')) return;
+      links = null;
+    }
+  }
+
+  const first = ((((qCust && qCust.firstName) || qLead.customerName || '')).trim().split(/\s+/)[0]) || 'there';
+  let me = (((S.user && S.user.name) || '').trim().split(/\s+/)[0]) || '';
+  if (/^jonathan$/i.test(me)) me = 'Jon';   // Jon signs as Jon
+  const parts = [`Hi ${first}, here's your GreenKey quote for ${_fmt(_net(q))}. The quote PDF is linked at the bottom of this text.`];
+  if (links) {
+    parts.push(`To ACCEPT${q.contingentOnUtility ? ' (contingent on the utility)' : ''}, tap: ${links.acceptUrl}`);
+    parts.push(`To decline, tap: ${links.declineUrl}`);
+    parts.push(`You'll see a confirmation page before anything is final. These links are just for you and expire in 30 days.`);
+  }
+  parts.push(`Questions? Just reply to this text. Thanks!${me ? ' ' + me : ''} — GreenKey`);
+  if (ta) { ta.value = parts.join('\n\n'); try { _smsUpdateCount(); } catch (_) {} }
+  _smsCurrentTemplateKey = 'quote_text';
+
+  _smsAttachments = _smsAttachments.filter(a => !a.isQuotePdf);
+  const nFiles = _smsAttachments.filter(a => a.kind === 'file').length;
+  if (nFiles >= _SMS_MAX_FILES) { toast('Up to ' + _SMS_MAX_FILES + ' files per text — remove one, then press 📋 Send quote again', 'warning'); return; }
+  _smsAttachments.push({ kind: 'file', contentType: 'application/pdf', dataBase64: b64, name: pdf.filename, isQuotePdf: true, quoteId: q.id });
+  _smsRenderAttachments();
+  _smsQuoteSend = { quoteId: q.id, leadId: q.leadId || lead.id, b64, filename: pdf.filename };
+  toast(links ? 'Quote + accept/decline links added — check it over, then press Send' : 'Quote PDF added — check it over, then press Send', 'success');
+}
+// After the text actually went out: mark delivered, advance the job, file the PDF.
+// Mirrors the quote-email post-send steps (advance-only, never downgrades).
+function _smsAfterQuoteSent(info) {
+  if (!info || !info.quoteId) return;
+  const nowIso = new Date().toISOString();
+  try {
+    const arr = getQuotes(); const i = arr.findIndex(x => x.id === info.quoteId);
+    if (i >= 0 && arr[i].status === 'draft') {
+      arr[i].status = 'delivered'; arr[i].deliveredAt = nowIso; arr[i].deliveredVia = 'text'; arr[i].updatedAt = nowIso;
+      saveQuotes(arr);
+    }
+  } catch (e) { console.warn('[GK] mark-delivered after quote text failed:', e); }
+  try {
+    const l = getLead(info.leadId);
+    const qdIdx = STAGES.findIndex(s => s.id === 'quote-delivered');
+    const ci = l ? STAGES.findIndex(s => s.id === l.stage) : -1;
+    if (l && ci >= 0 && qdIdx >= 0 && ci < qdIdx) {
+      upsertLead({ id: l.id, stage: 'quote-delivered', stageAt: nowIso });
+      toast('Job moved to Awaiting Customer', 'success');
+    }
+  } catch (e) { console.warn('[GK] stage-advance after quote text failed:', e); }
+  try {
+    if (info.b64 && typeof _saveQuotePDFToCustomerFolder === 'function') {
+      const bin = atob(info.b64); const bytes = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+      _saveQuotePDFToCustomerFolder(info.leadId, bytes, info.filename).catch(e => console.warn('[GK] SP PDF save (text) failed:', e));
+    }
+  } catch (e) { console.warn('[GK] PDF save after quote text failed:', e); }
+}
+
 // Outbound send (kept name "sendIntroSMS" for existing button handler).
 async function sendIntroSMS() {
   const lead = getLead(_smsLeadId);
@@ -36384,6 +36666,10 @@ async function sendIntroSMS() {
           saveLeads(_pa);
         }
       } catch(_){}
+    }
+    // 📋 Send quote went out (PDF still attached or the accept link still in the text).
+    if (_smsQuoteSend && (_smsAttachments.some(a => a.isQuotePdf) || /\/quote\/view\?token=/.test(message))) {
+      try { _smsAfterQuoteSent(_smsQuoteSend); } catch (_) {}
     }
     const _nPics = _imgUrls.length, _nFiles = _fileLines.length;
     _smsClearImage();
@@ -36650,11 +36936,14 @@ async function renderSMSThread(leadId, quiet) {
         } catch(_){}
       }
       return `<div style="display:flex;justify-content:${align};margin:2px 0">
-        <div style="max-width:66%;padding:3px 8px;background:${bg};border:${border};border-radius:9px;font-size:12.5px;line-height:1.2;color:var(--text-primary);white-space:pre-wrap">
-          ${mediaHtml}${m.body ? escHtml(m.body) : ''}
-          <div style="font-size:9.5px;color:var(--text-muted);margin-top:1px">${escHtml(who)}${_multi ? ' · ' + escHtml(_numTag(m.phone)) : ''} · ${ts}${statusChip}</div>
-        </div>
+        <div style="max-width:66%;padding:4px 8px;background:${bg};border:${border};border-radius:9px;font-size:12.5px;line-height:1.2;color:var(--text-primary)">${mediaHtml}${m.body ? `<div style="white-space:pre-wrap;line-height:1.35">${_smsBodyHtml(m.body)}</div>` : ''}<div style="font-size:9.5px;color:var(--text-muted);margin-top:2px">${escHtml(who)}${_multi ? ' · ' + escHtml(_numTag(m.phone)) : ''} · ${ts}${statusChip}</div></div>
       </div>`;
+      // crm-2026-10-21b (Jon — "the indention"): the bubble used to be
+      // white-space:pre-wrap around an indented template, so the source code's
+      // own line breaks + spaces showed as a blank line and an indent before
+      // every message (and a gap above the timestamp). Display-only — the
+      // customer never received those spaces. Now only the message text is
+      // pre-wrap and the markup around it has no stray whitespace.
     }).join('');
     try { _hydrateSmsMedia(el); } catch(_){}
     // File any new inbound customer pictures into the job (Pictures + SharePoint).
