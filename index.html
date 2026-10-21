@@ -1291,7 +1291,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -11471,7 +11471,17 @@ function changeQuoteJobType(qid, newType) {
       lmOverrideNote: old.lmOverrideNote
     };
   })();
-  upsertQuote({ ...q, jobType: newType, permitFee: newPermit, qq: sharedQQ });
+  // crm-2026-10-20c (Jon, Steve Moulson): the utility flags are stamped at quote
+  // creation from the job type and were NEVER revisited. Steve's web lead came in
+  // as New Service; Sherri's quote was created then and switched to NEMA 14-50,
+  // but kept contingentOnUtility/utilityDelayed = true — so the NEMA quote showed
+  // a '$200 utility coordination & site visit fee' and would have sent the
+  // utility-contingent email. She redid it as EV Charger to get rid of the fee,
+  // which is how hardwired-charger wording reached the customer. The flags now
+  // follow the job type on every switch.
+  const _utilNew = (newType === 'new-service' || newType === 'service-upgrade');
+  upsertQuote({ ...q, jobType: newType, permitFee: newPermit, qq: sharedQQ,
+                contingentOnUtility: _utilNew, utilityDelayed: _utilNew });
   // Force a recompute under the new type's rules.
   try {
     if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
