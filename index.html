@@ -733,16 +733,14 @@
       <textarea id="sms-body" style="width:100%;min-height:160px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-family:var(--font);font-size:13px;color:var(--text-primary);resize:vertical;outline:none;line-height:1.6;transition:border-color 0.15s" oninput="_smsUpdateCount()"></textarea>
     </div>
     <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <input type="file" id="sms-image-input" accept="image/*" style="display:none" onchange="_smsOnImagePick(this)">
-      <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="document.getElementById('sms-image-input').click()">📎 Attach picture</button>
+      <input type="file" id="sms-image-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" style="display:none" onchange="_smsOnAttachPick(this)">
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px" onclick="document.getElementById('sms-image-input').click()" title="Pictures go as picture messages (up to 5). PDFs / Word / Excel go as a download link good for 30 days (up to 3).">📎 Attach pictures or files</button>
+      <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#2ecc71;color:#2ecc71" onclick="_smsInsertPaymentOptions()" title="Fill in a payment request: Zelle QR (no fee) and/or a credit-card link (+3%). Review, then Send.">💳 Payment options</button>
       <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a smile" onclick="_smsInsertEmoji('🙂')">🙂</button>
       <button class="btn btn-g" style="padding:5px 11px;font-size:16px;line-height:1" title="Insert a thumbs up" onclick="_smsInsertEmoji('👍')">👍</button>
-      <div id="sms-image-preview" style="display:none;align-items:center;gap:8px">
-        <img id="sms-image-thumb" alt="attachment" style="height:40px;border-radius:6px;border:1px solid var(--border)">
-        <span id="sms-image-name" style="font-size:11.5px;color:var(--text-secondary);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-        <button class="btn btn-g" style="padding:2px 8px;font-size:11px" onclick="_smsClearImage()">✕ remove</button>
-      </div>
     </div>
+    <div id="sms-attach-list" style="display:none;flex-wrap:wrap;gap:8px;margin:-4px 0 12px"></div>
+    <div id="sms-attach-note" style="display:none;font-size:11px;color:var(--text-muted);margin:-6px 0 12px"></div>
     <div id="sms-prev-wrap" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--r);font-size:12px;color:var(--text-secondary)">
       <span style="color:var(--green);font-weight:600">Previously sent</span> — <span id="sms-prev-date"></span>
     </div>
@@ -1291,7 +1289,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-20d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -31025,7 +31023,7 @@ function renderPaymentsPage(){
     // OLDEST FIRST — this is a chase list, so the thing that has been waiting
     // longest belongs at the top. (It used to sort newest-first.)
     .sort((a,b) => String(_sinceOf(a)||'').localeCompare(String(_sinceOf(b)||'')));
-  const srcLabel = { 'options-email': 'Options email', 'field-link': 'Field pay link', 'field-qr': 'Field Zelle QR' };
+  const srcLabel = { 'options-email': 'Options email', 'options-text': 'Payment text', 'field-link': 'Field pay link', 'field-qr': 'Field Zelle QR' };
   const _hl = l => (S.payReturnLeadId && l.id === S.payReturnLeadId) ? ' style="background:var(--green-dim)"' : '';
   const expRows = expected.map(l => {
     // `e` is now OPTIONAL — a row can be here because the install is done and
@@ -36108,7 +36106,19 @@ function applySMSTemplate(key, lead, cust) {
 
 // Outbound picture (MMS): pick + preview, reusing the photo resize helper so
 // the image stays small enough for MMS. Held until send, then uploaded.
-let _smsPendingImage = null; // { contentType, dataBase64, name }
+// crm-2026-10-20d (Jon: "text pics and files as well"): several attachments per
+// text. Pictures → MMS (up to 5). Documents → uploaded and texted as a LINK
+// (carriers mangle PDF MMS; a link opens on every phone; kept 30 days).
+let _smsAttachments = [];   // [{ kind:'image'|'file', contentType, dataBase64, name, thumb, isZelleQR }]
+let _smsPayExpect = null;   // set by 💳 Payment options; stamped on the job once the text sends
+const _SMS_DOC_TYPES = { pdf:'application/pdf', doc:'application/msword',
+  docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  txt:'text/plain', csv:'text/csv' };
+const _SMS_MAX_IMAGES = 5, _SMS_MAX_FILES = 3;
+function _smsBlobToB64(blob) {
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
+}
 // Insert an emoji at the cursor in the text composer (keeps the caret after it).
 function _smsInsertEmoji(ch) {
   const ta = document.getElementById('sms-body');
@@ -36141,31 +36151,147 @@ function _smsUpdateCount() {
     + (hasEmoji && units > 0 ? ' · emoji (70/seg)' : '');
 }
 
-async function _smsOnImagePick(input) {
-  const file = input.files && input.files[0];
-  if (!file) return;
-  if (!/^image\//i.test(file.type)) { toast('Please choose an image file', 'warning'); input.value = ''; return; }
-  try {
-    const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
-    let blob, mime = file.type, name = file.name || 'photo.jpg';
-    if (typeof _resizeAndConvertImage === 'function') {
-      try { const r = await _resizeAndConvertImage(file, dataUrl, { maxDimension: 1200, quality: 0.8 }); blob = r.blob; mime = r.mimeType || mime; name = r.name || name; }
-      catch(_) { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
-    } else { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
-    const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
-    if (b64.length > 1500000) { toast('That picture is too large even after resizing — try a smaller one', 'warning'); input.value = ''; return; }
-    _smsPendingImage = { contentType: mime, dataBase64: b64, name };
-    const prev = document.getElementById('sms-image-preview');
-    const thumb = document.getElementById('sms-image-thumb');
-    if (thumb) thumb.src = URL.createObjectURL(blob);
-    const nm = document.getElementById('sms-image-name'); if (nm) nm.textContent = name;
-    if (prev) prev.style.display = 'inline-flex';
-  } catch(e) { toast('Could not read image: ' + (e.message || e), 'error'); }
+async function _smsOnAttachPick(input) {
+  const files = Array.from((input && input.files) || []);
+  if (input) input.value = '';
+  for (const file of files) {
+    const ext = String(file.name || '').split('.').pop().toLowerCase();
+    const isImg = /^image\//i.test(file.type) && !/svg/i.test(file.type);
+    const docType = _SMS_DOC_TYPES[ext];
+    if (!isImg && !docType) { toast((file.name || 'That file') + " can't be texted — pictures, PDF, Word, Excel or text/CSV only", 'warning'); continue; }
+    const nImg = _smsAttachments.filter(a => a.kind === 'image').length;
+    const nFile = _smsAttachments.length - nImg;
+    if (isImg && nImg >= _SMS_MAX_IMAGES) { toast('Up to ' + _SMS_MAX_IMAGES + ' pictures per text', 'warning'); continue; }
+    if (!isImg && nFile >= _SMS_MAX_FILES) { toast('Up to ' + _SMS_MAX_FILES + ' files per text', 'warning'); continue; }
+    try {
+      if (isImg) {
+        const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
+        let blob, mime = file.type, name = file.name || 'photo.jpg';
+        if (typeof _resizeAndConvertImage === 'function') {
+          try { const r = await _resizeAndConvertImage(file, dataUrl, { maxDimension: 1200, quality: 0.8 }); blob = r.blob; mime = r.mimeType || mime; name = r.name || name; }
+          catch(_) { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
+        } else { blob = (typeof _dataUrlToBlob === 'function') ? _dataUrlToBlob(dataUrl) : await (await fetch(dataUrl)).blob(); }
+        const b64 = await _smsBlobToB64(blob);
+        if (b64.length > 1500000) { toast((file.name || 'That picture') + ' is too large even after resizing — try a smaller one', 'warning'); continue; }
+        _smsAttachments.push({ kind: 'image', contentType: mime, dataBase64: b64, name, thumb: URL.createObjectURL(blob) });
+      } else {
+        if (file.size > 1100000) { toast((file.name || 'That file') + ' is too large to text (max about 1 MB) — email it instead', 'warning'); continue; }
+        const b64 = await _smsBlobToB64(file);
+        _smsAttachments.push({ kind: 'file', contentType: docType, dataBase64: b64, name: file.name || ('file.' + ext) });
+      }
+    } catch(e) { toast('Could not read ' + (file.name || 'file') + ': ' + (e.message || e), 'error'); }
+  }
+  _smsRenderAttachments();
+}
+// Kept for anything still calling the old single-picture name.
+function _smsOnImagePick(input) { return _smsOnAttachPick(input); }
+function _smsRenderAttachments() {
+  const box = document.getElementById('sms-attach-list');
+  if (box) {
+    box.innerHTML = _smsAttachments.map((a, i) =>
+      `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated)">`
+      + (a.kind === 'image' ? `<img src="${a.thumb}" alt="" style="height:32px;border-radius:4px;background:#fff">` : `<span style="font-size:18px">📄</span>`)
+      + `<span style="font-size:11.5px;color:var(--text-secondary);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.name || '')}">${escHtml(a.name || '')}</span>`
+      + `<button class="btn btn-g" style="padding:1px 6px;font-size:11px" onclick="_smsRemoveAttachment(${i})" title="Remove">✕</button></span>`
+    ).join('');
+    box.style.display = _smsAttachments.length ? 'flex' : 'none';
+  }
+  const note = document.getElementById('sms-attach-note');
+  if (note) {
+    const hasFile = _smsAttachments.some(a => a.kind === 'file');
+    note.textContent = hasFile ? 'Files are sent as a download link at the bottom of the text (the link works for 30 days).' : '';
+    note.style.display = hasFile ? 'block' : 'none';
+  }
+}
+function _smsRemoveAttachment(i) {
+  const a = _smsAttachments[i];
+  if (a && a.thumb && String(a.thumb).startsWith('blob:')) { try { URL.revokeObjectURL(a.thumb); } catch(_){} }
+  _smsAttachments.splice(i, 1);
+  _smsRenderAttachments();
 }
 function _smsClearImage() {
-  _smsPendingImage = null;
-  const prev = document.getElementById('sms-image-preview'); if (prev) prev.style.display = 'none';
+  _smsAttachments.forEach(a => { if (a && a.thumb && String(a.thumb).startsWith('blob:')) { try { URL.revokeObjectURL(a.thumb); } catch(_){} } });
+  _smsAttachments = [];
+  _smsPayExpect = null;
+  _smsRenderAttachments();
   const inp = document.getElementById('sms-image-input'); if (inp) inp.value = '';
+}
+
+// ── 💳 PAYMENT OPTIONS BY TEXT (crm-2026-10-20d, Jon: "text our Zelle QR code or
+// send a CC payment link so we can collect deposits via our texting system") ──
+// Text twin of sendPaymentOptionsEmail(). Fills the composer — nothing sends
+// until Send is pressed. Zelle → the bank-issued QR (GK_ZELLE_QR_B64) rides as a
+// picture + email address + memo code. Card → a real Stripe Payment Link minted
+// by the worker for no-fee × 1.03 (same rounding as the email); it records ITSELF
+// when paid (_applyStripePayment). On send, lead.paymentExpected is stamped so the
+// Payments page tracks the ask and the field app shows "pay link texted".
+async function _smsInsertPaymentOptions() {
+  const lead = getLead(_smsLeadId); if (!lead) return;
+  const cust = getCustomer(lead.customerId);
+  const _plat = (typeof PLATFORM_PAY_SOURCES !== 'undefined') && PLATFORM_PAY_SOURCES.includes(lead.source);
+  const _t = (typeof _acceptedScopeTotals === 'function') ? _acceptedScopeTotals(lead) : { nDirect: 0 };
+  if (_plat && !_t.nDirect && !confirm(lead.source + ' collects payment on this job, not GreenKey.\n\nRequest a payment from the customer anyway?')) return;
+  const paid  = (typeof _pcPaidTotal === 'function') ? _pcPaidTotal(lead) : 0;
+  const total = (typeof _pcJobTotal === 'function') ? _pcJobTotal(lead) : null;
+  let q = lead.acceptedQuoteId ? getQuote(lead.acceptedQuoteId) : null;
+  if (!q) {
+    q = getQuotes().filter(x => x && x.leadId === lead.id && !x.deleted && !x.external && x.status !== 'declined')
+                   .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  }
+  let dep = 0;
+  try { const m = q ? (calcDepositSchedule(q) || []).find(x => x && x.key === 'deposit') : null; dep = m ? Math.round(m.amount) : 0; } catch(_) {}
+  let def = 0, label = 'payment';
+  if (!paid && dep) { def = dep; label = 'deposit'; }
+  else if (total != null && total - paid > 0) { def = total - paid; label = paid ? 'remaining balance' : 'payment'; }
+  const _fmt = n => '$' + Math.round(n).toLocaleString('en-US');
+  const info = [ (!paid && dep) ? 'Deposit on the quote: ' + _fmt(dep) : '',
+                 total != null ? 'Job total: ' + _fmt(total) + ' · Paid so far: ' + _fmt(paid) : '' ].filter(Boolean).join('\n');
+  const v = prompt('Amount to request — the NO-FEE (Zelle / cash) price.' + (info ? '\n\n' + info : ''), def ? String(def) : '');
+  if (v === null) return;
+  const base = Math.ceil(parseFloat(String(v).replace(/[$,\s]/g, '')) || 0);
+  if (!base || base <= 0) { toast('Enter a valid amount', 'error'); return; }
+  if (base !== def) label = 'payment';
+  const how = prompt('Which ways to pay?\n\n1 = Zelle only (no fee)\n2 = Credit card only (+3%)\n3 = Both\n\nType 1, 2 or 3:', '3');
+  if (how === null) return;
+  const mode = String(how).trim();
+  if (!['1', '2', '3'].includes(mode)) { toast('Type 1, 2 or 3', 'error'); return; }
+  const wantZelle = mode !== '2', wantCard = mode !== '1';
+  const card = Math.ceil(base * 1.03);   // card tier +3%, rounded up like the quote engine + the email
+  const who = (cust && custFullName(cust)) || lead.customerName || 'Customer';
+  let url = '';
+  if (wantCard) {
+    toast('Creating the card payment link…', 'info');
+    try {
+      const token = await _acquireSMSToken();
+      const r = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + '/stripe/link', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, amount: card, customerName: who,
+                               description: label === 'deposit' ? 'GreenKey project deposit' : 'GreenKey electrical work' })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) throw new Error(d.error || 'Could not create the payment link');
+      url = d.url;
+    } catch (e) { toast('Card link failed: ' + (e.message || e) + ' — nothing was added', 'error'); return; }
+  }
+  const first = (who.trim().split(/\s+/)[0]) || 'there';
+  const memo = payMemoCode(lead.id);
+  const parts = [`Hi ${first}, here's how to pay your ${label} of ${_fmt(base)} for your GreenKey project:`];
+  if (wantZelle) parts.push(`${wantCard ? 'Option 1 — ' : ''}Zelle (no fee): send ${_fmt(base)} to ${GK_ZELLE_EMAIL}, or scan the QR code in this text. Please put ${memo} in the Zelle note.`);
+  if (wantCard)  parts.push(`${wantZelle ? 'Option 2 — ' : ''}Credit card (+3% processing): ${_fmt(card)} here: ${url}`);
+  parts.push('Questions? Just reply to this text. Thank you! — GreenKey');
+  const ta = document.getElementById('sms-body');
+  if (ta) { ta.value = parts.join('\n\n'); try { _smsUpdateCount(); } catch(_){} }
+  _smsCurrentTemplateKey = 'payment_options';
+  _smsAttachments = _smsAttachments.filter(a => !a.isZelleQR);
+  if (wantZelle && GK_ZELLE_QR_B64) {
+    _smsAttachments.unshift({ kind: 'image', contentType: 'image/png', dataBase64: GK_ZELLE_QR_B64.split(',')[1] || '',
+                              name: 'Zelle QR code', thumb: GK_ZELLE_QR_B64, isZelleQR: true });
+  }
+  _smsRenderAttachments();
+  _smsPayExpect = { amount: base, methods: [wantZelle ? 'zelle' : '', wantCard ? 'card-link' : ''].filter(Boolean),
+                    memoCode: memo, cardAmount: wantCard ? card : null };
+  toast('Payment options added — check it over, then press Send', 'success');
 }
 
 // Outbound send (kept name "sendIntroSMS" for existing button handler).
@@ -36177,7 +36303,7 @@ async function sendIntroSMS() {
   const phone = (_toSel && _toSel.value) ? _toSel.value : (cust?.phone || lead?.customerPhone || '');
   const message = document.getElementById('sms-body').value.trim();
 
-  if (!message && !_smsPendingImage) { toast('Add a message or a picture to send', 'error'); return; }
+  if (!message && !_smsAttachments.length) { toast('Add a message, picture or file to send', 'error'); return; }
 
   const btn = document.getElementById('sms-send-btn');
   btn.disabled = true;
@@ -36185,18 +36311,23 @@ async function sendIntroSMS() {
 
   try {
     const token = await _acquireSMSToken();
-    // If a picture is attached, upload it first to get a public URL Twilio can fetch.
-    let mediaUrl = null;
-    if (_smsPendingImage) {
+    // Upload every attachment first to get public URLs. Pictures → MMS media;
+    // files → a download link appended to the message (crm-2026-10-20d).
+    const _imgUrls = [], _fileLines = [];
+    for (const a of _smsAttachments) {
       const up = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/upload-media', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ contentType: _smsPendingImage.contentType, dataBase64: _smsPendingImage.dataBase64 })
+        body: JSON.stringify({ contentType: a.contentType, dataBase64: a.dataBase64, name: a.name || '' })
       });
       const upData = await up.json().catch(() => ({}));
-      if (!up.ok || !upData.url) throw new Error(upData?.error || 'Picture upload failed');
-      mediaUrl = upData.url;
+      if (!up.ok || !upData.url) throw new Error((upData && upData.error) || ((a.name || 'Attachment') + ' upload failed'));
+      if (a.kind === 'file') _fileLines.push('📄 ' + (a.name || 'File') + ': ' + upData.url);
+      else _imgUrls.push(upData.url);
     }
+    const mediaUrl = _imgUrls[0] || null;              // older worker builds read only this one
+    const mediaUrls = _imgUrls.slice(1);               // worker-2026-10-20b+ sends these too
+    const _outMsg = [message, _fileLines.join('\n')].filter(Boolean).join('\n\n');
     const resp = await fetch(SMS_WORKER_URL.replace(/\/$/,'') + '/sms/send', {
       method: 'POST',
       headers: {
@@ -36206,9 +36337,10 @@ async function sendIntroSMS() {
       body: JSON.stringify({
         leadId:      _smsLeadId,
         to:          phone,
-        message,
+        message:     _outMsg,
         templateKey: _smsCurrentTemplateKey,
         mediaUrl,
+        mediaUrls,
         // Lets the worker say WHO texted back in notification emails and
         // owner-phone forwards (stored on phone_lead_map).
         customerName: cust ? custFullName(cust) : (lead?.customerName || '')
@@ -36217,9 +36349,25 @@ async function sendIntroSMS() {
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data?.error || data?.message || 'Send failed');
 
+    // 💳 Payment options went out → track the ask (same shape as the email +
+    // field pay link, so the Payments page and the field app both see it).
+    if (_smsPayExpect) {
+      try {
+        const _pa = getLeads(); const _pi = _pa.findIndex(x => x.id === _smsLeadId);
+        // Always stamp: the Payments chase list shows the row only while a balance
+        // is still owed (_stillOwed), so a balance ask after a deposit tracks too.
+        if (_pi >= 0) {
+          _pa[_pi].paymentExpected = { amount: _smsPayExpect.amount, methods: _smsPayExpect.methods,
+            at: new Date().toISOString(), source: 'options-text', memoCode: _smsPayExpect.memoCode };
+          _pa[_pi].updatedAt = new Date().toISOString();
+          saveLeads(_pa);
+        }
+      } catch(_){}
+    }
+    const _nPics = _imgUrls.length, _nFiles = _fileLines.length;
     _smsClearImage();
     document.getElementById('sms-modal').classList.remove('show');
-    toast(mediaUrl ? 'Picture text sent! 📷' : 'Text sent successfully! 📱', 'success');
+    toast(_nPics || _nFiles ? `Text sent with ${[_nPics ? _nPics + ' picture' + (_nPics > 1 ? 's' : '') : '', _nFiles ? _nFiles + ' file' + (_nFiles > 1 ? 's' : '') : ''].filter(Boolean).join(' + ')} 📎` : 'Text sent successfully! 📱', 'success');
     renderSMSThread(_smsLeadId);
   } catch(e) {
     toast('Failed to send: ' + e.message, 'error');
