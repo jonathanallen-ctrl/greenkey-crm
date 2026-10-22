@@ -595,6 +595,13 @@
   /* LIGHTBOX */
   #lb-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1500;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 0.2s}
   #lb-overlay.show{opacity:1;pointer-events:all}
+  /* crm-2026-10-22d (Jon): Payments page tables had no cell padding or row lines,
+     so "✓ Record received" was hard to match to its customer. Rows now get
+     padding, a divider and light striping; the ↩ highlighted row keeps its
+     inline green (a <tr style> beats the stripe). */
+  .pc-tbl td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .pc-tbl tr:nth-child(even){background:var(--bg-elevated)}
+  .pc-tbl tr:last-child td{border-bottom:none}
   #lb-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%;padding:20px 72px;position:relative;max-height:calc(100vh - 80px);min-height:0;overflow:hidden;touch-action:none}
   /* crm-2026-10-21a: NO will-change/scale here — zoom resizes the image for real
      (see _applyLBTransform). will-change:transform made Chrome/Edge stretch the
@@ -1293,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -31349,7 +31356,7 @@ function renderPaymentsPage(){
       <h3 style="margin:0;font-size:15px">⏳ Waiting on payment (${expected.length})</h3>
       <div style="font-size:12px;color:var(--text-muted)">Every payment ask now carries a memo code (e.g. <strong>${payMemoCode('GK-2026-1234')}</strong>) so Zelle deposits identify themselves.</div>
     </div>
-    ${expected.length ? `<table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
+    ${expected.length ? `<table class="pc-tbl" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
       <tr><th style="${th}">Job</th><th style="${th}">Owed</th><th style="${th}">Method</th><th style="${th}">Asked via</th><th style="${th}">Waiting since</th><th style="${th}">Memo code</th><th style="${th}"></th></tr>${expRows}</table>`
     : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0">Nothing outstanding. A job appears here when a payment ask goes out and isn't covered, <strong>or</strong> when the install is finished and there's still a balance — even if nobody sent an ask.</p>`}
   </div>
@@ -31364,12 +31371,12 @@ function renderPaymentsPage(){
       <input id="pc-un-note" class="jd-fi" type="text" placeholder="Sender name / memo text from the bank app" style="flex:1;min-width:200px">
       <button class="btn btn-p" style="padding:6px 14px;font-size:13px" onclick="_pcAddUnmatched()">+ Park it</button>
     </div>
-    ${ups.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    ${ups.length ? `<table class="pc-tbl" style="width:100%;border-collapse:collapse;font-size:13px">
       <tr><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Seen</th><th style="${th}">Sender / memo</th><th style="${th}"></th></tr>${unRows}</table>` : ''}
   </div>
   <div style="${card}">
     <h3 style="margin:0 0 10px;font-size:15px">✓ Recently recorded (${recent.length})</h3>
-    ${recent.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    ${recent.length ? `<table class="pc-tbl" style="width:100%;border-collapse:collapse;font-size:13px">
       <tr><th style="${th}">Job</th><th style="${th}">Amount</th><th style="${th}">Method</th><th style="${th}">Date</th><th style="${th}">Balance</th></tr>${recRows}</table>`
     : `<p style="font-size:13px;color:var(--text-muted);margin:0">No recorded payments yet.</p>`}
   </div>`;
