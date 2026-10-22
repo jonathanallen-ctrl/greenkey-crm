@@ -1293,7 +1293,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-21b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5809,7 +5809,42 @@ const _PANEL_INFO_JOB_TYPES = ['ev-residential','nema-1450','hvac-circuit','circ
 // PANEL_BRAND_OPTIONS (an {id,label} array, ~line 6360) for Quick Quote pricing.
 // These are the SNAPSHOT's plain-string options. Do not merge or rename them to
 // match — a duplicate top-level const kills the entire script.
-const SNAP_PANEL_BRAND_OPTIONS  = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+const SNAP_PANEL_BRAND_OPTIONS  = ['Sq D Homeline','Sq D QO','Siemens QP','Murray MP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+// ── PANEL MAKE vs BREAKER TYPE (crm-2026-10-22a, Jon — Crouse-Hinds panel whose
+// label lists Crouse-Hinds MP / Bryant BR, not Siemens QP: "I need to … enter
+// whatever type panel it is and the approved replacement so there's no
+// guesswork on the techs part"). panelBrand above STAYS the breaker type to
+// bring — the quote engine (BRH260 adder, "60-amp QO" wording) and the field
+// app read it. panelMake is the panel actually on the wall; panelLabelNote
+// records what the label allows. Picking a make pre-fills the usual breaker
+// only when there is one; label-dependent makes say "read the label".
+const SNAP_PANEL_MAKE_OPTIONS = ['Square D Homeline','Square D QO','Siemens','Murray','ITE','Crouse-Hinds','Eaton / Cutler-Hammer BR','Eaton / Cutler-Hammer CH','Bryant','Westinghouse','GE','Challenger','Federal Pacific (FPE)','Zinsco','Pushmatic','Other'];
+const SNAP_MAKE_DEFAULT_BREAKER = {
+  'Square D Homeline':'Sq D Homeline', 'Square D QO':'Sq D QO', 'Siemens':'Siemens QP',
+  'Murray':'Siemens QP', 'Eaton / Cutler-Hammer BR':'Eaton BR', 'Eaton / Cutler-Hammer CH':'Eaton CH',
+  'Bryant':'Eaton BR', 'GE':'GE/ABB'
+};
+const SNAP_MAKE_OLD_FAMILY = ['Federal Pacific (FPE)','Zinsco','Pushmatic','Challenger'];
+function _snapMakeHint(make){
+  if (!make) return '';
+  if (SNAP_MAKE_OLD_FAMILY.includes(make)) return '⚠ Older / problem panel family — check condition and breaker availability; consider quoting a panel replacement. Record what the label allows below.';
+  if (make === 'Murray') return 'Usual: Siemens QP — confirm the label lists it (older Murray / Crouse-Hinds labels may not).';
+  if (SNAP_MAKE_DEFAULT_BREAKER[make]) return '';
+  return 'No standard match — read the panel label and pick a breaker type it lists. Note what the label allows below.';
+}
+// Make changed → show/hide "Other", update the hint, and pre-fill the breaker
+// type only if it's empty or was pre-filled by us (never over a hand pick).
+function _snapMakeChanged(sel){
+  const make = sel ? sel.value : '';
+  const ow = document.getElementById('snap-panel-make-other-wrap'); if (ow) ow.style.display = make === 'Other' ? 'block' : 'none';
+  const h = document.getElementById('snap-panel-make-hint'); if (h) { const t = _snapMakeHint(make); h.textContent = t; h.style.display = t ? 'block' : 'none'; }
+  const b = document.getElementById('snap-panel-brand');
+  const def = SNAP_MAKE_DEFAULT_BREAKER[make];
+  if (b && def && (!b.value || b.dataset.auto === '1')) {
+    b.value = def; b.dataset.auto = '1';
+    const bw = document.getElementById('snap-panel-brand-other-wrap'); if (bw) bw.style.display = 'none';
+  }
+}
 const SNAP_BREAKER_SIZE_OPTIONS = ['100-amp','60-amp','50-amp','50-amp GFCI','40-amp','Other'];
 
 // ⚠ SPEC RULE — BR260 IS NEVER USED ON EV LOADS.
@@ -5837,7 +5872,9 @@ function leadPanelInfoMissing(lead) {
 // Human-readable panel summary for chips / info form. Returns '' if nothing recorded.
 function leadPanelSummary(lead) {
   const s = lead?.electricalSnapshot || {};
-  const brand = s.panelBrand === 'Other' ? (s.panelBrandOther || 'Other') : (s.panelBrand || '');
+  const _b = s.panelBrand === 'Other' ? (s.panelBrandOther || 'Other') : (s.panelBrand || '');
+  const _m = s.panelMake === 'Other' ? (s.panelMakeOther || '') : (s.panelMake || '');
+  const brand = (_m && _b) ? `${_m} panel → ${_b} breakers` : (_b || (_m ? _m + ' panel' : ''));
   const bkr   = s.breakerSize === 'Other' ? (s.breakerSizeOther || 'Other') : (s.breakerSize || '');
   const strategy = s.major240VLoads || '';
   return [brand, bkr, s.serviceSize ? s.serviceSize + ' service' : '', strategy].filter(Boolean).join(' · ');
@@ -15850,6 +15887,10 @@ function saveJobSnapshot(leadId, silent=false) {
     serviceSize:      document.getElementById('snap-panels')?.value||'200A',
     panelBrand,
     panelBrandOther:  panelBrand==='Other' ? (document.getElementById('snap-panel-brand-other')?.value||'') : '',
+    // crm-2026-10-22a: the panel on the wall + what its label allows
+    panelMake:        document.getElementById('snap-panel-make')?.value||'',
+    panelMakeOther:   (document.getElementById('snap-panel-make')?.value==='Other') ? (document.getElementById('snap-panel-make-other')?.value||'') : '',
+    panelLabelNote:   document.getElementById('snap-panel-label-note')?.value||'',
     breakerSize,
     breakerSizeOther: breakerSize==='Other' ? (document.getElementById('snap-breaker-size-other')?.value||'') : '',
     subpanel:         document.getElementById('snap-subpanel')?.checked||false,
@@ -16923,14 +16964,31 @@ function renderJobDetail(id) {
       </div>
       <div class="jd-fg" style="margin-top:10px">
         <div class="jd-f">
-          <div class="jd-fl">Panel / Breaker Make & Model</div>
-          <select class="jd-fi" id="snap-panel-brand" onchange="document.getElementById('snap-panel-brand-other-wrap').style.display=this.value==='Other'?'block':'none'">
+          <div class="jd-fl">Panel Make (on the label)</div>
+          <select class="jd-fi" id="snap-panel-make" onchange="_snapMakeChanged(this)">
+            ${SNAP_PANEL_MAKE_OPTIONS.map(o=>`<option value="${o}"${(snap.panelMake||'')==o?' selected':''}>${o}</option>`).join('')}
+            ${!snap.panelMake?'<option value="" selected disabled>— Select —</option>':''}
+          </select>
+          <div id="snap-panel-make-other-wrap" style="margin-top:6px;display:${snap.panelMake==='Other'?'block':'none'}">
+            <input class="jd-fi" id="snap-panel-make-other" placeholder="Enter panel make / model" value="${escHtml(snap.panelMakeOther||'')}">
+          </div>
+          <div id="snap-panel-make-hint" style="margin-top:5px;font-size:11.5px;color:var(--amber);display:${_snapMakeHint(snap.panelMake||'')?'block':'none'}">${escHtml(_snapMakeHint(snap.panelMake||''))}</div>
+        </div>
+        <div class="jd-f">
+          <div class="jd-fl">Breaker Type to Use (approved for this panel)</div>
+          <select class="jd-fi" id="snap-panel-brand" onchange="this.dataset.auto='0';document.getElementById('snap-panel-brand-other-wrap').style.display=this.value==='Other'?'block':'none'">
             ${SNAP_PANEL_BRAND_OPTIONS.map(o=>`<option value="${o}"${(snap.panelBrand||'')==o?' selected':''}>${o}</option>`).join('')}
             ${!snap.panelBrand?'<option value="" selected disabled>— Select —</option>':''}
           </select>
           <div id="snap-panel-brand-other-wrap" style="margin-top:6px;display:${snap.panelBrand==='Other'?'block':'none'}">
-            <input class="jd-fi" id="snap-panel-brand-other" placeholder="Enter make / model" value="${snap.panelBrandOther||''}">
+            <input class="jd-fi" id="snap-panel-brand-other" placeholder="Enter breaker type (e.g. Eaton CL)" value="${escHtml(snap.panelBrandOther||'')}">
           </div>
+        </div>
+      </div>
+      <div class="jd-fg" style="margin-top:10px">
+        <div class="jd-f">
+          <div class="jd-fl">Panel Label Note (what the label allows)</div>
+          <input class="jd-fi" id="snap-panel-label-note" placeholder="e.g. Label lists Crouse-Hinds MP, Bryant BR/BRH — Siemens QP not listed" value="${escHtml(snap.panelLabelNote||'')}">
         </div>
         <div class="jd-f">
           <div class="jd-fl">Breaker Size</div>
