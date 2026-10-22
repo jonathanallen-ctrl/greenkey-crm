@@ -1293,7 +1293,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -12241,7 +12241,10 @@ function _buildPaymentScheduleText(q) {
     txt += `\n  ${m.label}: ${fmt$(m.amount)}\n     ${m.timing}\n`;
     if (m.detail) txt += `     ${m.detail}\n`;
   });
-  txt += `\nWe'll send a separate invoice via Intuit / QuickBooks for each milestone — pay online by card, ACH, or check.\n`;
+  // crm-2026-10-22b (Jon): payments are requested by text or email now (💳 Payment
+  // options: Zelle QR + Stripe card link) — say so, and state the 3% card fee up
+  // front. Quote prices are the no-fee prices (2026-07-02 headline decision).
+  txt += `\nHOW TO PAY — when each payment is due, we'll send you a request by text or email:\n  • Zelle — no fee (our Zelle details and QR code come with each request)\n  • Check — no fee\n  • Credit or debit card — secure payment link; a 3% card processing fee is added\nThe prices in this quote are the no-fee prices.\n`;
   // Customer-facing rationale — heads off the "why am I paying upfront?"
   // objection before it lands. Skipped on contingent-utility quotes since
   // those already explain the $200 fee in the body copy.
@@ -12349,8 +12352,9 @@ Here's exactly how the process works once you're ready to go:
 
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
-     Permit approval typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Permit approval typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 {orderSteps}
 
 Total timeline from start to finish: typically 2–4 weeks.
@@ -12421,8 +12425,9 @@ Here's how the process works:
 
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
-     Permit approval typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Permit approval typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   3. WE GET YOU SCHEDULED
      Once the permit is in hand, we'll reach out to get you on the calendar
@@ -12493,8 +12498,9 @@ WHAT HAPPENS NEXT
 
   2. WE APPLY FOR YOUR PERMIT
      Once approved, we submit your electrical permit application to the local jurisdiction.
-     Permit approval typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Permit approval typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   3. EQUIPMENT ORDER & DELIVERY
      We order the equipment and coordinate delivery to your property.
@@ -12532,8 +12538,8 @@ HOW WE PROCEED
 
   1. CONTINGENT ACCEPTANCE — UTILITY COORDINATION FEE: $200
      Use the Accept button below to authorize us to begin coordination with
-     the utility on your behalf. We'll send a $200 invoice via Intuit /
-     QuickBooks for the utility coordination fee.
+     the utility on your behalf. We'll send you a $200 payment request
+     (by text or email) for the utility coordination fee.
 
      • If you proceed after we get the utility cost, the $200 is credited
        against your final invoice — you don't pay it twice.
@@ -12586,11 +12592,12 @@ WHAT HAPPENS NEXT
 
   1. APPROVE YOUR QUOTE
      Use the Accept button below — or reply to this email / give us a call.
-     Once approved, the deposit invoice is sent via Intuit / QuickBooks.
+     Once approved, we'll send your deposit request by text or email.
 
   2. WE APPLY FOR YOUR PERMIT
      We submit your electrical permit application to the local jurisdiction.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   3. WE DO THE PHYSICAL WORK
      About 90% of the install is completed and we get the AHJ service inspection.
@@ -12622,8 +12629,10 @@ Here's what to expect from here:
      All pricing, approval, payment, and paperwork for the installation itself goes through Qmerit's platform. Please follow their instructions to review and accept the quote.
 
   2. WE APPLY FOR YOUR PERMIT
-     Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Once you've approved the quote through Qmerit, we'll submit your electrical permit application to the local jurisdiction.
+     Permit review typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   3. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
@@ -12652,8 +12661,10 @@ Here's what to expect from here:
      All pricing, approval, and payment for the installation is handled through Electrum's platform. Please follow their instructions to review and accept the quote.
 
   2. WE APPLY FOR YOUR PERMIT
-     Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     Once you've approved the quote, we'll submit your electrical permit application to the local jurisdiction.
+     Permit review typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   3. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.
@@ -12678,8 +12689,10 @@ WHAT HAPPENS NEXT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   1. WE APPLY FOR YOUR PERMIT
-     We'll submit your electrical permit application to the local jurisdiction. Permit review typically takes 1–2 weeks.
-     Please note: if the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.
+     We'll submit your electrical permit application to the local jurisdiction.
+     Permit review typically takes 1–2 weeks; some jurisdictions take longer.
+     Please note: if the project is cancelled after the permit application is submitted,
+     the permit fee is non-refundable and will be invoiced.
 
   2. WE SCHEDULE YOUR INSTALLATION
      Once the permit is in hand{chargerArrivedSuffix}, we'll reach out directly to get you on the calendar for installation day.

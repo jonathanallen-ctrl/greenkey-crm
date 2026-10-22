@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-10-22 field-40';
+const BUILD = '2026-10-22 field-41';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -324,7 +324,13 @@ function _installSpecRows(l){
   const rows=[]; if(!l) return rows;
   const s=l.electricalSnapshot||{};
   const panel = s.panelBrand==='Other' ? (s.panelBrandOther||'Other') : (s.panelBrand||'');
-  if(panel)        rows.push(['Panel', panel]);
+  // field-41 (CRM crm-2026-10-22a): the snapshot now records the panel MAKE on
+  // the wall separately from the breaker TYPE to bring (panelBrand), plus what
+  // the label allows — so the tech isn't guessing (Crouse-Hinds → Eaton BRH).
+  const make = s.panelMake==='Other' ? (s.panelMakeOther||'') : (s.panelMake||'');
+  if(make)         rows.push(['Panel', make]);
+  if(panel)        rows.push([make?'Breaker type to use':'Panel', panel]);
+  if(s.panelLabelNote) rows.push(['Label allows', s.panelLabelNote]);
   if(s.serviceSize) rows.push(['Service', s.serviceSize]);
   // Breaker: the Electrical Snapshot is authoritative when it's filled in; the
   // quote's wire choice is only a fallback (it implies amps for the two standard
@@ -980,7 +986,9 @@ function renderWalkdown(id){
   // "Other" keeps the free-text escape: a crawlspace is no place to be blocked
   // by a dropdown that doesn't have your panel on it.
   const WD_SERVICE = ['400A','300A','200A','150A','100A','Other'];
-  const WD_PANEL   = ['Sq D Homeline','Sq D QO','Siemens QP','GE/ABB','Eaton CH','Eaton BR','Eaton BRH','Other'];
+  // field-41: the walkdown records the panel MAKE (what's on the label); the
+  // office picks the approved breaker type in the CRM's Electrical Snapshot.
+  const WD_PANEL   = ['Square D Homeline','Square D QO','Siemens','Murray','ITE','Crouse-Hinds','Eaton / Cutler-Hammer BR','Eaton / Cutler-Hammer CH','Bryant','Westinghouse','GE','Challenger','Federal Pacific (FPE)','Zinsco','Pushmatic','Other'];
   const WD_BREAKER = ['200-amp','150-amp','125-amp','100-amp','60-amp','Other'];
   const pick=(fid,lab,val,opts,ph)=>{
     var cur=(val||'').trim();
@@ -1008,7 +1016,7 @@ function renderWalkdown(id){
     + _smsCardHTML(l)
     + '<div class="card"><div class="lab" style="margin-bottom:8px">Site electrical — for the estimate</div>'
     +   pick('wd-service','Service size', w.serviceSize||s.serviceSize, WD_SERVICE, 'e.g. 320A meter-main')
-    +   pick('wd-panel','Panel make / model', w.panelMake||s.panelBrand, WD_PANEL, 'e.g. Bryant BR — read it off the label')
+    +   pick('wd-panel','Panel make (on the label)', w.panelMake||s.panelMake, WD_PANEL, 'e.g. Crouse-Hinds — read it off the label')
     +   pick('wd-breaker','Main breaker', w.mainBreaker||s.breakerSize, WD_BREAKER, 'e.g. 175-amp')
     +   fld('wd-spaces','Open breaker spaces', w.openSpaces, 'e.g. 4 (2 tandem)')
     +   '<div class="lab">Notes for the estimator</div>'
