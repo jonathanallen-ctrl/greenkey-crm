@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-10-05 field-38';
+const BUILD = '2026-10-22 field-40';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -133,9 +133,90 @@ let _msal=null,_gToken=null,_spSite=null,_spList=null,_spDrive=null;
 const $app = ()=>document.getElementById('app');
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-// ---------- data (shared localStorage with the main CRM) ----------
-function getLeads(){ try{return JSON.parse(localStorage.getItem('gk_leads')||'[]')}catch(e){return[]} }
-function getCustomers(){ try{return JSON.parse(localStorage.getItem('gk_customers')||'[]')}catch(e){return[]} }
+// ---------- data store (field-39, 2026-10-22) ----------
+// WHY: the CRM's jobs + customers + quotes passed ~2.8 M characters in Oct 2026.
+// iPhone caps localStorage at ~5 MB (≈2.6 M characters), so every refresh's
+// setItem threw QuotaExceededError, boot/refresh swallowed it, and the app kept
+// showing the LAST copy that fit — Henry Staples' 10/22 install never reached
+// the phone (Jon, 2026-10-22). The big CRM keys now live in memory (what every
+// getX() reads, synchronously, exactly as before) backed by this app's own
+// IndexedDB, which has no 5 MB cap. Small keys still pass through to
+// localStorage. ⚠ Read/write the big keys ONLY via _store — never localStorage.
+const _BIG_KEYS=['gk_leads','gk_customers','gk_quotes','gk_ahjs','gk_inspectors'];
+const _FS_DB='gk_field_store';
+const _mem={};
+let _fsDb=null, _syncedAt=null, _syncErr=null;
+function _fsOpen(){
+  if(_fsDb) return Promise.resolve(_fsDb);
+  if(typeof indexedDB==='undefined') return Promise.reject(new Error('no idb'));
+  return new Promise(function(res,rej){
+    const r=indexedDB.open(_FS_DB,1);
+    r.onupgradeneeded=function(){ try{ r.result.createObjectStore('kv'); }catch(e){} };
+    r.onsuccess=function(){ _fsDb=r.result; res(_fsDb); };
+    r.onerror=function(){ rej(r.error||new Error('idb open failed')); };
+  });
+}
+function _fsPut(k,v){
+  return _fsOpen().then(function(db){ return new Promise(function(res,rej){
+    const tx=db.transaction('kv','readwrite'); tx.objectStore('kv').put(v,k);
+    tx.oncomplete=function(){ res(); }; tx.onerror=function(){ rej(tx.error); }; tx.onabort=function(){ rej(tx.error); };
+  }); });
+}
+function _fsGetAll(){
+  return _fsOpen().then(function(db){ return new Promise(function(res,rej){
+    const out={}, tx=db.transaction('kv','readonly'), cur=tx.objectStore('kv').openCursor();
+    cur.onsuccess=function(){ const c=cur.result; if(c){ out[c.key]=c.value; c.continue(); } };
+    tx.oncomplete=function(){ res(out); }; tx.onerror=function(){ rej(tx.error); };
+  }); });
+}
+const _store={
+  getItem:function(k){ if(_BIG_KEYS.indexOf(k)>=0) return Object.prototype.hasOwnProperty.call(_mem,k)?_mem[k]:null; return localStorage.getItem(k); },
+  setItem:function(k,v){
+    if(_BIG_KEYS.indexOf(k)>=0){ _mem[k]=String(v); _fsPut(k,_mem[k]).catch(function(e){ console.warn('[field] store put',k,e); }); return; }
+    localStorage.setItem(k,v);
+  }
+};
+// Boot: IndexedDB first; first run of field-39 falls back to the old
+// localStorage copies so the list isn't empty while the first sync runs.
+async function _storeLoad(){
+  let got={}; try{ got=await _fsGetAll(); }catch(e){ console.warn('[field] store load',e); }
+  _BIG_KEYS.forEach(function(k){
+    if(typeof got[k]==='string') _mem[k]=got[k];
+    else { let v=null; try{ v=localStorage.getItem(k); }catch(e){} if(v!=null) _mem[k]=v; }
+  });
+  if(typeof got.gk_field_synced_at==='string') _syncedAt=got.gk_field_synced_at;
+}
+// Free the phone's localStorage of the old big copies — ONLY on a phone that has
+// never run the CRM itself (same github.io origin = same localStorage; the CRM
+// owns those keys there). CRM-only keys present → leave everything alone.
+function _freeLegacyLS(){
+  try{
+    const crmKeys=['gk_tasks','gk_notifications','gk_materials','gk_calls','gk_prefs'];
+    if(crmKeys.some(function(k){ return localStorage.getItem(k)!=null; })) return;
+    _BIG_KEYS.forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+  }catch(e){}
+}
+function _markSynced(){
+  _syncErr=null; _syncedAt=new Date().toISOString();
+  _fsPut('gk_field_synced_at',_syncedAt).catch(function(){});
+  _freeLegacyLS();
+}
+function _syncBanner(){
+  if(!_syncErr) return '';
+  let when='';
+  if(_syncedAt){ try{ when=new Date(_syncedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){} }
+  return '<div class="pqbar" style="background:#fdecea;border-color:#e74c3c;color:#a93226">⚠ Couldn’t refresh jobs'
+    + (when?' — showing jobs as of '+esc(when):' — the list may be out of date')
+    + '. <button class="chip" onclick="refresh()">↻ Try again</button>'
+    + '<div style="font-size:11px;opacity:.8;margin-top:3px">'+esc(_syncErr)+'</div></div>';
+}
+// ---------- data (CRM records, read through _store) ----------
+function getLeads(){ try{return JSON.parse(_store.getItem('gk_leads')||'[]')}catch(e){return[]} }
+// Customers are read-only here, so the parse is cached by string identity —
+// custName() runs once per job card / search hit and used to re-parse the
+// whole customer list every time (the search box dropped letters).
+let _custS=null,_custA=[];
+function getCustomers(){ const s=_store.getItem('gk_customers')||'[]'; if(s!==_custS){ try{ _custA=JSON.parse(s); }catch(e){ _custA=[]; } _custS=s; } return _custA; }
 function getCustomer(id){ return getCustomers().find(c=>c.id===id)||null; }
 function custName(l){ const c=l.customerId?getCustomer(l.customerId):null; if(c){ const n=((c.firstName||'')+' '+(c.lastName||'')).trim(); return n||c.businessName||l.customerName||l.id; } return l.customerName||((l.customerFirstName||'')+' '+(l.customerLastName||'')).trim()||l.id; }
 function leadAddr(l){ return [l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '); }
@@ -199,7 +280,7 @@ function apptEntries(leads){
 }
 function isDirect(l){ return !PLATFORMS.includes(l.source); }
 function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-won','closed-lost','not-won'].includes(l.stage) && !(l.lostInfo&&l.lostInfo.isLost)); }
-function getQuotes(){ try{return JSON.parse(localStorage.getItem('gk_quotes')||'[]')}catch(e){return[]} }
+function getQuotes(){ try{return JSON.parse(_store.getItem('gk_quotes')||'[]')}catch(e){return[]} }
 function fmt$(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
 // The quote amount as originally priced: card = quoteTotal (w/ fee), net = preProcessingTotal. Falls back to jobValue.
 function quoteAmounts(l){
@@ -421,7 +502,8 @@ async function syncFromSP(){
   // bulk read above (both are in the CRM's SYNC_KEYS, so they are rows in the
   // same SharePoint list this loop already walks) — they were simply thrown away
   // instead of persisted. Adding them costs ZERO extra network calls.
-  ['gk_leads','gk_customers','gk_quotes','gk_ahjs','gk_inspectors'].forEach(k=>{ if(got[k]) localStorage.setItem(k,got[k]); });
+  ['gk_leads','gk_customers','gk_quotes','gk_ahjs','gk_inspectors'].forEach(k=>{ if(got[k]) _store.setItem(k,got[k]); });
+  _markSynced();   // field-39: remember when, clear any error banner
   // gk_vanstock (field-31) merges instead of overwriting — this phone may hold
   // an unpushed restock list; newest-per-record wins, same rule the CRM applies.
   if(got['gk_vanstock']){ try{ saveVS(_vsMerge(getVS(), JSON.parse(got['gk_vanstock']))); }catch(e){ console.warn('[field] vanstock merge', e); } }
@@ -782,7 +864,10 @@ function header(title, back){
     + '</div>';
 }
 let _search='';
-function renderJobs(){
+// field-39: the list body is built separately so typing in the search box only
+// repaints the results (debounced) — the old version rebuilt the whole screen,
+// INCLUDING the input, on every keystroke, and fast typing lost letters.
+function _jobsBodyHtml(){
   const today=new Date(); today.setHours(0,0,0,0); const todayStr=today.toISOString().slice(0,10);
   const leads=activeLeads();
   let body='';
@@ -807,15 +892,23 @@ function renderJobs(){
     body = esec('Today',todayEntries)+esec('Next 7 days',upEntries)+sec('In progress',other)+wsec;
     if(!body) body='<div class="empty">No scheduled or in-progress jobs.<br>Use search to find any job.</div>';
   }
+  return body;
+}
+let _searchTmr=null;
+function _onSearch(v){
+  _search=v; clearTimeout(_searchTmr);
+  _searchTmr=setTimeout(function(){ const b=document.getElementById('jobs-body'); if(b) b.innerHTML=_jobsBodyHtml(); else renderJobs(); },180);
+}
+function renderJobs(){
   $app().innerHTML = header('My Jobs')
     + '<div class="wrap">'
-    + '<input class="srch" placeholder="Search name, address, phone…" value="'+esc(_search)+'" oninput="_search=this.value;renderJobs()" '+(_search?'autofocus':'')+'>'
+    + '<input class="srch" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search name, address, phone…" value="'+esc(_search)+'" oninput="_onSearch(this.value)">'
+    + _syncBanner()
     + _pqListNote()
-    + body
+    + '<div id="jobs-body">'+_jobsBodyHtml()+'</div>'
     // field-35: Sign out moved OUT of the header (easy to hit by accident next to Refresh) to the foot of the list.
     + '<div style="text-align:center;margin:28px 0 12px"><button class="chip" style="font-size:13px;padding:10px 18px" onclick="if(confirm(\'Sign out of GreenKey Field?\')) signOut()">Sign out</button></div>'
     + '</div>';
-  if(_search){ const i=$app().querySelector('.srch'); if(i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
 }
 // Dates read MM/DD/YYYY wherever a human sees one (2026-08-08, Sherri).
 // ⚠ DISPLAY ONLY. Milestone `.date` writes and the today/upcoming comparisons
@@ -967,7 +1060,7 @@ async function saveWalkdown(jobId){
     arr[i].walkdown={ serviceSize:service, panelMake:panel, mainBreaker:breaker, openSpaces:spaces, by:who, at:new Date().toISOString() };
     arr[i].walkdownNotes=notes;
     arr[i].updatedAt=new Date().toISOString();
-    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    _store.setItem('gk_leads', JSON.stringify(arr));
     await pushLeads();
     alert('✓ Walkdown info saved. The office will finalize the electrical snapshot in the CRM.');
   }catch(e){ alert('Could not save: '+(e.message||e)); }
@@ -989,11 +1082,11 @@ async function saveWalkdown(jobId){
 // read (see above). Mirrors the CRM's getAHJs()/getInspectors()/inspectorsForAHJ().
 const AHJ_KEY_F = 'gk_ahjs', INSPECTORS_KEY_F = 'gk_inspectors';
 function getAHJs(){
-  try{ const a=JSON.parse(localStorage.getItem(AHJ_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
+  try{ const a=JSON.parse(_store.getItem(AHJ_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
   catch(e){ return []; }
 }
 function getInspectors(){
-  try{ const a=JSON.parse(localStorage.getItem(INSPECTORS_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
+  try{ const a=JSON.parse(_store.getItem(INSPECTORS_KEY_F)||'[]'); return Array.isArray(a)?a.filter(x=>x&&!x.deleted):[]; }
   catch(e){ return []; }
 }
 function inspectorsForAHJ(ahjId){ return getInspectors().filter(i=>i.ahjId===ahjId); }
@@ -1222,6 +1315,7 @@ function renderDetail(id){
         + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\')">📸 Take other photos</button>'
         + '<button class="btn ghost" onclick="shotPick(\''+esc(l.id)+'\',\'other\',1)">🖼️ From Photos</button>'
       + '</div>'
+      + '<div class="muted" style="font-size:12px;margin-top:5px">Other photos file under '+(_otherPhotoFolder(l.id)==='site'?'<b>Site Photos</b> — this job isn\u2019t installed yet':'<b>Install Photos</b>')+'</div>'
       + '<div id="photos" style="margin-top:10px"><div class="muted" style="font-size:13px">Loading photos…</div></div>'
     + '</div>'
     + '</div>';
@@ -1244,8 +1338,8 @@ function renderDetail(id){
 // counter. Everything lives in gk_vanstock — a flat array of records merged
 // by id+updatedAt (deletes are `deleted:true` tombstones), synced through the
 // same SharePoint row store as every other key.
-function getVS(){ try{ return JSON.parse(localStorage.getItem('gk_vanstock')||'[]'); }catch(e){ return []; } }
-function saveVS(arr){ localStorage.setItem('gk_vanstock', JSON.stringify(arr)); }
+function getVS(){ try{ return JSON.parse(_store.getItem('gk_vanstock')||'[]'); }catch(e){ return []; } }
+function saveVS(arr){ _store.setItem('gk_vanstock', JSON.stringify(arr)); }
 function _vsMerge(localArr, spArr){
   const map=new Map(); (spArr||[]).forEach(function(r){ if(r&&r.id) map.set(r.id,r); });
   (localArr||[]).forEach(function(r){ if(!r||!r.id) return; const ex=map.get(r.id);
@@ -1429,7 +1523,7 @@ function vsmSaveEdit(id){
 function vsmDel(id){ const it=vsItems().find(function(x){return x.id===id;}); if(!it) return; if(!confirm('Remove "'+it.name+'" from the master list?')) return; vsUpsert({id:id, kind:'item', deleted:true}); _keepScroll(renderVanMaster); }
 
 function goJobs(){ _stopFldSms(); closeLightbox(); location.hash=''; renderJobs(); }
-async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); } route(); }
+async function refresh(){ loading('Refreshing…'); try{ await spInit(); await syncFromSP(); }catch(e){ console.warn(e); _syncErr=String((e&&e.message)||e); } route(); }
 function route(){
   const m=/#job=([^&]+)/.exec(location.hash); if(m){ renderDetail(decodeURIComponent(m[1])); return; }
   const w=/#wd=([^&]+)/.exec(location.hash); if(w){ renderWalkdown(decodeURIComponent(w[1])); return; }
@@ -1478,11 +1572,30 @@ async function _photoPrep(jobId, file, catKey){
   // installed. The office also has an Operations mirror that copies install/
   // into "Completion pics" — so left alone, pre-quote walkdown pictures would
   // eventually be filed as completion evidence.
-  const folder = (tag === 'walkdown') ? 'site' : 'install';    // CRM auto-pulls both folders
+  // field-40 (2026-10-22, Jon — Michelle Dudley's walkdown): "other" photos
+  // taken from the JOB screen also went to install/, so a walkdown done from a
+  // searched-up job filed four pre-quote pictures as Install Photos. Now
+  // "other" follows the job's phase (_otherPhotoFolder). The seven required
+  // install shots always go to install/.
+  const folder = (tag === 'walkdown') ? 'site' : (tag === 'other' ? _otherPhotoFolder(jobId) : 'install');    // CRM auto-pulls both folders
   return { qid:'q'+Date.now()+'_'+Math.random().toString(36).slice(2,8), job:jobId, folder:folder,
            fname:fname, type:conv.type||'image/jpeg', blob:conv.blob, at:new Date().toISOString(), tries:0 };
 }
 let _photoCat='other';
+// Where a job-screen "other" photo belongs: site/ while the job is still
+// before install (lead → quote → permit → charger confirmed) and no install
+// visit is dated today or earlier; install/ once it's scheduled / being
+// installed / later. Unknown stages keep the old behaviour (install/).
+const _PRE_INSTALL_STAGES=['lead-received','info-gathering','estimating','quote-delivered','quote-approved','permit-applied','charger-confirmed'];
+function _otherPhotoFolder(jobId){
+  try{
+    const l=getLeads().find(x=>x&&x.id===jobId); if(!l) return 'install';
+    if(_PRE_INSTALL_STAGES.indexOf(l.stage)<0) return 'install';
+    const today=new Date(); today.setHours(0,0,0,0); const t=today.toISOString().slice(0,10);
+    const installDue=apptsOf(l).some(a=>a && a.date && (a.type==='installation'||!a.type) && String(a.date).slice(0,10)<=t);
+    return installDue ? 'install' : 'site';
+  }catch(e){ return 'install'; }
+}
 // Two hidden file inputs per screen, and the ONLY difference is the `capture`
 // attribute: with it, iOS opens the camera straight away (what the tech wants
 // standing at the panel); without it, iOS opens the photo picker, which is how
@@ -1562,7 +1675,7 @@ async function pushLeads(){
   if(spVal){ try{ const spArr=JSON.parse(spVal); const map=new Map(); for(const r of spArr) map.set(r.id,r);
     for(const r of getLeads()){ const ex=map.get(r.id); if(!ex || (r.updatedAt && (!ex.updatedAt || r.updatedAt>ex.updatedAt))) map.set(r.id,r); }
     merged=[...map.values()]; }catch(e){} }
-  localStorage.setItem('gk_leads', JSON.stringify(merged));
+  _store.setItem('gk_leads', JSON.stringify(merged));
   if(itemId) await graphPatch('/sites/'+_spSite+'/lists/'+_spList+'/items/'+itemId+'/fields', { DataValue: JSON.stringify(merged) });
 }
 async function markComplete(jobId, done){
@@ -1572,7 +1685,7 @@ async function markComplete(jobId, done){
   if(done){ const _n=new Date(); arr[i].milestones.installCompleted={done:true,date:_n.toISOString().slice(0,10),time:_n.toTimeString().slice(0,5),at:_n.toISOString()}; arr[i].stage='post-install-docs'; }
   else { delete arr[i].milestones.installCompleted; }
   arr[i].updatedAt=new Date().toISOString();
-  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  _store.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 async function doComplete(jobId, done){
@@ -1595,7 +1708,7 @@ async function markArrived(jobId){
     arr[i].milestones.techArrived={done:true,date:_n.toISOString().slice(0,10),time:_n.toTimeString().slice(0,5),at:_n.toISOString()};
     if(arr[i].stage==='scheduled'||arr[i].stage==='pre-install'){ arr[i].stage='installation'; arr[i].stageAt=_n.toISOString(); }
     arr[i].updatedAt=_n.toISOString();
-    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    _store.setItem('gk_leads', JSON.stringify(arr));
     await pushLeads();
   }catch(e){ alert('Could not mark arrival: '+(e.message||e)); }
   renderDetail(jobId);
@@ -1608,7 +1721,7 @@ async function undoArrived(jobId){
     const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId); if(i<0) throw new Error('job not found');
     if(arr[i].milestones) delete arr[i].milestones.techArrived;
     arr[i].updatedAt=new Date().toISOString();
-    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    _store.setItem('gk_leads', JSON.stringify(arr));
     await pushLeads();
   }catch(e){ alert('Could not update: '+(e.message||e)); }
   renderDetail(jobId);
@@ -1807,7 +1920,7 @@ function toggleZelleQR(jobId){
       if(j>=0 && !(arr[j].payment&&arr[j].payment.collectedAt)){
         arr[j].paymentExpected={amount:(jobPayAmounts(arr[j]).net||0),methods:['zelle'],at:new Date().toISOString(),source:'field-qr',memoCode:payMemoCode(jobId)};
         arr[j].updatedAt=new Date().toISOString();
-        localStorage.setItem('gk_leads',JSON.stringify(arr));
+        _store.setItem('gk_leads',JSON.stringify(arr));
         await pushLeads();
       }
     }catch(e){ console.warn('[field] qr-shown stamp',e); } })();
@@ -1855,7 +1968,7 @@ async function recordPayment(jobId, method, amount){
   // Milestone amount = TOTAL collected (ledger + deposits), matching the CRM.
   _stampPaymentMilestone(arr[i], _payLedgerTotal(arr[i]), now);
   arr[i].updatedAt = now;
-  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  _store.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 // Undo = remove the LAST ledger entry only (field-22). Earlier payments and
@@ -1883,7 +1996,7 @@ async function clearPayment(jobId){
     if(l.milestones && l.milestones.paymentReceived) delete l.milestones.paymentReceived;
   }
   l.updatedAt=new Date().toISOString();
-  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  _store.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 
@@ -1908,14 +2021,14 @@ async function _saveAdjust(jobId, amount, note){
   const acct=_msal&&_msal.getAllAccounts()[0]; const who=(acct&&(acct.name||acct.username))||'';
   arr[i].priceOverride={ amount:amount, note:note, by:who, at:new Date().toISOString() };
   arr[i].updatedAt=new Date().toISOString();
-  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  _store.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 async function clearAdjust(jobId){
   if(!confirm('Undo the on-site amount adjustment (back to the quoted amount)?')) return;
   loading('Updating…');
   try{ await syncFromSP(); const arr=getLeads(); const i=arr.findIndex(l=>l.id===jobId);
-    if(i>=0){ delete arr[i].priceOverride; arr[i].updatedAt=new Date().toISOString(); localStorage.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); } }
+    if(i>=0){ delete arr[i].priceOverride; arr[i].updatedAt=new Date().toISOString(); _store.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); } }
   catch(e){ alert(e.message||e); }
   renderDetail(jobId);
 }
@@ -1964,7 +2077,7 @@ async function textPayLink(jobId){
       if(j>=0 && !(arr2[j].payment&&arr2[j].payment.collectedAt)){
         arr2[j].paymentExpected={amount:amt,methods:['card-link'],at:new Date().toISOString(),source:'field-link',memoCode:payMemoCode(l.id)};
         arr2[j].updatedAt=new Date().toISOString();
-        localStorage.setItem('gk_leads',JSON.stringify(arr2));
+        _store.setItem('gk_leads',JSON.stringify(arr2));
         await pushLeads();
       }
     }catch(_){}
@@ -1992,7 +2105,7 @@ async function payLinkAbandon(jobId){
   if(!confirm('Only do this if the customer will NOT pay with the texted link.\n\nIf they already paid by the link, press Cancel — it records itself and this job will show Paid shortly.\n\nOK = bring back Tap to Pay')) return;
   try{
     const arr=getLeads(); const j=arr.findIndex(x=>x.id===jobId);
-    if(j>=0){ delete arr[j].paymentExpected; arr[j].updatedAt=new Date().toISOString(); localStorage.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); }
+    if(j>=0){ delete arr[j].paymentExpected; arr[j].updatedAt=new Date().toISOString(); _store.setItem('gk_leads',JSON.stringify(arr)); await pushLeads(); }
   }catch(e){ console.warn('[field] payLinkAbandon', e); }
   renderDetail(jobId);
 }
@@ -2036,7 +2149,7 @@ async function _savePriorPayment(jobId, amount, method, note){
   arr[i].priorPayments.push({ id:'pp_'+Date.now()+'_'+Math.round(Math.random()*1000000),
     amount:amount, method:method||'deposit', note:note||'', by:who, at:new Date().toISOString() });
   arr[i].updatedAt=new Date().toISOString();
-  localStorage.setItem('gk_leads', JSON.stringify(arr));
+  _store.setItem('gk_leads', JSON.stringify(arr));
   await pushLeads();
 }
 async function removePriorPayment(jobId, ppId){
@@ -2049,7 +2162,7 @@ async function removePriorPayment(jobId, ppId){
     const arr=getLeads(); const i=arr.findIndex(x=>x.id===jobId); if(i<0) throw new Error('job not found');
     arr[i].priorPayments=priorPayments(arr[i]).filter(x=>String(x.id)!==String(ppId));
     arr[i].updatedAt=new Date().toISOString();
-    localStorage.setItem('gk_leads', JSON.stringify(arr));
+    _store.setItem('gk_leads', JSON.stringify(arr));
     await pushLeads();
   }catch(e){ alert('Could not update: '+(e.message||e)); }
   renderDetail(jobId);
@@ -2101,7 +2214,7 @@ async function checkForUpdate(force){
     if(!live) return;                               // not our file (404 page?)
     if(live === BUILD){ _updClearBar(); return; }   // already current
     if(live === _updOffered) return;                // bar is already up for this one
-    let dismissed=''; try{ dismissed = localStorage.getItem('gk_upd_dismissed')||''; }catch(e){}
+    let dismissed=''; try{ dismissed = _store.getItem('gk_upd_dismissed')||''; }catch(e){}
     if(dismissed === live) return;                  // he said not now
     _updOffered = live;
     _updShowBar(live);
@@ -2123,7 +2236,7 @@ function _updShowBar(live){
   const go = document.getElementById('updgo');
   if(go) go.onclick = function(){ applyUpdate(live); };
   document.getElementById('updx').onclick = function(){
-    try{ localStorage.setItem('gk_upd_dismissed', live); }catch(e){}
+    try{ _store.setItem('gk_upd_dismissed', live); }catch(e){}
     _updClearBar();
   };
 }
@@ -2159,10 +2272,11 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) c
     if(!account){ renderLogin(); return; }
     const tok = await getTokenSilent();
     if(!tok){ renderLogin(); return; }
+    await _storeLoad();   // field-39: big CRM keys come from IndexedDB now
     const hadData = getLeads().length>0;
     if(!hadData) loading('Loading your jobs…');
     try{ await spInit(); await syncFromSP(); }
-    catch(e){ console.warn('[field] sync', e); if(!hadData){ $app().innerHTML='<div class="center"><div class="err">Could not load jobs.</div><div class="muted" style="font-size:13px;max-width:300px">'+esc(e.message||e)+'</div><button class="btn ghost" style="max-width:240px" onclick="location.reload()">Retry</button><button class="btn ghost" style="max-width:240px" onclick="signOut()">Sign out</button></div>'; return; } }
+    catch(e){ console.warn('[field] sync', e); _syncErr=String((e&&e.message)||e); if(!hadData){ $app().innerHTML='<div class="center"><div class="err">Could not load jobs.</div><div class="muted" style="font-size:13px;max-width:300px">'+esc(e.message||e)+'</div><button class="btn ghost" style="max-width:240px" onclick="location.reload()">Retry</button><button class="btn ghost" style="max-width:240px" onclick="signOut()">Sign out</button></div>'; return; } }
     // Always open on My Jobs (field-14, Jonathan 2026-08-03). iOS relaunches the
     // saved app with its last URL, so a leftover #job= hash restored whatever job
     // was open when the phone was put away. Strip it here — replaceState so no
