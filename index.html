@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -11043,7 +11043,12 @@ async function emailQuote(qid){
     leadId: q.leadId,
     customerId: q.customerId,
     toEmail,
-    hasGraph: !!_gToken
+    hasGraph: !!_gToken,
+    // 30d: what the combined multi-quote email needs to rebuild the body
+    isPlatform,
+    baseCtx: { lead, cust, addr, custFirst, chargerRecs },
+    origSubject: subject,
+    origBody: body
   };
 
   // Populate modal fields
@@ -11206,50 +11211,112 @@ function _emWrap(txt, indent, width) {
 function _emStripCombinedBlock(body) {
   return String(body || '').replace(/\n*━+\n\s*ALSO INCLUDED IN THIS EMAIL\n━+\n[\s\S]*?COMBINED TOTAL:[^\n]*/, '');
 }
-function _emBuildCombinedBlock(primary, others) {
-  const net = (x) => Math.round((typeof _quoteNet === 'function') ? _quoteNet(x) : (x.quoteTotal || 0));
-  const all = [primary].concat(others);
+// 30d (Jon: "It only summarizes the panel replacement at the top … for scope
+// it provides detail on the panel replacement. Then for payment, it doesn't
+// include the ev charger."): checking 2+ quotes now REBUILDS the whole email
+// as one combined email — intro names every part, QUOTE SUMMARY lists every
+// quote + combined total, a must-do-together note, SCOPE OF WORK per part,
+// and ONE combined PAYMENT SCHEDULE. Base template = the EV/NEMA quote when
+// present (keeps the charger section + order steps), else the quote carrying
+// the permit, else the primary. Unchecking back to one restores the original.
+const _EM_PANELISH = ['panel-replacement','service-upgrade','new-service','subpanel'];
+const _EM_LOADISH  = ['ev-residential','nema-1450','hvac-circuit','circuit-replacement'];
+function _emNet(x) { return Math.round((typeof _quoteNet === 'function') ? _quoteNet(x) : (x.quoteTotal || 0)); }
+function _emPhrase(x) { return (typeof getProjectPhrase === 'function') ? getProjectPhrase(x.jobType) : 'electrical project'; }
+function _emCap(t) { t = String(t || ''); return t.charAt(0).toUpperCase() + t.slice(1); }
+function _emOrder(qs) {
+  return qs.slice().sort((a, b) => (_EM_PANELISH.includes(b.jobType) ? 1 : 0) - (_EM_PANELISH.includes(a.jobType) ? 1 : 0));
+}
+function _emCombinedPaymentText(qs) {
   const bar = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
-  let b = `\n\n${bar}\n${_EM_COMBO_HDR}\n${bar}\n`;
-  b += `Your project is quoted in ${all.length} parts — ${all.length === 2 ? 'both' : 'all'} quotes are attached as PDFs:\n\n`;
-  all.forEach((x, i) => {
-    b += `  ${i + 1}. ${_emQuoteName(x)} — quote ${x.id} — $${net(x).toLocaleString()}${i === 0 ? '  (summarized above)' : ''}\n`;
-    if (i > 0) {
-      const sc = (x.scope || (typeof autoScope === 'function' ? autoScope(x) : '') || '').trim();
-      if (sc) b += _emWrap(sc, '     ', 86) + '\n';
+  const scheds = qs.map(x => ({ x, s: (typeof calcDepositSchedule === 'function') ? calcDepositSchedule(x) : [] }));
+  const simple = !qs.some(x => x.contingentOnUtility) &&
+    scheds.every(o => o.s.every(m => m.key === 'deposit' || m.key === 'completion'));
+  let txt = `\n${bar}\nPAYMENT SCHEDULE (${qs.length === 2 ? 'both quotes' : 'all ' + qs.length + ' quotes'})\n${bar}\n`;
+  if (simple) {
+    const deps = scheds.map(o => ({ x: o.x, amt: o.s.filter(m => m.key === 'deposit').reduce((t, m) => t + m.amount, 0) }));
+    const dep = deps.reduce((t, d) => t + d.amt, 0);
+    const bal = scheds.reduce((t, o) => t + o.s.filter(m => m.key === 'completion').reduce((u, m) => u + m.amount, 0), 0);
+    if (dep > 0) {
+      txt += `\n  Deposit: ${fmt$(dep)}\n     Due upon acceptance\n`;
+      const parts = deps.filter(d => d.amt > 0);
+      if (parts.length > 1) txt += `     (${parts.map(d => fmt$(d.amt) + ' ' + _emPhrase(d.x)).join(' + ')})\n`;
+      txt += `\n  Balance: ${fmt$(bal)}\n     Due at job completion\n`;
+    } else {
+      txt += `\n  Total due: ${fmt$(bal)}\n     Due at job completion\n`;
     }
-    b += '\n';
-  });
-  const hasPanel = all.some(x => x.jobType === 'panel-replacement' || x.jobType === 'service-upgrade');
-  const hasLoad  = all.some(x => ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','subpanel'].includes(x.jobType));
-  if (hasPanel && hasLoad) {
-    const pn = _emQuoteName(all.find(x => x.jobType === 'panel-replacement' || x.jobType === 'service-upgrade'));
-    const ln = _emQuoteName(all.find(x => ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','subpanel'].includes(x.jobType)));
-    b += `  IMPORTANT: The ${ln} requires the ${pn} — the new panel\n  provides the space for the new circuit. Please accept ${all.length === 2 ? 'both quotes' : 'all of these quotes'}; the work is done together.\n\n`;
+  } else {
+    scheds.forEach(o => {
+      txt += `\n  ${_emCap(_emPhrase(o.x))} (quote ${o.x.id}):\n`;
+      o.s.forEach(m => { txt += `    ${m.label}: ${fmt$(m.amount)} — ${m.timing}\n`; });
+    });
   }
-  b += `  Each attached quote shows its own payment schedule.\n\n`;
-  b += `COMBINED TOTAL: $${all.reduce((sum, x) => sum + net(x), 0).toLocaleString()}`;
-  return b;
+  txt += _paymentHowToText(qs.some(x => x.contingentOnUtility), true);
+  return txt;
+}
+function _emBuildCombinedEmail(quotes, bc) {
+  const ordered = _emOrder(quotes);
+  const isEVq = x => x.jobType === 'ev-residential' || x.jobType === 'nema-1450';
+  const base = quotes.find(isEVq) || quotes.find(x => parseFloat(x.permitFee) > 0) || quotes[0];
+  const built = _buildDirectQuoteEmail({ q: base, lead: bc.lead, cust: bc.cust, projectPhrase: _emPhrase(base),
+    total: fmt$(_emNet(base)), addr: bc.addr, custFirst: bc.custFirst, isEVProject: isEVq(base), chargerRecs: bc.chargerRecs });
+  let body = built.body;
+  const bar = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+  const phrases = ordered.map(_emPhrase);
+  const joined = phrases.length === 2 ? phrases.join(' and ') : phrases.slice(0, -1).join(', ') + ', and ' + phrases[phrases.length - 1];
+  const total = ordered.reduce((t, x) => t + _emNet(x), 0);
+  // Intro + must-do-together note
+  const panelQ = ordered.find(x => _EM_PANELISH.includes(x.jobType));
+  const loadQ  = ordered.find(x => _EM_LOADISH.includes(x.jobType));
+  const dep = (panelQ && loadQ)
+    ? `\n\nIMPORTANT: The ${_emPhrase(loadQ)} requires the ${_emPhrase(panelQ)} — the new panel provides the space for the new circuit. Please accept ${ordered.length === 2 ? 'both quotes' : 'all of these quotes'}; the work is done together.`
+    : '';
+  const intro = `Please find your quotes for your ${joined} attached — your project is quoted in ${ordered.length} parts.${dep}`;
+  if (/Please find your quote for your [^\n]*? attached\./.test(body)) body = body.replace(/Please find your quote for your [^\n]*? attached\./, intro);
+  else body = body.replace(/^(Hi [^,\n]+,)\n\n/, `$1\n\n${intro}\n\n`);
+  // QUOTE SUMMARY
+  const pad = '           ';
+  const qLines = ordered.map((x, i) => `${i ? pad : 'Quote #:   '}${x.id} — ${_emCap(_emPhrase(x))} — ${fmt$(_emNet(x))}`).join('\n');
+  body = body.replace(/Quote #:[^\n]*/, qLines);
+  body = body.replace(/\nTotal:[^\n]*/, `\nTotal:     ${fmt$(total)} (${ordered.length === 2 ? 'both quotes' : 'all quotes'})`);
+  body = body.replace('This quote is valid for 30 days.', 'These quotes are valid for 30 days.');
+  body = body.replace('APPROVE YOUR QUOTE\n', 'APPROVE YOUR QUOTES\n').replace('Use the Accept button below', 'Use the Accept buttons below (one for each quote)');
+  // SCOPE OF WORK — one part per quote
+  let scope = `\n${bar}\nSCOPE OF WORK\n${bar}\n`;
+  ordered.forEach((x, i) => {
+    const sc = (x.scope || (typeof autoScope === 'function' ? autoScope(x) : '') || '').trim();
+    scope += `${i ? '\n' : ''}PART ${i + 1} — ${_emPhrase(x).toUpperCase()} (quote ${x.id}, ${fmt$(_emNet(x))})\n${sc}\n`;
+  });
+  const s0 = _buildScopeText(base);
+  // PAYMENT
+  const pay = _emCombinedPaymentText(ordered);
+  const p0 = _buildPaymentScheduleText(base);
+  if (s0 && body.includes(s0)) body = body.replace(s0, scope + '\u0000PAY\u0000');
+  else {
+    const m = /\n━+\nWHAT HAPPENS NEXT/.exec(body);
+    body = m ? body.slice(0, m.index) + scope + '\u0000PAY\u0000' + body.slice(m.index) : body + scope + '\u0000PAY\u0000';
+  }
+  if (p0 && body.includes(p0)) { body = body.replace(p0, ''); }
+  body = body.replace('\u0000PAY\u0000', pay);
+  // Subject
+  const ids = ordered.map(x => x.id).join(' & ');
+  let subject = String(built.subject || '').replace(base.id, ids);
+  subject = /Quotes/.test(subject) ? subject : subject.replace(/\bQuote\b/, 'Quotes');
+  return { subject, body: body.replace(/\n{4,}/g, '\n\n\n') };
 }
 function _emRefreshCombinedBlock() {
-  if (!_pendingEmail || _pendingEmail.isCustomEmail || !_pendingEmail.qid) return;
+  const pe = _pendingEmail;
+  if (!pe || pe.isCustomEmail || !pe.qid || !pe.baseCtx || pe.isPlatform) return;
   const ta = document.getElementById('em-body'); if (!ta) return;
-  const primary = getQuote(_pendingEmail.qid); if (!primary) return;
-  const others = Array.from(document.querySelectorAll('.em-attach-cb'))
-    .filter(c => c.checked && c.dataset.qid !== primary.id)
-    .map(c => getQuote(c.dataset.qid)).filter(Boolean);
-  let body = _emStripCombinedBlock(ta.value);
-  if (others.length) {
-    const blk = _emBuildCombinedBlock(primary, others);
-    const anchors = [/This quote is valid for 30 days\.[^\n]*/, /\nTotal:[^\n]*/];
-    let placed = false;
-    for (const re of anchors) {
-      const m = re.exec(body);
-      if (m) { const at = m.index + m[0].length; body = body.slice(0, at) + blk + body.slice(at); placed = true; break; }
-    }
-    if (!placed) body = body + blk;
+  const sj = document.getElementById('em-subject');
+  const checked = Array.from(document.querySelectorAll('.em-attach-cb'))
+    .filter(c => c.checked).map(c => getQuote(c.dataset.qid)).filter(Boolean);
+  if (checked.length <= 1) {
+    if (pe._comboOn) { ta.value = pe.origBody; if (sj) sj.value = pe.origSubject; pe._comboOn = false; }
+    return;
   }
-  ta.value = body.replace(/\n{4,}/g, '\n\n\n');
+  const built = _emBuildCombinedEmail(checked, pe.baseCtx);
+  ta.value = built.body; if (sj) sj.value = built.subject; pe._comboOn = true;
 }
 
 async function sendQuoteEmail(){
@@ -12482,12 +12549,17 @@ function _buildPaymentScheduleText(q) {
   // crm-2026-10-22b (Jon): payments are requested by text or email now (💳 Payment
   // options: Zelle QR + Stripe card link) — say so, and state the 3% card fee up
   // front. Quote prices are the no-fee prices (2026-07-02 headline decision).
-  txt += `\nHOW TO PAY — when each payment is due, we'll send you a request by text or email:\n  • Zelle — no fee (our Zelle details and QR code come with each request)\n  • Check — no fee\n  • Credit or debit card — secure payment link; a 3% card processing fee is added\nThe prices in this quote are the no-fee prices.\n`;
+  txt += _paymentHowToText(q.contingentOnUtility, false);
+  return txt;
+}
+// 30d: shared by the single-quote and combined (multi-quote) payment blocks.
+function _paymentHowToText(contingent, plural) {
+  let txt = `\nHOW TO PAY — when each payment is due, we'll send you a request by text or email:\n  • Zelle — no fee (our Zelle details and QR code come with each request)\n  • Check — no fee\n  • Credit or debit card — secure payment link; a 3% card processing fee is added\nThe prices in ${plural ? 'these quotes' : 'this quote'} are the no-fee prices.\n`;
   // Customer-facing rationale — heads off the "why am I paying upfront?"
   // objection before it lands. Skipped on contingent-utility quotes since
   // those already explain the $200 fee in the body copy.
-  if (!q.contingentOnUtility) {
-    txt += `\nA note on the deposit: it covers the materials we order specifically for your project and locks in your spot on our schedule, so everything is on hand and ready when we arrive. Your price is set by this quote — if anything comes up during the work that would change it, we'll always discuss it with you and get your OK before adding to the total.\n`;
+  if (!contingent) {
+    txt += `\nA note on the deposit: it covers the materials we order specifically for your project and locks in your spot on our schedule, so everything is on hand and ready when we arrive. Your price is set by ${plural ? 'these quotes' : 'this quote'} — if anything comes up during the work that would change it, we'll always discuss it with you and get your OK before adding to the total.\n`;
   }
   return txt;
 }
