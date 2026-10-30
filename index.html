@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -7510,6 +7510,16 @@ const PANEL_BRAND_OPTIONS = [
 // crm-2026-10-30a (Jon): grounding electrode system + cold-water bond for panel
 // swaps. Rods include an acorn clamp each; #6 bare GEC and #4 bare water bond
 // are by the foot. Folded into L&M; listed in Scope + Inclusions.
+// 30c: name of the utility for panel-swap coordination text — the job's
+// Utility card if filled in, else a generic phrase (co-op customers exist).
+function _panelUtilityName(q) {
+  try {
+    const l = (q && q.leadId && typeof getLead === 'function') ? getLead(q.leadId) : null;
+    const u = l && l.utilityInfo && String(l.utilityInfo.utilityCompany || '').trim();
+    if (u) return u;
+  } catch(_){}
+  return 'the electric utility (Dominion Energy or your co-op)';
+}
 function _panelGroundingScope(qq) {
   const g = _panelGroundingCost(qq || {});
   const parts = [];
@@ -9373,7 +9383,7 @@ function _autoScopePrimary(q){
     } else {
       breakerSentence = `All ${breakers} existing branch circuits will be re-terminated to the new panel using equivalent breaker types (like-for-like replacement). The original protection level is preserved. AFCI / GFCI breaker upgrades are available as an add-on if desired.`;
     }
-    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}${_panelGroundingScope(qq)} All work is performed to NEC and local code.`;
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: coordinate the meter disconnect with ${_panelUtilityName(q)}, de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, restore power, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}${_panelGroundingScope(qq)} All work is performed to NEC and local code.`;
   }
 
   // Battery / V2H / Service / Generator / EMS / Custom — fallback (Detailed Quote drives the scope)
@@ -9565,6 +9575,7 @@ function autoInclusions(q){
       lines.push('• Like-for-like breaker replacement — original protection level preserved');
     }
     lines.push('• Panel hardware, main breaker, and ground bar kit');
+    lines.push('• Coordination with ' + _panelUtilityName(q) + ' for the meter disconnect and reconnect');
     if (q.qq?.panelIncludeSurge !== false) {
       lines.push('• Whole-home Type 2 surge protector at the panel');
     }
@@ -9641,7 +9652,7 @@ function autoExclusions(q){
     lines.push('• Equipment served by the circuit (handled by the homeowner / installing contractor)');
   } else if (q.jobType === 'panel-replacement') {
     lines.push('• Service entrance conductor replacement (separate scope if needed)');
-    lines.push('• Utility coordination (panel replacement only — not a service upgrade)');
+    // 30c (Jon): utility coordination is INCLUDED on a panel swap (meter pull / reconnect) — moved to Inclusions.
   } else if (q.jobType === 'battery-system' || q.jobType === 'v2h-system') {
     lines.push('• Battery / V2H equipment (customer or program-supplied unless line-itemed below)');
   } else if (q.jobType === 'new-service' || q.jobType === 'service-upgrade') {
@@ -11169,6 +11180,76 @@ function updateEmailAttachCount(){
   const checked = Array.from(cbs).filter(c => c.checked).length;
   const el = document.getElementById('em-attach-count');
   if (el) el.textContent = checked === 0 ? 'none selected' : (checked + ' selected');
+  try { _emRefreshCombinedBlock(); } catch(e) { console.warn('[GK] combined block', e); }
+}
+
+// ── COMBINED MULTI-QUOTE EMAIL (crm-2026-10-30c, Jon — Hatch Reppard EV + panel) ──
+// When more than one quote is checked in the email modal, the body gets an
+// "ALSO INCLUDED IN THIS EMAIL" block (scope + price of every other checked
+// quote, a combined total, and a must-do-together note when a panel
+// replacement is paired with a circuit/charger). Rebuilt live on every
+// checkbox change; removed when only the primary is checked.
+const _EM_COMBO_HDR = 'ALSO INCLUDED IN THIS EMAIL';
+function _emQuoteName(tq) {
+  const lbl = String(tq.label || '').trim();
+  if (lbl) return lbl;
+  const t = (typeof getJobType === 'function') ? getJobType(tq.jobType) : null;
+  return (t && t.label) ? t.label : 'Quote';
+}
+function _emWrap(txt, indent, width) {
+  const words = String(txt || '').replace(/\s+/g, ' ').trim().split(' ');
+  const out = []; let line = '';
+  words.forEach(w => { if ((line + ' ' + w).trim().length > width) { out.push(line); line = w; } else line = (line ? line + ' ' : '') + w; });
+  if (line) out.push(line);
+  return out.map(l => indent + l).join('\n');
+}
+function _emStripCombinedBlock(body) {
+  return String(body || '').replace(/\n*━+\n\s*ALSO INCLUDED IN THIS EMAIL\n━+\n[\s\S]*?COMBINED TOTAL:[^\n]*/, '');
+}
+function _emBuildCombinedBlock(primary, others) {
+  const net = (x) => Math.round((typeof _quoteNet === 'function') ? _quoteNet(x) : (x.quoteTotal || 0));
+  const all = [primary].concat(others);
+  const bar = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+  let b = `\n\n${bar}\n${_EM_COMBO_HDR}\n${bar}\n`;
+  b += `Your project is quoted in ${all.length} parts — ${all.length === 2 ? 'both' : 'all'} quotes are attached as PDFs:\n\n`;
+  all.forEach((x, i) => {
+    b += `  ${i + 1}. ${_emQuoteName(x)} — quote ${x.id} — $${net(x).toLocaleString()}${i === 0 ? '  (summarized above)' : ''}\n`;
+    if (i > 0) {
+      const sc = (x.scope || (typeof autoScope === 'function' ? autoScope(x) : '') || '').trim();
+      if (sc) b += _emWrap(sc, '     ', 86) + '\n';
+    }
+    b += '\n';
+  });
+  const hasPanel = all.some(x => x.jobType === 'panel-replacement' || x.jobType === 'service-upgrade');
+  const hasLoad  = all.some(x => ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','subpanel'].includes(x.jobType));
+  if (hasPanel && hasLoad) {
+    const pn = _emQuoteName(all.find(x => x.jobType === 'panel-replacement' || x.jobType === 'service-upgrade'));
+    const ln = _emQuoteName(all.find(x => ['ev-residential','nema-1450','hvac-circuit','circuit-replacement','subpanel'].includes(x.jobType)));
+    b += `  IMPORTANT: The ${ln} requires the ${pn} — the new panel\n  provides the space for the new circuit. Please accept ${all.length === 2 ? 'both quotes' : 'all of these quotes'}; the work is done together.\n\n`;
+  }
+  b += `  Each attached quote shows its own payment schedule.\n\n`;
+  b += `COMBINED TOTAL: $${all.reduce((sum, x) => sum + net(x), 0).toLocaleString()}`;
+  return b;
+}
+function _emRefreshCombinedBlock() {
+  if (!_pendingEmail || _pendingEmail.isCustomEmail || !_pendingEmail.qid) return;
+  const ta = document.getElementById('em-body'); if (!ta) return;
+  const primary = getQuote(_pendingEmail.qid); if (!primary) return;
+  const others = Array.from(document.querySelectorAll('.em-attach-cb'))
+    .filter(c => c.checked && c.dataset.qid !== primary.id)
+    .map(c => getQuote(c.dataset.qid)).filter(Boolean);
+  let body = _emStripCombinedBlock(ta.value);
+  if (others.length) {
+    const blk = _emBuildCombinedBlock(primary, others);
+    const anchors = [/This quote is valid for 30 days\.[^\n]*/, /\nTotal:[^\n]*/];
+    let placed = false;
+    for (const re of anchors) {
+      const m = re.exec(body);
+      if (m) { const at = m.index + m[0].length; body = body.slice(0, at) + blk + body.slice(at); placed = true; break; }
+    }
+    if (!placed) body = body + blk;
+  }
+  ta.value = body.replace(/\n{4,}/g, '\n\n\n');
 }
 
 async function sendQuoteEmail(){
@@ -11207,8 +11288,12 @@ async function sendQuoteEmail(){
         const tokenBundle = await _mintQuoteActionToken(tq);
         if (!(tokenBundle && tokenBundle.acceptUrl && tokenBundle.declineUrl)) continue;
         // Option label: the quote's label if set, else "Option A/B/…".
+        // 30c: different job types = PARTS of one project (EV + panel), named
+        // by label / job type — "Option A/B" read as pick-one. Same job type
+        // = genuine alternatives, keep Option letters.
+        const _sameType = _tokenQuotes.every(x => x.jobType === _tokenQuotes[0].jobType);
         const optName = _multi
-          ? ((tq.label||'').trim() || ('Option ' + String.fromCharCode(65 + ti)))
+          ? ((tq.label||'').trim() || (_sameType ? ('Option ' + String.fromCharCode(65 + ti)) : _emQuoteName(tq)))
           : '';
         const hdrSuffix = _multi
           ? ` — ${optName.toUpperCase()} ($${Math.round((typeof _quoteNet==='function') ? _quoteNet(tq) : (tq.quoteTotal||0)).toLocaleString()})`
