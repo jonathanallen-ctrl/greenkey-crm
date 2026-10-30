@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-22d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1779,7 +1779,7 @@ const JOB_TYPES = [
   // Branch-circuit installs (Quick Quote enabled)
   {id:'ev-residential',      label:'EV Charger — Residential',     description:'Hardwired Level 2 EVSE',                qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'nema-1450',           label:'NEMA 14-50 Outlet',             description:'50A 240V outlet for plug-in EVSE',       qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
-  {id:'hvac-circuit',        label:'HVAC Dedicated Circuit',        description:'Branch circuit for HVAC equipment',      qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
+  {id:'hvac-circuit',        label:'Dedicated Circuit',             description:'Dedicated branch circuit for HVAC, sauna, hot tub, well pump, or other equipment',      qqEnabled:true,  permitDefault:200, permitQmerit:250, category:'Branch Circuit'},
   {id:'circuit-replacement', label:'Circuit Replacement (no permit)',description:'Re-pull existing circuit / re-gauge',   qqEnabled:false, permitDefault:0,   permitQmerit:0,   noPermit:true, retired:true, category:'Branch Circuit'},
 
   // Panel & service work
@@ -2203,7 +2203,7 @@ const START_KEYWORDS = ['START','UNSTOP','YES'];
 const _PROJECT_PHRASES = {
   'ev-residential':      'EV charger installation',
   'nema-1450':           'NEMA 14-50 outlet installation',
-  'hvac-circuit':        'HVAC circuit installation',
+  'hvac-circuit':        'dedicated circuit installation',
   'circuit-replacement': 'circuit replacement',
   'panel-replacement':   'panel replacement',
   'battery-system':      'battery system installation',
@@ -5476,6 +5476,15 @@ function getQQPricing(){
     // $20 Lowes — flat $20 never goes underwater on the Lowes run).
     accessCover:20,
     panelSurgeProtector:200, // whole-home Type 2 SPD — installed as default on every panel replacement
+    // ── Grounding & bonding (crm-2026-10-30a, Jon) ── COSTS are estimates —
+    // verify against Capital Electric and edit here. Charged as cost × 1.30
+    // (the standard markup) plus a flat labour figure.
+    //   per rod   = (rod + acorn) × 1.30 + rod labour   → (22 + 3) × 1.3 + 75 = $107.50
+    //   #6 bare   = per ft × 1.30 (GEC to the rods)     → $1.43 / ft
+    //   water bond = clamp × 1.30 + labour              → 10 × 1.3 + 75 = $88.00
+    //   #4 bare   = per ft × 1.30 (bond to cold water)  → $2.28 / ft
+    groundRodCost:22, groundAcornCost:3, groundRodLabor:75, bareCu6PerFt:1.10,
+    waterClampCost:10, waterBondLabor:75, bareCu4PerFt:1.75,
     // AFCI/GFCI dual-function breaker upgrade — optional add-on for panel swaps.
     // $100 per upgraded circuit. The math (Capital Electric pricing data):
     //   HOM120 standard:    $7.61  wholesale  →  $10.65 sell @ 40% markup
@@ -6348,7 +6357,7 @@ function openNewQuote(){
       <div style="display:flex;gap:12px;flex-direction:column">
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r);transition:border-color 0.15s" id="qt-opt-quick" onclick="selectQTType('quick')">
           <input type="radio" name="qt-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement — uses pricing configurator</div></div>
+          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, dedicated circuit, panel replacement — uses pricing configurator</div></div>
         </label>
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r);transition:border-color 0.15s" id="qt-opt-detailed" onclick="selectQTType('detailed')">
           <input type="radio" name="qt-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
@@ -6495,7 +6504,7 @@ function openRecoverQuoteDialog_DEPRECATED() {
       <div style="display:flex;gap:12px;flex-direction:column">
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=quick]').checked=true">
           <input type="radio" name="rq-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement</div></div>
+          <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, dedicated circuit, panel replacement</div></div>
         </label>
         <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" onclick="document.querySelector('input[name=rq-type][value=detailed]').checked=true">
           <input type="radio" name="rq-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
@@ -7130,6 +7139,7 @@ function renderQuickQuoteForm(q){
 // ────────────────────────────────────────────────────────────────────────
 // Wire-options surfaced in the gauge selector. Order matters (smallest gauge
 // number = largest wire = highest amperage) — common HVAC sizes first.
+// 26a: amp ratings are the NM-B 60 °C column (NEC 334.80) — 6 AWG = 55 A, 4 AWG = 70 A.
 const HVAC_WIRE_OPTIONS = [
   {id:'m-022', label:'14/2 NM-B (15 A)'},
   {id:'m-020', label:'12/2 NM-B (20 A) — common A/C condenser'},
@@ -7137,11 +7147,17 @@ const HVAC_WIRE_OPTIONS = [
   {id:'m-002', label:'10/3 NM-B (30 A w/ neutral)'},
   {id:'m-024', label:'8/2 NM-B (40 A) — large condenser'},
   {id:'m-025', label:'8/3 NM-B (40 A w/ neutral)'},
-  {id:'m-026', label:'6/2 NM-B (50-60 A) — large heat pump'},
-  {id:'m-003', label:'6/3 NM-B (60 A w/ neutral)'},
-  {id:'m-027', label:'4/2 NM-B (~80 A) — large electric furnace'},
-  {id:'m-028', label:'4/3 NM-B (~80 A w/ neutral)'}
+  {id:'m-026', label:'6/2 NM-B (55 A) — large heat pump'},
+  {id:'m-003', label:'6/3 NM-B (55 A w/ neutral) — sauna / hot tub'},
+  {id:'m-027', label:'4/2 NM-B (70 A) — large electric furnace'},
+  {id:'m-028', label:'4/3 NM-B (70 A w/ neutral)'}
 ];
+// 26a (Jon 10/26): the HVAC QQ is now the generic "Dedicated Circuit" QQ.
+// Job-type id stays 'hvac-circuit' so every existing quote opens unchanged.
+// qq.hvacEquipment names what the circuit feeds; blank = generic "equipment".
+function _dcEquip(q){ return String((q && q.qq && q.qq.hvacEquipment) || '').trim(); }
+function _dcIsHvac(q){ const e=_dcEquip(q); return !e || /hvac|heat ?pump|condens|air ?handler|a\/?c\b|furnace|mini[- ]?split|air[- ]?cond/i.test(e); }
+function _dcEquipPhrase(q){ const e=_dcEquip(q); return e ? 'the ' + e : 'the equipment'; }
 function _renderQQ_HVAC(q) {
   const wrap = document.getElementById('qb-form'); if (!wrap) return;
   const qq = q.qq || {};
@@ -7149,6 +7165,15 @@ function _renderQQ_HVAC(q) {
   const wireId = qq.hvacWireId || 'm-001'; // 10/2 default — most common HVAC size
   const wireMat = getMaterials().find(m => m.id === wireId) || {};
   wrap.innerHTML = `
+    <div class="qq-section">
+      <div class="qq-title">Equipment Served</div>
+      <div class="fg"><div class="fl">What does this circuit feed?</div>
+        <input class="fi" id="qq-hvac-equip" value="${escHtml(qq.hvacEquipment||'')}" placeholder="e.g. heat pump, Harvia 9 kW sauna heater, hot tub, well pump" oninput="onQQChange('${q.id}')">
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+          Goes into the scope sentence (“…to the disconnect for <em>this equipment</em>”). Leave blank for generic wording.
+        </div>
+      </div>
+    </div>
     <div class="qq-section">
       <div class="qq-title">Panel Location</div>
       <div class="fg"><div class="fl">Panel Location</div>
@@ -7170,6 +7195,10 @@ function _renderQQ_HVAC(q) {
         <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
           Wire is itemized as a separate materials line: gauge × total run length × markup. Pick from the materials catalog — adjust prices in Settings → Materials.
         </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12.5px;cursor:pointer">
+          <input type="checkbox" id="qq-hvac-thwn"${qq.hvacConduitTHWN?' checked':''} onchange="onQQChange('${q.id}')" style="margin-top:2px">
+          <span>Conduit legs use <strong>THWN-2 single conductors</strong> (spliced to the cable in a junction box). Use when part of the run is outdoor/underground conduit. Adds a sentence to the scope; remember the junction box + lugs add-on below.</span>
+        </label>
       </div>
     </div>
     <div class="qq-section">
@@ -7183,7 +7212,7 @@ function _renderQQ_HVAC(q) {
       </button>
     </div>
     <div class="qq-section">
-      <div class="qq-title">Disconnect at HVAC Unit</div>
+      <div class="qq-title">Disconnect at Equipment</div>
       <div class="fg"><div class="fl">Disconnect Type</div>
         <select class="fsel" id="qq-hvac-disconnect" onchange="onQQChange('${q.id}')">
           <option value="none"${(qq.hvacDisconnect||'none')==='none'?' selected':''}>None — already in place</option>
@@ -7472,6 +7501,67 @@ const PANEL_BRAND_OPTIONS = [
   {id:'siemens-ql',   label:'Siemens QL'},
   {id:'other',        label:'Other (specify in scope)'}
 ];
+// crm-2026-10-30a (Jon): grounding electrode system + cold-water bond for panel
+// swaps. Rods include an acorn clamp each; #6 bare GEC and #4 bare water bond
+// are by the foot. Folded into L&M; listed in Scope + Inclusions.
+function _panelGroundingScope(qq) {
+  const g = _panelGroundingCost(qq || {});
+  const parts = [];
+  if (g.rods > 0) parts.push(`install ${g.rods === 1 ? 'one 8-ft ground rod' : 'two 8-ft ground rods (spaced at least 6 ft apart)'} with acorn clamps${g.gecFt > 0 ? `, connected with approximately ${g.gecFt} ft of #6 bare copper grounding electrode conductor` : ''}`);
+  else if (g.gecFt > 0) parts.push(`install approximately ${g.gecFt} ft of #6 bare copper grounding electrode conductor`);
+  if (g.wb) parts.push(`bond the metal cold-water pipe with a listed pipe ground clamp${g.wbFt > 0 ? ` and approximately ${g.wbFt} ft of #4 bare copper` : ''}`);
+  if (!parts.length) return '';
+  const txt = parts.join('; and ');
+  return ' Grounding and bonding: ' + txt + '.';
+}
+function _panelGroundingCost(qq) {
+  const p = getQQPricing();
+  const rods = Math.max(0, parseInt(qq.panelGroundRods) || 0);
+  const gecFt = Math.max(0, parseInt(qq.panelGecFt) || 0);
+  const wb = !!qq.panelWaterBond;
+  const wbFt = wb ? Math.max(0, parseInt(qq.panelWaterBondFt) || 0) : 0;
+  const rodsCost = rods * ((p.groundRodCost + p.groundAcornCost) * 1.30 + p.groundRodLabor);
+  const gecCost = gecFt * p.bareCu6PerFt * 1.30;
+  const wbCost = wb ? (p.waterClampCost * 1.30 + p.waterBondLabor) : 0;
+  const wbWire = wbFt * p.bareCu4PerFt * 1.30;
+  const total = Math.round((rodsCost + gecCost + wbCost + wbWire) * 100) / 100;
+  return { rods, gecFt, wb, wbFt, rodsCost, gecCost, wbCost, wbWire, total };
+}
+function _renderPanelGroundingSection(q) {
+  const qq = q.qq || {};
+  const p = getQQPricing();
+  const g = _panelGroundingCost(qq);
+  const rodEach = (p.groundRodCost + p.groundAcornCost) * 1.30 + p.groundRodLabor;
+  const wbEach = p.waterClampCost * 1.30 + p.waterBondLabor;
+  return `<div class="qq-section">
+      <div class="qq-title">Grounding &amp; Bonding <span style="font-size:11px;color:var(--text-muted);font-weight:400">(optional)</span></div>
+      <div class="frow2">
+        <div class="fg"><div class="fl">Ground Rods (8 ft, w/ acorn)</div>
+          <select class="fsel" id="qq-panel-rods" onchange="onQQChange('${q.id}')">
+            ${[0,1,2].map(n => `<option value="${n}"${g.rods===n?' selected':''}>${n===0?'None':n+' rod'+(n>1?'s':'')+' — $'+(n*rodEach).toFixed(2)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="fg"><div class="fl">#6 Bare Cu GEC (ft)</div>
+          <input class="fi" type="number" id="qq-panel-gec-ft" value="${g.gecFt}" min="0" step="5" oninput="onQQChange('${q.id}')">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-top:10px">
+        <input type="checkbox" id="qq-panel-waterbond" ${g.wb ? 'checked' : ''} onchange="onQQChange('${q.id}')" style="width:16px;height:16px;cursor:pointer">
+        <span>Bond to metal cold-water pipe (pipe clamp) — <strong>$${wbEach.toFixed(2)}</strong></span>
+      </label>
+      <div class="frow2" style="margin-top:8px;${g.wb ? '' : 'opacity:0.55'}">
+        <div class="fg"><div class="fl">#4 Bare Cu to Water Pipe (ft)</div>
+          <input class="fi" type="number" id="qq-panel-wb-ft" value="${g.wbFt || (qq.panelWaterBondFt || 0)}" min="0" step="5" oninput="onQQChange('${q.id}')" ${g.wb ? '' : 'disabled'}>
+        </div>
+        <div class="fg"><div class="fl">Grounding subtotal</div>
+          <input class="fi" type="text" id="qq-panel-ground-calc" value="$${g.total.toFixed(2)}" readonly style="opacity:0.7">
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">
+        Rods $${rodEach.toFixed(2)} each (rod + acorn + labour) · #6 bare $${(p.bareCu6PerFt*1.3).toFixed(2)}/ft · #4 bare $${(p.bareCu4PerFt*1.3).toFixed(2)}/ft. Folded into L&amp;M and listed in Scope / Inclusions. Ground rods flag the job for a Miss Utility (811) locate. If this panel is fed from an outside main disconnect, the rods and GEC belong at that disconnect — not here.
+      </div>
+    </div>`;
+}
 function _renderQQ_PanelReplacement(q) {
   const wrap = document.getElementById('qb-form'); if (!wrap) return;
   const qq = q.qq || {};
@@ -7502,6 +7592,7 @@ function _renderQQ_PanelReplacement(q) {
         </div>
         <div class="fg"><div class="fl">Existing Breakers to Re-terminate</div>
           <input class="fi" type="number" id="qq-panel-breaker-count" value="${breakerCount}" min="0" max="42" step="1" oninput="onQQChange('${q.id}')">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">Count <strong>breakers, not spaces</strong> — a 2-pole or tandem counts as one.</div>
         </div>
       </div>
     </div>
@@ -7525,6 +7616,7 @@ function _renderQQ_PanelReplacement(q) {
         Standard practice on every panel replacement. Protects appliances, electronics, HVAC controls, and the panel itself from utility-side surges. Uncheck only if the customer specifically declines.
       </div>
     </div>
+    ${_renderPanelGroundingSection(q)}
     <div class="qq-section">
       <div class="qq-title">AFCI / GFCI Code Upgrade <span style="font-size:11px;color:var(--text-muted);font-weight:400">(optional)</span></div>
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
@@ -8086,7 +8178,7 @@ function _calcAdditionalTask_HVAC(task) {
 // Short display label for an additional task (totals box + PDF scope lines).
 function _additionalTaskLabel(t) {
   if (!t) return 'Additional task';
-  if (t.jobType === 'hvac-circuit') return 'Additional HVAC circuit';
+  if (t.jobType === 'hvac-circuit') return 'Additional dedicated circuit';
   if (t.jobType === 'ev-swap') return t.swapKind === 'different' ? 'Charger swap (different type)' : 'Charger swap (like-for-like)';
   if (t.jobType === 'ev-existing') return 'Charger on existing circuit';
   if (t.jobType === 'ev-removal') return 'Charger removal' + ((t.location || '').trim() ? ' — ' + t.location.trim() : ' at current home');
@@ -8154,7 +8246,7 @@ function _additionalTaskScope(task) {
       : 'wire run';
     const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
     const brkDesc = ampLabel ? ` protected by a new ${ampLabel} breaker installed in the existing panel` : '';
-    return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the HVAC equipment disconnect${discDesc}${brkDesc}.`;
+    return `Supply and install an additional dedicated 240-volt branch circuit using ${wireDesc} cable, with ${runDesc}, terminating at the equipment disconnect${discDesc}${brkDesc}.`;
   }
   if (task.jobType === 'ev-swap') {
     const diff = task.swapKind === 'different';
@@ -8176,13 +8268,13 @@ function _additionalTaskScope(task) {
 function _additionalTaskInclusions(task) {
   if (!task) return [];
   if (task.jobType === 'hvac-circuit') {
-    const lines = ['• Additional dedicated branch circuit for HVAC equipment'];
+    const lines = ['• Additional dedicated branch circuit'];
     const ampLabel = _hvacBreakerAmpLabel(task.breakerKey);
     if (ampLabel) {
       lines.push(`• New ${ampLabel} breaker installed in existing panel`);
     }
     if (task.disconnect && task.disconnect !== 'none') {
-      lines.push(`• ${task.disconnect === 'fused' ? 'Fused' : 'Non-fused'} disconnect at the HVAC unit`);
+      lines.push(`• ${task.disconnect === 'fused' ? 'Fused' : 'Non-fused'} disconnect at the equipment`);
     }
     return lines;
   }
@@ -8282,7 +8374,7 @@ function _renderAdditionalTaskCard(qid, task, idx) {
   ];
   return `<div class="qq-row" id="addtask-card-${task.id}" style="flex-direction:column;align-items:stretch;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-      <div style="font-size:13px;font-weight:600">Task ${idx + 2}: HVAC Circuit</div>
+      <div style="font-size:13px;font-weight:600">Task ${idx + 2}: Dedicated Circuit</div>
       <button class="li-del" onclick="removeAdditionalTask('${qid}', '${task.id}')">×</button>
     </div>
     <div class="frow2">
@@ -8345,7 +8437,7 @@ function _renderAdditionalTasksSection(q) {
     <div class="qq-title" style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap">
       Additional Tasks
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="li-add" onclick="addAdditionalTask_HVAC('${q.id}')" style="padding:5px 12px;font-size:12px" title="Additional HVAC circuit">
+        <button class="li-add" onclick="addAdditionalTask_HVAC('${q.id}')" style="padding:5px 12px;font-size:12px" title="Additional dedicated circuit">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
           Circuit
         </button>
@@ -8663,6 +8755,10 @@ function _onQQChange_HVAC(qid) {
   const panelLoc = document.getElementById('qq-panel')?.value || 'garage';
   const wireId = document.getElementById('qq-hvac-wire')?.value || (q.qq?.hvacWireId) || 'm-001';
   const disconnect = document.getElementById('qq-hvac-disconnect')?.value || (q.qq?.hvacDisconnect) || 'none';
+  const _eqEl = document.getElementById('qq-hvac-equip');
+  const hvacEquipment = _eqEl ? _eqEl.value.trim() : (q.qq?.hvacEquipment || '');
+  const _thEl = document.getElementById('qq-hvac-thwn');
+  const hvacConduitTHWN = _thEl ? !!_thEl.checked : !!q.qq?.hvacConduitTHWN;
   const difficultyFee = parseFloat(document.getElementById('qq-difficulty')?.value) || 0;
   const travelMinutes = parseInt(document.getElementById('qq-travel-min')?.value) || 0;
   const travelAdder = travelAdderFor(travelMinutes);
@@ -8720,6 +8816,8 @@ function _onQQChange_HVAC(qid) {
     runSegs,
     hvacWireId: wireId,
     hvacDisconnect: disconnect,
+    hvacEquipment,
+    hvacConduitTHWN,
     hvacWireFt: totalRunFt,
     hvacWireCost: wireMaterialsCost,
     difficultyFee,
@@ -8827,6 +8925,20 @@ function _onQQChange_PanelReplacement(qid) {
   const lmOverrideRaw = document.getElementById('qq-lm-override')?.value;
   const lmOverride = lmOverrideRaw!=='' && lmOverrideRaw!=null ? parseFloat(lmOverrideRaw) : null;
   const isVeteran = !!document.getElementById('qq-veteran')?.checked;
+  // Grounding & bonding (30a)
+  const _rodsEl = document.getElementById('qq-panel-rods');
+  const _gecEl = document.getElementById('qq-panel-gec-ft');
+  const _wbEl = document.getElementById('qq-panel-waterbond');
+  const _wbFtEl = document.getElementById('qq-panel-wb-ft');
+  const groundPatch = {
+    panelGroundRods: _rodsEl ? (parseInt(_rodsEl.value) || 0) : (q.qq?.panelGroundRods || 0),
+    panelGecFt: _gecEl ? Math.max(0, parseInt(_gecEl.value) || 0) : (q.qq?.panelGecFt || 0),
+    panelWaterBond: _wbEl ? !!_wbEl.checked : !!q.qq?.panelWaterBond,
+    panelWaterBondFt: _wbFtEl ? Math.max(0, parseInt(_wbFtEl.value) || 0) : (q.qq?.panelWaterBondFt || 0)
+  };
+  if (_wbFtEl) _wbFtEl.disabled = !groundPatch.panelWaterBond;
+  const _gc = _panelGroundingCost(groundPatch);
+  const _gcEl = document.getElementById('qq-panel-ground-calc'); if (_gcEl) _gcEl.value = '$' + _gc.total.toFixed(2);
 
   let lm = installOverride!=null && !isNaN(installOverride) ? installOverride : p.panelReplaceBase;
   lm += breakerCount * p.panelReplacePerBreaker;
@@ -8841,6 +8953,7 @@ function _onQQChange_PanelReplacement(qid) {
   if (includeSurge) lm += p.panelSurgeProtector;
   // AFCI / GFCI dual-function breaker upgrade (opt-in)
   if (upgradeAFCI && afciCount > 0) lm += afciCount * p.panelAFCIUpgradePerBreaker;
+  lm += _gc.total;
 
   lm += difficultyFee;
   lm += travelAdder;
@@ -8856,6 +8969,8 @@ function _onQQChange_PanelReplacement(qid) {
     panelIncludeSurge: includeSurge,
     panelUpgradeAFCI: upgradeAFCI,
     panelAFCICount: afciCount,
+    ...groundPatch,
+    panelGroundingCost: _gc.total,
     difficultyFee,
     travelMinutes,
     travelAdder,
@@ -9191,7 +9306,18 @@ function _autoScopePrimary(q){
                     : disc === 'non-fused' ? ' with a non-fused disconnect at the unit'
                     : '';
     const routing = _runRoutingSentence(segs, '', '', 5);
-    return `Furnish and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel in the ${loc} to the HVAC equipment disconnect${discDesc}, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence} All work is performed to NEC and local code.`;
+    // 26a: equipment-generic wording + optional THWN-2-in-conduit sentence.
+    const target = _dcEquip(q) ? `the disconnect for ${_dcEquipPhrase(q)}` : (_dcIsHvac(q) ? 'the HVAC equipment disconnect' : 'the equipment disconnect');
+    const discDesc2 = disc === 'fused' ? ' (new fused disconnect)' : disc === 'non-fused' ? ' (new non-fused disconnect)' : '';
+    let thwn = '';
+    const hasConduit = segs.some(s => (s.type==='surface'||s.type==='hand-trench'||s.type==='machine-trench') && (parseInt(s.ft)||0) > 0);
+    if (qq.hvacConduitTHWN && hasConduit && wireMat) {
+      const mm = /(\d+)\/(\d)/.exec(wireMat.name) || [];
+      const g = mm[1] ? '#' + mm[1] : 'matching-gauge';
+      const cond = mm[2] === '3' ? 'two hots, a neutral, and a ground' : 'two hots and a ground';
+      thwn = ` Where the circuit runs in conduit, ${g} THHN/THWN-2 copper conductors (${cond}) are installed in the conduit and spliced to the cable in a junction box.`;
+    }
+    return `Furnish and install a dedicated 240-volt branch circuit using ${wireDesc} cable from the main electrical panel in the ${loc} to ${target}${discDesc2}, a total run of approximately ${totalFt} ft${routing.inline}.${routing.sentence}${thwn} All work is performed to NEC and local code.`;
   }
 
   // Circuit Replacement (no permit)
@@ -9232,7 +9358,7 @@ function _autoScopePrimary(q){
     } else {
       breakerSentence = `All ${breakers} existing branch circuits will be re-terminated to the new panel using equivalent breaker types (like-for-like replacement). The original protection level is preserved. AFCI / GFCI breaker upgrades are available as an add-on if desired.`;
     }
-    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge} All work is performed to NEC and local code.`;
+    return `Remove and replace the existing ${amps}-amp main electrical panel with a new ${brand} ${slots}-space load center. ${breakerSentence} Work sequence: de-energize the existing panel, remove it, install the new panel, terminate the service entrance conductors, re-terminate all branch circuits, and final inspection. Includes panel hardware, main breaker, and ground bar kit.${surge}${_panelGroundingScope(qq)} All work is performed to NEC and local code.`;
   }
 
   // Battery / V2H / Service / Generator / EMS / Custom — fallback (Detailed Quote drives the scope)
@@ -9427,9 +9553,13 @@ function autoInclusions(q){
     if (q.qq?.panelIncludeSurge !== false) {
       lines.push('• Whole-home Type 2 surge protector at the panel');
     }
+    const _g = _panelGroundingCost(q.qq || {});
+    if (_g.rods > 0) lines.push(`• ${_g.rods} ground rod${_g.rods > 1 ? 's' : ''} with acorn clamps${_g.gecFt > 0 ? ' and #6 bare copper grounding electrode conductor' : ''}`);
+    else if (_g.gecFt > 0) lines.push('• #6 bare copper grounding electrode conductor');
+    if (_g.wb) lines.push(`• Cold-water pipe bond (pipe ground clamp${_g.wbFt > 0 ? ' and #4 bare copper' : ''})`);
   }
   if (q.jobType === 'hvac-circuit' && q.qq?.hvacDisconnect && q.qq.hvacDisconnect !== 'none') {
-    lines.push('• Disconnect at the HVAC equipment');
+    lines.push(_dcEquip(q) ? '• Disconnect at ' + _dcEquipPhrase(q) : (_dcIsHvac(q) ? '• Disconnect at the HVAC equipment' : '• Disconnect at the equipment'));
   }
   // 28c: service-work defaults (Jonathan, 2026-08-29: "It is time consuming to
   // come up with them after the fact"). A starting point, edited on the quote.
@@ -9490,7 +9620,8 @@ function autoExclusions(q){
   } else if (q.jobType === 'ev-residential') {
     lines.push('• EV charger / EVSE unit (customer supplied)');
   } else if (q.jobType === 'hvac-circuit') {
-    lines.push('• HVAC equipment, refrigerant work, and any HVAC-side wiring (handled by the HVAC contractor)');
+    if (_dcIsHvac(q)) lines.push('• HVAC equipment, refrigerant work, and any HVAC-side wiring (handled by the HVAC contractor)');
+    else lines.push('• ' + (_dcEquip(q) ? _dcEquip(q).charAt(0).toUpperCase() + _dcEquip(q).slice(1) : 'The equipment') + ' itself (customer supplied)');
   } else if (q.jobType === 'circuit-replacement') {
     lines.push('• Equipment served by the circuit (handled by the homeowner / installing contractor)');
   } else if (q.jobType === 'panel-replacement') {
@@ -12859,7 +12990,7 @@ function _quoteTimelineText(q) {
 }
 // HVAC circuit / panel replacement — permit required, no equipment to deliver.
 function _buildPermitStandardEmail({ q, custFirst, projectPhrase, total, addr }) {
-  const noteKey = (q.jobType === 'hvac-circuit') ? 'noteHvac'
+  const noteKey = (q.jobType === 'hvac-circuit') ? (_dcIsHvac(q) ? 'noteHvac' : 'notePermitOther')
                : (q.jobType === 'panel-replacement') ? 'notePanel'
                : 'notePermitOther';
   const ctx = {
@@ -16092,7 +16223,7 @@ function saveChargerSupport(make, fields) {
 const SKILLS_DEFAULT = [
   { id: 'ev-residential',     label: 'EV residential install' },
   { id: 'nema-1450',          label: 'NEMA 14-50 outlet' },
-  { id: 'hvac-circuit',       label: 'HVAC dedicated circuit' },
+  { id: 'hvac-circuit',       label: 'Dedicated circuit' },
   { id: 'circuit-replacement',label: 'Circuit replacement' },
   { id: 'panel-replacement',  label: 'Panel replacement' },
   { id: 'service-upgrade',    label: 'Service upgrade' },
@@ -17392,7 +17523,7 @@ function openNewQuote_ForJob(leadId) {
         <div style="display:flex;gap:12px;flex-direction:column">
           <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" id="qt-opt-quick" onclick="selectQTType('quick')">
             <input type="radio" name="qt-type" value="quick" checked style="margin-top:2px;accent-color:var(--green)">
-            <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, HVAC circuit, panel replacement</div></div>
+            <div><div style="font-size:13.5px;font-weight:500">⚡ Quick Quote</div><div style="font-size:12px;color:var(--text-muted);margin-top:3px">EV charger, NEMA 14-50, dedicated circuit, panel replacement</div></div>
           </label>
           <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:12px;border:1px solid var(--border);border-radius:var(--r)" id="qt-opt-detailed" onclick="selectQTType('detailed')">
             <input type="radio" name="qt-type" value="detailed" style="margin-top:2px;accent-color:var(--green)">
