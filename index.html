@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5438,7 +5438,12 @@ function getQQPricing(){
     circuitReplaceUnder30A:350, circuitReplace30To50A:450, circuitReplace60Plus:600,
     // Panel Replacement — base labor + per-breaker re-termination + always-included surge protector
     // 2026-05-02: settled at $1800 — typical 200A swap with 12 breakers + surge + permit lands ~$3023, on target.
-    panelReplaceBase:1800, panelReplacePerBreaker:35, panelHardware200A:310, panelHardware100A:170,
+    // crm-2026-10-30b (Jon): RE-PRICED. A like-for-like swap is ONE tech, ONE day;
+    // base + $35/breaker labour double-charged that day (a 36-breaker panel hit
+    // $4,465). Base $1,300 now covers the day INCLUDING every re-termination
+    // ($0/breaker); panel cost is $250 (Jon). Breakers still billed as material.
+    // Target: typical swap ≈ $2,500 with permit (30 breakers ≈ $2,490).
+    panelReplaceBase:1300, panelReplacePerBreaker:0, panelHardware200A:250, panelHardware100A:170,
     // ⚠ REPLACEMENT BREAKERS (added 2026-07-30). panelReplacePerBreaker is
     // LABOUR — re-terminating a conductor. It does not buy the breaker, and
     // panelHardware200A is $310, which is the load centre alone (HOM4080M200PC
@@ -5479,12 +5484,13 @@ function getQQPricing(){
     // ── Grounding & bonding (crm-2026-10-30a, Jon) ── COSTS are estimates —
     // verify against Capital Electric and edit here. Charged as cost × 1.30
     // (the standard markup) plus a flat labour figure.
-    //   per rod   = (rod + acorn) × 1.30 + rod labour   → (22 + 3) × 1.3 + 75 = $107.50
-    //   #6 bare   = per ft × 1.30 (GEC to the rods)     → $1.43 / ft
-    //   water bond = clamp × 1.30 + labour              → 10 × 1.3 + 75 = $88.00
-    //   #4 bare   = per ft × 1.30 (bond to cold water)  → $2.28 / ft
-    groundRodCost:22, groundAcornCost:3, groundRodLabor:75, bareCu6PerFt:1.10,
-    waterClampCost:10, waterBondLabor:75, bareCu4PerFt:1.75,
+    // 30b (Jon's costs: rods ~$25, bare Cu under $2/ft; tech already on site all day):
+    //   per rod   = (rod + acorn) × 1.30 + rod labour   → (25 + 3) × 1.3 + 25 = $61.40
+    //   #6 bare   = per ft × 1.30 (GEC to the rods)     → $2.28 / ft
+    //   water bond = clamp × 1.30 + labour              → 10 × 1.3 + 25 = $38.00
+    //   #4 bare   = per ft × 1.30 (bond to cold water)  → $2.93 / ft
+    groundRodCost:25, groundAcornCost:3, groundRodLabor:25, bareCu6PerFt:1.75,
+    waterClampCost:10, waterBondLabor:25, bareCu4PerFt:2.25,
     // AFCI/GFCI dual-function breaker upgrade — optional add-on for panel swaps.
     // $100 per upgraded circuit. The math (Capital Electric pricing data):
     //   HOM120 standard:    $7.61  wholesale  →  $10.65 sell @ 40% markup
@@ -7562,6 +7568,18 @@ function _renderPanelGroundingSection(q) {
       </div>
     </div>`;
 }
+// 30b: breakdown text is rebuilt on every change (it used to freeze at the
+// breaker count the form was opened with — showed "× 12" with 36 typed).
+function _panelBreakdownHtml(breakerCount, serviceAmps) {
+  const p = getQQPricing();
+  const hw = (serviceAmps || 200) >= 200 ? p.panelHardware200A : p.panelHardware100A;
+  const perB = p.panelReplacePerBreaker || 0;
+  return `Base panel-swap labor: <strong>$${p.panelReplaceBase.toLocaleString()}</strong> (one tech, full day — ${perB ? '' : 'includes re-terminating every circuit, '}covers typical access surprises).<br>` +
+    (perB ? `Per-breaker re-termination <em>(labour only)</em>: <strong>$${perB}</strong> × ${breakerCount} = $${(perB * breakerCount).toLocaleString()}.<br>` : '') +
+    `Replacement breakers: <strong>$${p.panelBreakerEach}</strong> each × ${breakerCount} + 30% = $${Math.round(breakerCount * p.panelBreakerEach * 1.3).toLocaleString()} <em>(blended: singles, tandems and 2-poles)</em>.<br>` +
+    `Panel + main breaker + ground bar kit: $${hw} + 30% = $${Math.round(hw * 1.3).toLocaleString()}.<br>` +
+    `Whole-home surge protector: <strong>$${p.panelSurgeProtector}</strong> (default-included; uncheck below to remove).`;
+}
 function _renderQQ_PanelReplacement(q) {
   const wrap = document.getElementById('qb-form'); if (!wrap) return;
   const qq = q.qq || {};
@@ -7598,12 +7616,8 @@ function _renderQQ_PanelReplacement(q) {
     </div>
     <div class="qq-section">
       <div class="qq-title">Pricing Breakdown</div>
-      <div style="font-size:11.5px;color:var(--text-muted);line-height:1.55">
-        Base panel-swap labor: <strong>$${getQQPricing().panelReplaceBase.toLocaleString()}</strong> (covers typical access surprises, full-day work).<br>
-        Per-breaker re-termination <em>(labour only — does not buy the breaker)</em>: <strong>$${getQQPricing().panelReplacePerBreaker}</strong> × ${breakerCount} = $${(getQQPricing().panelReplacePerBreaker * breakerCount).toLocaleString()}.<br>
-        Replacement breakers: <strong>$${getQQPricing().panelBreakerEach}</strong> each × ${breakerCount} + 30% = $${Math.round(breakerCount * getQQPricing().panelBreakerEach * 1.3).toLocaleString()} <em>(blended: singles, tandems and 2-poles)</em>.<br>
-        Hardware (panel + main breaker + ground bar kit) added as materials with markup.<br>
-        Whole-home surge protector: <strong>$${getQQPricing().panelSurgeProtector}</strong> (default-included; uncheck below to remove).
+      <div id="qq-panel-breakdown" style="font-size:11.5px;color:var(--text-muted);line-height:1.55">
+        ${_panelBreakdownHtml(breakerCount, serviceAmps)}
       </div>
     </div>
     <div class="qq-section">
@@ -8939,6 +8953,7 @@ function _onQQChange_PanelReplacement(qid) {
   if (_wbFtEl) _wbFtEl.disabled = !groundPatch.panelWaterBond;
   const _gc = _panelGroundingCost(groundPatch);
   const _gcEl = document.getElementById('qq-panel-ground-calc'); if (_gcEl) _gcEl.value = '$' + _gc.total.toFixed(2);
+  const _bdEl = document.getElementById('qq-panel-breakdown'); if (_bdEl) _bdEl.innerHTML = _panelBreakdownHtml(breakerCount, serviceAmps);
 
   let lm = installOverride!=null && !isNaN(installOverride) ? installOverride : p.panelReplaceBase;
   lm += breakerCount * p.panelReplacePerBreaker;
