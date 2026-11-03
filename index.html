@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-02b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-03a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -21079,8 +21079,36 @@ function _inspTodayJobs(){
     return !!(ms.finalInspScheduled?.done && md===iso);
   });
 }
-function _permitListSection(title, jobs, metaFn, emptyText, extraBtnFn){
-  const rows=jobs.map(l=>{
+// crm-2026-11-03a (Jon): the three work lists were 280px inner-scroll boxes with
+// overscroll-behavior:contain — the mouse wheel never reached the page, so getting
+// down to Today's Inspections meant grabbing the margin. Now each list is a plain
+// PAGED list (8 rows a page, ‹ Prev / Next ›, Show all) and the page scrolls
+// normally. Paging re-renders only that card, so the window doesn't jump.
+const PERMIT_PAGE_SIZE = 8;
+const _permitPg = {};            // key → { page: 0-based, all: bool }
+const _permitSecRender = {};     // key → () => html   (re-render one card)
+function _permitPgSet(key, action){
+  const st = _permitPg[key] || (_permitPg[key] = { page: 0, all: false });
+  if (action === 'all')        st.all = true;
+  else if (action === 'paged') { st.all = false; st.page = 0; }
+  else if (action === 'next')  st.page += 1;
+  else if (action === 'prev')  st.page = Math.max(0, st.page - 1);
+  const host = document.getElementById('permit-sec-' + key);
+  const fn = _permitSecRender[key];
+  if (host && fn) { host.outerHTML = fn(); }
+  else if (typeof renderPermittingPage === 'function') renderPermittingPage();
+}
+function _permitListSection(title, jobs, metaFn, emptyText, extraBtnFn, key){
+  key = key || String(title).replace(/[^a-z0-9]+/gi, '').toLowerCase();
+  _permitSecRender[key] = () => _permitListSection(title, jobs, metaFn, emptyText, extraBtnFn, key);
+  const st = _permitPg[key] || (_permitPg[key] = { page: 0, all: false });
+  const total = jobs.length;
+  const pages = Math.max(1, Math.ceil(total / PERMIT_PAGE_SIZE));
+  if (st.page > pages - 1) st.page = pages - 1;
+  const from = st.all ? 0 : st.page * PERMIT_PAGE_SIZE;
+  const to   = st.all ? total : Math.min(total, from + PERMIT_PAGE_SIZE);
+  const shown = jobs.slice(from, to);
+  const rows=shown.map(l=>{
     const c=l.customerId?getCustomer(l.customerId):null;
     const nm=c?custFullName(c):(l.customerName||'Unknown');
     const ad=(typeof leadAddrShort==='function')?leadAddrShort(l):'';
@@ -21104,10 +21132,16 @@ function _permitListSection(title, jobs, metaFn, emptyText, extraBtnFn){
       ${stageChip(l.stage)}
     </div>`;
   }).join('');
-  return `<div class="card" style="margin-bottom:16px">
-    <div class="ch"><div class="ct">${title} <span style="font-weight:400;color:var(--text-muted)">(${jobs.length})</span></div></div>
-    <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
-    ${jobs.length?rows:`<div style="padding:14px;font-size:12.5px;color:var(--text-muted)">${emptyText}</div>`}
+  const pgBtn = (lbl, act, dis, ttl) => `<button class="btn btn-g" style="padding:2px 9px;font-size:11px${dis?';opacity:.4;cursor:default':''}" ${dis?'disabled':''} onclick="_permitPgSet('${key}','${act}')" title="${escHtml(ttl||'')}">${lbl}</button>`;
+  const pager = total > PERMIT_PAGE_SIZE ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${st.all
+        ? `<span style="font-size:11.5px;color:var(--text-muted)">all ${total}</span>${pgBtn('Show 8 per page','paged',false,'Back to paging')}`
+        : `${pgBtn('‹ Prev','prev',st.page===0,'Previous page')}<span style="font-size:11.5px;color:var(--text-muted);font-variant-numeric:tabular-nums">${from+1}–${to} of ${total}</span>${pgBtn('Next ›','next',st.page>=pages-1,'Next page')}${pgBtn('Show all','all',false,'List every row — the page just gets longer')}`}
+    </div>` : '';
+  return `<div class="card" id="permit-sec-${key}" style="margin-bottom:16px">
+    <div class="ch" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><div class="ct">${title} <span style="font-weight:400;color:var(--text-muted)">(${total})</span></div>${pager}</div>
+    <div>
+    ${total?rows:`<div style="padding:14px;font-size:12.5px;color:var(--text-muted)">${emptyText}</div>`}
     </div>
   </div>`;
 }
@@ -21115,12 +21149,14 @@ function renderPermitWorkLists(){
   const needPermit=_permitNeededJobs().sort((a,b)=>new Date(a.stageAt||a.createdAt||0)-new Date(b.stageAt||b.createdAt||0));
   const needInsp=_inspNeededJobs();
   const today=_inspTodayJobs().sort((a,b)=>String(_inspDateISO(a.inspection||{})).localeCompare(String(_inspDateISO(b.inspection||{}))));
-  return _permitListSection('🗂 Needs a Permit', needPermit, l=>({txt:(getLeadJurisdiction(l).source==='mailing-city'?'jurisdiction unverified':''),cls:'chip-flag'}).txt?{txt:'jurisdiction unverified',cls:'chip-flag'}:null, 'Every won, permit-required job has its permit applied for.')
-    + _permitListSection('🔍 Needs Inspection', needInsp, _inspNeededMeta, 'Nothing installed is waiting on an inspection to be booked.')
-    + _permitListSection('📅 Today\'s Inspections', today, l=>({txt:'📅 '+mdy(String((l.inspection&&l.inspection.pickedDate)||l.milestones?.finalInspScheduled?.date||'')),cls:'chip-ok'}), 'No inspections on the books for today.',
+  // crm-2026-11-03a: Today's Inspections moved to the TOP — it is the list Jon
+  // needs first each morning and it is usually short; the two long lists page.
+  return _permitListSection('📅 Today\'s Inspections', today, l=>({txt:'📅 '+mdy(String((l.inspection&&l.inspection.pickedDate)||l.milestones?.finalInspScheduled?.date||'')),cls:'chip-ok'}), 'No inspections on the books for today.',
         // 2026-09-02 (Jonathan): straight to the inspector texting screen from
         // the bar — pick inspector, job pre-loaded, attach pics, send.
-        l=>`<button class="btn btn-p" style="padding:3px 10px;font-size:11px;flex-shrink:0" onclick="event.stopPropagation();textInspectorForJob('${l.id}')" title="Text this AHJ's inspector — this job is pre-loaded so you can attach its photos">💬 Inspector</button>`);
+        l=>`<button class="btn btn-p" style="padding:3px 10px;font-size:11px;flex-shrink:0" onclick="event.stopPropagation();textInspectorForJob('${l.id}')" title="Text this AHJ's inspector — this job is pre-loaded so you can attach its photos">💬 Inspector</button>`, 'today')
+    + _permitListSection('🗂 Needs a Permit', needPermit, l=>({txt:(getLeadJurisdiction(l).source==='mailing-city'?'jurisdiction unverified':''),cls:'chip-flag'}).txt?{txt:'jurisdiction unverified',cls:'chip-flag'}:null, 'Every won, permit-required job has its permit applied for.', null, 'permit')
+    + _permitListSection('🔍 Needs Inspection', needInsp, _inspNeededMeta, 'Nothing installed is waiting on an inspection to be booked.', null, 'insp');
 }
 
 function renderPermittingPage() {
