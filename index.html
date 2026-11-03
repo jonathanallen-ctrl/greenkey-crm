@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-03a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-03b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -10955,21 +10955,33 @@ function refreshQBSidebar(qid){
 }
 
 // ── SAVE / STATUS ──
+// crm-2026-11-03b (Jon: "Any way that we can have it update the date just by
+// hitting 'save quote' again?"): a DELIBERATE Save Quote re-issues the quote —
+// `q.issuedAt` = now — and the PDF header / 30-day validity / Active Quotes card
+// read issuedAt (falling back to createdAt). Only this button stamps it: status
+// changes, emails, syncs and the builder's live recalcs never touch it. Accepted /
+// contingent-accepted / invoiced quotes are NOT re-dated — the customer's PDF is
+// the contract (same reasoning as the price lock) — a toast says so.
+function quoteIssuedDate(q){ return (q && (q.issuedAt || q.createdAt)) || ''; }
+function _quoteIsLockedForRedate(q){ return !!q && (q.status==='approved' || q.status==='contingent-approved' || q.status==='invoiced' || !!q.invoiceId); }
 function saveQuoteChanges(qid){
   let q=getQuote(qid);if(!q)return;
+  const _locked=_quoteIsLockedForRedate(q);
+  const _stamp=_locked?{}:{issuedAt:new Date().toISOString()};
   if(q.type==='quick'){
     const scope=document.getElementById('qq-scope')?.value;
     const inc=document.getElementById('qq-inc')?.value;
     const exc=document.getElementById('qq-exc')?.value;
-    upsertQuote({...getQuote(qid),scope,inclusions:inc,exclusions:exc});
+    upsertQuote({...getQuote(qid),scope,inclusions:inc,exclusions:exc,..._stamp});
     onQQChange(qid);
   } else {
     const scope=document.getElementById('dq-scope')?.value;
     const inc=document.getElementById('dq-inc')?.value;
     const exc=document.getElementById('dq-exc')?.value;
-    upsertQuote({...getQuote(qid),scope,inclusions:inc,exclusions:exc});
+    upsertQuote({...getQuote(qid),scope,inclusions:inc,exclusions:exc,..._stamp});
     onDQChange(qid);
   }
+  if(_locked) toast('Quote date kept — this quote is accepted/invoiced, so its PDF is the contract. Create a new quote to re-issue.','info');
   // Generate PDF and save to customer's files
   const saved=getQuote(qid);
   const lead=getLead(saved.leadId);
@@ -13381,7 +13393,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   let y=0; const _b=(need)=>{ _st.y=y; _brk(need); y=_st.y; };
   const _fl=(lines,x,lh)=>{ _st.y=y; _flow(lines,x,lh); y=_st.y; };
   const GREEN=[109,194,48],DARK=[15,17,23],GRAY=[100,110,130],LGRAY=[238,240,245];
-  pdfHeader(doc,'QUOTE',q.id,q.createdAt?q.createdAt.slice(0,10):new Date().toISOString().slice(0,10),W);
+  pdfHeader(doc,'QUOTE',q.id,(quoteIssuedDate(q)||new Date().toISOString()).slice(0,10),W);   // crm-2026-11-03b: issuedAt (re-issued on Save Quote) else createdAt
   y=108;
   y=pdfCustomerBlock(doc,cust,lead,y,q);
   // validity badge
@@ -15183,7 +15195,7 @@ function _renderJobRail(lead){
     // must not be deletable — deleting it would orphan a real invoice number.
     const isInv = q.status==='invoiced' || !!q.invoiceId;
     const stColor = (q.status==='approved'||q.status==='contingent-approved')?'var(--green)':(q.status==='invoiced')?'#8e44ad':(q.status==='declined')?'var(--red)':'var(--text-muted)';
-    const qDate = q.createdAt ? new Date(q.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    const qDate = quoteIssuedDate(q) ? new Date(quoteIssuedDate(q)).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + (q.issuedAt && q.createdAt && q.issuedAt.slice(0,10)!==q.createdAt.slice(0,10) ? ' (re-issued)' : '') : '';   // crm-2026-11-03b
     const titleTxt = q.external
       ? `Outside / fixed-price quote (${escHtml(q.source||'external')}) — no 3% fee; counts as revenue. Click to edit.`
       : `No-fee (cash/Zelle) price — what the customer sees as TOTAL and what counts as revenue. Card payment adds 3% ($${Math.round(q.quoteTotal||0).toLocaleString()}).`;
