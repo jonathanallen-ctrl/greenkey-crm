@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-10-30d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-02b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1500,6 +1500,7 @@
         <div id="jobs-pipe-view">
           <div class="pipe-bar">
             <div class="pipe-filters">
+              <select class="psel" id="pf-class" onchange="setPipeClass(this.value)" title="Residential · Commercial Service (tickets) · Commercial Install (projects). Picking one relabels the lanes for that kind of work."><option value="">All Work</option><option value="residential">Residential</option><option value="com-service">Commercial Service</option><option value="com-install">Commercial Install</option></select>
               <select class="psel" id="pf-source" onchange="renderPipeline()"><option value="">All Sources</option><option>Qmerit</option><option>Electrum</option><option>Treehouse</option><option>AF1</option><option>Red E Charge</option><option>Tesla</option><option>ChargePoint</option><option>Blink</option><option>Website</option><option>Phone</option></select>
               <select class="psel" id="pf-type" onchange="renderPipeline()"><option value="">All Types</option><option value="ev-residential">EV Residential</option><option value="service-upgrade">Service Upgrade</option><option value="new-service">New Service</option></select>
               <select class="psel" id="pf-tech" onchange="renderPipeline()"><option value="">All Staff</option></select>
@@ -1822,20 +1823,69 @@ function kindChips(l){
   if(l.propertyType==='commercial') h+=`<span class="chip" style="background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)" title="Commercial${l.businessName?(' — '+String(l.businessName).replace(/"/g,'&quot;')):''}">🏢</span>`;
   return h;
 }
+// ── WORK CLASS (crm-2026-11-02b, Jon — Red E Charge tickets looked residential) ──
+// Three kinds of work share one pipeline. The class is DERIVED from two fields
+// that already exist — property type (lead, else its customer record) and work
+// kind — so nothing migrates and there is no third dropdown to forget:
+//   residential  = not commercial
+//   com-service  = commercial + repair/maintenance  (tickets: Red E Charge, AF1 …)
+//   com-install  = commercial + new install/project  (hotels, DCFC, RFQs)
+// Everything class-specific (pipeline filter + lane labels, card titles, the
+// status strip, Service Call default) keys off workClassOf(); stage ids never
+// change, so Scheduler / Find-a-slot / field app / Sherri's workflow are untouched.
+function leadIsCommercial(l){
+  if(!l) return false;
+  if(l.propertyType==='commercial') return true;
+  try{
+    const c = l.customerId && typeof getCustomer==='function' ? getCustomer(l.customerId) : null;
+    return !!(c && c.propertyType==='commercial');
+  }catch(_){ return false; }
+}
+function workClassOf(l){
+  if(!leadIsCommercial(l)) return 'residential';
+  return (l.workKind==='repair'||l.workKind==='maintenance') ? 'com-service' : 'com-install';
+}
+const WORK_CLASS_LABELS = { residential:'Residential', 'com-service':'Commercial Service', 'com-install':'Commercial Install' };
+// Lane labels per class. Keys are the REAL stage ids — only the words change.
+const WORK_CLASS_STAGE_LABELS = {
+  'com-service': {'lead-received':'Ticket Received','info-gathering':'Diagnosis','estimating':'Service Quote','quote-delivered':'Awaiting Go-Ahead','quote-approved':'Go-Ahead / PO','permit-applied':'Awaiting Permit','charger-confirmed':'Awaiting Parts','scheduled':'Scheduling Visit','installation':'Service Visit','post-install-docs':'Wrap-Up / Report','final-inspection':'Awaiting Inspection'},
+  'com-install': {'lead-received':'RFQ Received','info-gathering':'Site Walk','estimating':'Proposal','quote-delivered':'Proposal Delivered','quote-approved':'Awarded / PO','permit-applied':'Awaiting Permit','charger-confirmed':'Awaiting Equipment','scheduled':'Scheduling','installation':'Construction','post-install-docs':'Closeout Docs','final-inspection':'Awaiting Inspection'}
+};
+function stageLabelForClass(cls, stageId){
+  const m = WORK_CLASS_STAGE_LABELS[cls];
+  return (m && m[stageId]) || (STAGE_MAP[stageId] && STAGE_MAP[stageId].label) || stageId || '';
+}
+// Card / header title for a lead. Residential = the person. Commercial =
+// "Company — Site name" with the POC, ticket and PO on the sub-line, so the
+// contracting company — not the point of contact — is what the board shows.
+function leadCardTitle(l){
+  if(!l) return { main:'', sub:'', cls:'residential' };
+  let c = null;
+  try{ c = l.customerId && typeof getCustomer==='function' ? getCustomer(l.customerId) : null; }catch(_){}
+  const person = c ? custFullName(c) : (l.customerName||'');
+  const cls = workClassOf(l);
+  if(cls==='residential') return { main: person || 'No customer', sub:'', cls };
+  const biz  = ((c && c.propertyType==='commercial' && c.businessName) || l.businessName || '').trim();
+  const site = (l.siteName||'').trim();
+  const main = biz ? (site && site.toLowerCase()!==biz.toLowerCase() ? `${biz} — ${site}` : biz) : (site || person || 'No customer');
+  const sub  = [ (person && person!=='Unnamed' && person!=='Unknown' && person!==biz) ? person : '',
+                 l.ticketNo ? ('Ticket ' + l.ticketNo) : '',
+                 l.poNo ? ('PO ' + l.poNo) : '' ].filter(Boolean).join(' · ');
+  return { main, sub, cls };
+}
 // Kind-aware stage label for a SINGLE lead's stage display (kanban columns
 // stay global — mixed kinds share the board; cards carry the chips instead).
 function stageLabelFor(lead, stageId){
   const id = stageId || (lead && lead.stage);
   const base = (STAGE_MAP[id] && STAGE_MAP[id].label) || id || '';
   if(!lead) return base;
+  const cls = workClassOf(lead);
+  if(cls!=='residential') return stageLabelForClass(cls, id);
   const MAPS = {
     repair:      {'info-gathering':'Diagnosis','estimating':'Repair Quote','quote-delivered':'Awaiting Go-Ahead','scheduled':'Scheduling Visit','installation':'Repair Visit','post-install-docs':'Wrap-Up'},
     maintenance: {'info-gathering':'Site Review','estimating':'Maintenance Quote','scheduled':'Scheduling Visit','installation':'Maintenance Visit','post-install-docs':'Visit Wrap-Up'}
   };
-  let lbl = lead.workKind && MAPS[lead.workKind] && MAPS[lead.workKind][id];
-  if(!lbl && lead.propertyType==='commercial'){
-    lbl = {'info-gathering':'Site Walk','estimating':'Proposal','quote-delivered':'Proposal Delivered'}[id];
-  }
+  const lbl = lead.workKind && MAPS[lead.workKind] && MAPS[lead.workKind][id];
   return lbl || base;
 }
 
@@ -4104,13 +4154,26 @@ function _migrateRemovedStages() {
   });
   if (changed) saveLeads(arr);
 }
+// Work-class filter (crm-2026-11-02b). Remembered per browser so the person
+// who lives in Commercial Service lands there every morning.
+function getPipeClass(){
+  try { return localStorage.getItem('gk_pipe_class') || ''; } catch(_) { return ''; }
+}
+function setPipeClass(v){
+  try { if (v) localStorage.setItem('gk_pipe_class', v); else localStorage.removeItem('gk_pipe_class'); } catch(_) {}
+  renderPipeline();
+}
 function renderPipeline() {
   try { _migrateRemovedStages(); } catch(_){}
   populateTechFilter('pf-tech');
+  const clsSel = document.getElementById('pf-class');
+  const cls  = getPipeClass();
+  if (clsSel && clsSel.value !== cls) clsSel.value = cls;
   const src  = (document.getElementById('pf-source')||{}).value||'';
   const type = (document.getElementById('pf-type')||{}).value||'';
   const tech = (document.getElementById('pf-tech')||{}).value||'';
   let leads = getLeads().filter(l=>l.stage!=='archived' && l.stage!=='not-won');
+  if (cls)  leads = leads.filter(l=>workClassOf(l)===cls);
   if (src)  leads = leads.filter(l=>l.source===src);
   if (type) leads = leads.filter(l=>l.jobType===type);
   if (tech) leads = leads.filter(l=>l.assignedTo===tech);
@@ -4174,9 +4237,11 @@ function renderKanban(leads) {
     const cards = leads.filter(l=>l.stage===stage.id)
       .slice().sort((a,b)=>new Date(a.stageAt||a.createdAt||0)-new Date(b.stageAt||b.createdAt||0));
     const cardHtml = cards.length ? cards.map(l=>{
-      const c = custs.find(x=>x.id===l.customerId);
-      const name = c ? custFullName(c) : (l.customerName||'No customer');
-      const addr = l.siteCity ? `${l.siteCity}, ${l.siteState||'VA'}` : '—';
+      // crm-2026-11-02b: commercial cards show the CONTRACTING COMPANY (+ site),
+      // with the POC / ticket / PO on the sub-line — not the point of contact.
+      const _ct = leadCardTitle(l);
+      const name = _ct.main;
+      const addr = (l.siteCity ? `${l.siteCity}, ${l.siteState||'VA'}` : '—') + (_ct.sub ? ` <span style="opacity:.75">· ${escHtml(_ct.sub)}</span>` : '');
       const flagHtml = l.inspectionRequired ? `<span class="chip chip-flag">Inspection</span>` : '';
       const muChip = leadRequiresMissUtility(l, _kbQuotes) ? `<span class="chip chip-flag" title="Trenching / ground rods on this job — call Miss Utility (811) at least 3 business days before digging">811</span>` : '';
       const panelChip = leadPanelInfoMissing(l) ? `<span class="chip chip-flag" title="Panel make / breaker size not recorded — fill in the Electrical Snapshot on the job detail page">⚠ Panel info</span>` : '';
@@ -4207,7 +4272,7 @@ function renderKanban(leads) {
         ondragend="kcardDragEnd(event)"
         onclick="openLeadDetail('${l.id}')">
         <div class="kcard-id">${l.id}</div>
-        <div class="kcard-name">${name}</div>
+        <div class="kcard-name">${escHtml(name)}</div>
         <div class="kcard-addr">${addr}</div>
         <div class="kcard-chips">${sourceChip(l.source)}${typeChip(l.jobType)}${kindChips(l)}${flagHtml}${muChip}${panelChip}${offerChip}${techChip}${actChip}${(() => {
           const _po = (typeof openPunchCount === 'function') ? openPunchCount(l) : 0;
@@ -4219,9 +4284,14 @@ function renderKanban(leads) {
         </div>
       </div>`;
     }).join('') : `<div class="kempty" style="pointer-events:none">—</div>`;
+    // crm-2026-11-02b: when the board is filtered to ONE commercial class the
+    // lane headers speak that class's language (Ticket Received, Awaiting
+    // Go-Ahead, Service Visit …). Mixed board keeps the global labels.
+    const _pcls = getPipeClass();
+    const _laneLbl = (_pcls && _pcls !== 'residential') ? stageLabelForClass(_pcls, stage.id) : stage.label;
     return `<div class="kcol" data-stage-id="${stage.id}">
       <div class="kcol-hdr" style="pointer-events:none">
-        <span class="kcol-lbl">${stage.label}</span>
+        <span class="kcol-lbl" title="${escHtml(stage.label)}">${escHtml(_laneLbl)}</span>
         <span class="kcol-ct">${cards.length}</span>
       </div>
       <div class="kcol-body">${cardHtml}</div>
@@ -4261,8 +4331,8 @@ function renderPipeList(leads) {
     <th>Job ID</th><th>Customer</th><th>Address</th><th>Type</th><th>Source</th><th>Stage</th><th>Days</th><th>Assigned</th>
   </tr></thead><tbody>
   ${leads.map(l=>{
-    const c = custs.find(x=>x.id===l.customerId);
-    const name = c ? custFullName(c) : (l.customerName||'—');
+    const _ct = leadCardTitle(l);                      // crm-2026-11-02b
+    const name = escHtml(_ct.main) + (_ct.sub ? `<div style="font-size:11px;color:var(--text-muted)">${escHtml(_ct.sub)}</div>` : '');
     const addr = l.siteCity ? `${l.siteCity}, ${l.siteState||'VA'}` : '—';
     const assignee = getUsers().find(u=>u.id===l.assignedTo);
     return `<tr onclick="openLeadDetail('${l.id}')">
@@ -4323,8 +4393,8 @@ function renderLeadsPage() {
     <th>Job ID</th><th>Customer</th><th>Site City</th><th>Type</th><th>Source</th><th>Stage</th><th>Info?</th><th>Received</th>
   </tr></thead><tbody>
   ${leads.map(l=>{
-    const c = custs.find(x=>x.id===l.customerId);
-    const name = c ? custFullName(c) : (l.customerName||'—');
+    const _ct = leadCardTitle(l);                      // crm-2026-11-02b
+    const name = escHtml(_ct.main) + (_ct.sub ? `<div style="font-size:11px;color:var(--text-muted);font-weight:400">${escHtml(_ct.sub)}</div>` : '');
     const infoFlag = l.infoComplete
       ? `<span class="chip chip-ok">✓ Yes</span>`
       : `<span class="chip chip-warn">Pending</span>`;
@@ -4758,6 +4828,25 @@ function showLeadForm(lead, prefillCustId) {
   const custName = prefillCust ? custFullName(prefillCust) : (l.customerName||'');
   const users = getUsers();
 
+  // crm-2026-11-02b: "+ New Ticket" for a COMMERCIAL customer inherits source and
+  // work kind from that company's most recent job (Red E Charge → repair), so a
+  // ticket never lands as a residential-looking "Website / New install" lead.
+  // Only the address, site name and ticket # are typed. Existing leads untouched.
+  let _tplSrc = '', _tplKind = '';
+  if (isNew && prefillCust && prefillCust.propertyType === 'commercial') {
+    try {
+      const _mine = getLeads()
+        .filter(x => x && x.customerId === prefillCust.id && !x.deleted)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      // Prefer the newest job that names the contracting platform (Red E Charge,
+      // AF1 …) over one mis-filed as Website/Phone, so one bad entry doesn't
+      // propagate to every later ticket.
+      const _last = _mine.find(x => (typeof REFERRER_BILL_SOURCES !== 'undefined') && REFERRER_BILL_SOURCES.includes(x.source)) || _mine[0];
+      if (_last) { _tplSrc = _last.source || ''; _tplKind = _last.workKind || ''; }
+    } catch (_) {}
+  }
+  const _isTicket = !!(isNew && prefillCust && prefillCust.propertyType === 'commercial');
+
   const qSec = `
     <div class="fsec" id="qmerit-sec" style="display:${l.source==='Qmerit'?'block':'none'}">
       <div class="fsec-title">Qmerit Details</div>
@@ -4814,9 +4903,10 @@ function showLeadForm(lead, prefillCustId) {
         </div>
         <div class="fg"><div class="fl">Work Kind</div>
           <select class="fsel" id="lf-workkind" onchange="onLFWorkKindChange(this.value)">
-            <option value="install"${(l.workKind||'install')==='install'?' selected':''}>New install / project</option>
-            <option value="repair"${l.workKind==='repair'?' selected':''}>Troubleshooting / repair</option>
-            <option value="maintenance"${l.workKind==='maintenance'?' selected':''}>Maintenance</option>
+            ${(() => { const wk = l.workKind || _tplKind || 'install'; return `
+            <option value="install"${wk==='install'?' selected':''}>New install / project</option>
+            <option value="repair"${wk==='repair'?' selected':''}>Troubleshooting / repair</option>
+            <option value="maintenance"${wk==='maintenance'?' selected':''}>Maintenance</option>`; })()}
           </select>
         </div>
       </div>
@@ -4826,13 +4916,22 @@ function showLeadForm(lead, prefillCustId) {
           <div class="fg"><div class="fl">POC Title</div><input class="fi" id="lf-poctitle" placeholder="e.g. Facilities Manager" value="${(l.pocTitle||'').replace(/"/g,'&quot;')}"></div>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin:4px 0 8px">The contact name/phone/email above is the point of contact at this business.</div>
+        <!-- crm-2026-11-02b: per-ticket fields. Site Name = the property the work is
+             for (prints on the quote PDF, the Outlook subject and the board card). -->
+        <div class="frow3" style="margin-top:4px">
+          <div class="fg"><div class="fl">Site Name</div><input class="fi" id="lf-sitename" placeholder="e.g. Hyatt Place Charlottesville" autocomplete="off" value="${(l.siteName||'').replace(/"/g,'&quot;')}"></div>
+          <div class="fg"><div class="fl">Ticket / WO #</div><input class="fi" id="lf-ticketno" placeholder="customer's ticket #" autocomplete="off" value="${(l.ticketNo||'').replace(/"/g,'&quot;')}"></div>
+          <div class="fg"><div class="fl">PO #</div><input class="fi" id="lf-pono" placeholder="when issued" autocomplete="off" value="${(l.poNo||'').replace(/"/g,'&quot;')}"></div>
+        </div>
       </div>
       <div class="frow2" style="margin-top:10px">
         <div class="fg"><div class="fl">Source</div>
           <select class="fsel" id="lf-source" onchange="onSourceChange(this.value)">
             ${(() => {
               // New leads default to Website. Existing leads keep whatever they were.
-              const defaultSrc = l.source || (isNew ? 'Website' : '');
+              // crm-2026-11-02b: a new TICKET for a commercial customer inherits the source
+              // of that company's last job (Red E Charge, AF1 …) instead of Website.
+              const defaultSrc = l.source || (isNew ? (_tplSrc || 'Website') : '');
               return SOURCES.map(s=>`<option${s===defaultSrc?' selected':''}>${s}</option>`).join('');
             })()}
           </select>
@@ -4860,11 +4959,12 @@ function showLeadForm(lead, prefillCustId) {
     </div>
     <div class="fsec">
       <div class="fsec-title">Site Address</div>
-      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" autocomplete="off" value="${l.siteStreet||prefillCust?.street||''}"></div>
+      ${_isTicket ? `<div style="font-size:11px;color:var(--text-muted);margin:-4px 0 8px">Work location for THIS ticket — the company's billing address is on the customer record and is not copied here.</div>` : ''}
+      <div class="fg"><div class="fl">Street</div><input class="fi" id="lf-street" placeholder="123 Main St" autocomplete="off" value="${_isTicket ? '' : (l.siteStreet||prefillCust?.street||'')}"></div>
       <div class="frow3">
-        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" autocomplete="off" value="${l.siteCity||prefillCust?.city||''}" oninput="onCityInput(this.value)"></div>
+        <div class="fg"><div class="fl">City</div><input class="fi" id="lf-city" placeholder="City" autocomplete="off" value="${_isTicket ? '' : (l.siteCity||prefillCust?.city||'')}" oninput="onCityInput(this.value)"></div>
         <div class="fg"><div class="fl">State</div><input class="fi" id="lf-state" autocomplete="off" value="${l.siteState||prefillCust?.state||'VA'}"></div>
-        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" autocomplete="off" value="${l.siteZip||prefillCust?.zip||''}"></div>
+        <div class="fg"><div class="fl">Zip</div><input class="fi" id="lf-zip" placeholder="22401" autocomplete="off" value="${_isTicket ? '' : (l.siteZip||prefillCust?.zip||'')}"></div>
       </div>
       <div id="juris-banner-wrap">${jurisHtml}</div>
     </div>
@@ -4888,7 +4988,7 @@ function showLeadForm(lead, prefillCustId) {
     <input type="hidden" id="lf-custid" value="${prefillCust?prefillCust.id:(l.customerId||'')}">
     <input type="hidden" id="lf-id" value="${l.id||''}">`;
 
-  openDrawer(isNew?'New Lead':l.id, body,
+  openDrawer(isNew ? (_isTicket ? ('New Ticket — ' + (prefillCust.businessName || custName)) : 'New Lead') : l.id, body,
     `<button class="btn btn-g" onclick="closeDrawer()">Cancel</button>
      <button class="btn btn-p" onclick="saveLead()">Save Lead</button>`);
   // crm-2026-09-17e: the duplicate banner only ran on blur — a form PREFILLED from a
@@ -4905,7 +5005,7 @@ function showLeadForm(lead, prefillCustId) {
   // If we pre-filled the city from the customer record, run the jurisdiction
   // check so the Stafford/Spotsy banner shows up without the user having to
   // re-type the city.
-  if (prefillCust && prefillCust.city && !l.siteCity) {
+  if (prefillCust && prefillCust.city && !l.siteCity && !_isTicket) {
     onCityInput(prefillCust.city);
   }
 }
@@ -5015,6 +5115,10 @@ function saveLead() {
   const workKind = document.getElementById('lf-workkind')?.value || 'install';
   const bizName = (document.getElementById('lf-bizname')?.value || '').trim();
   const pocTitle = (document.getElementById('lf-poctitle')?.value || '').trim();
+  // crm-2026-11-02b: per-ticket commercial fields.
+  const siteName = (document.getElementById('lf-sitename')?.value || '').trim();
+  const ticketNo = (document.getElementById('lf-ticketno')?.value || '').trim();
+  const poNo     = (document.getElementById('lf-pono')?.value || '').trim();
 
   // Require at least a name
   const custName = document.getElementById('lf-custname').value.trim();
@@ -5107,6 +5211,9 @@ function saveLead() {
     propertyType, workKind,
     businessName: propertyType==='commercial' ? bizName : '',
     pocTitle: propertyType==='commercial' ? pocTitle : '',
+    siteName: propertyType==='commercial' ? siteName : '',
+    ticketNo: propertyType==='commercial' ? ticketNo : '',
+    poNo:     propertyType==='commercial' ? poNo : (existingLead?.poNo || ''),
     specialJurisdiction, jurisdiction, permitFee, inspectionRequired,
     qmerit,
     createdAt: date ? new Date(date).toISOString() : new Date().toISOString(),
@@ -5291,6 +5398,9 @@ function doGlobalSearch(q) {
       lcName.includes(ql)||
       (qKey && _nameKey(lcName).includes(qKey))||
       bn.toLowerCase().includes(ql)||
+      (l.siteName||'').toLowerCase().includes(ql)||          // crm-2026-11-02b
+      (l.ticketNo||'').toLowerCase().includes(ql)||
+      (l.poNo||'').toLowerCase().includes(ql)||
       (l.description||'').toLowerCase().includes(ql)||
       phoneMatch((lc?.phone||'') + ' ' + (lc?.altPhone||'') + ' ' + (lc?.phone2||'') + ' ' + (l.customerPhone||''))
     );
@@ -5319,7 +5429,7 @@ function doGlobalSearch(q) {
       const c = lCusts.find(x=>x.id===l.customerId);
       const isCom = c && c.propertyType==='commercial';
       const biz = isCom && c.businessName ? c.businessName : '';
-      const who = biz || (c?custFullName(c):(l.customerName||'Unknown'));
+      const who = (biz ? (biz + ((l.siteName||'').trim() ? ' — ' + l.siteName.trim() : '')) : (c?custFullName(c):(l.customerName||'Unknown')));   // crm-2026-11-02b: + site name
       return `<div class="sdrop-item" onclick="gotoLead('${l.id}')">
         <div class="sdrop-ico"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12v10H2z"/><path d="M5 4V3h6v1"/></svg></div>
         <div>
@@ -12226,7 +12336,13 @@ function pdfCustomerBlock(doc,cust,lead,y,q){
   }
   if(lead?.siteStreet){
     doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(...GRAY);
-    const addrLines=[lead.siteStreet,[lead.siteCity,lead.siteState||'VA',lead.siteZip].filter(Boolean).join(', ')].filter(Boolean);
+    // crm-2026-11-02b: commercial site name (e.g. "Hyatt Place Charlottesville") +
+    // the customer's ticket / WO # print above the address so the quote can be
+    // matched to the right site on their end.
+    const _cm = cust && cust.propertyType==='commercial';
+    const _siteNm = _cm ? String(lead.siteName||'').trim() : '';
+    const _tk = _cm ? String(lead.ticketNo||'').trim() : '';
+    const addrLines=[_siteNm||'', lead.siteStreet,[lead.siteCity,lead.siteState||'VA',lead.siteZip].filter(Boolean).join(', '), _tk ? ('Ticket / WO # ' + _tk) : ''].filter(Boolean);
     doc.text(addrLines,36,y);y+=addrLines.length*12;
   }
   return y;
@@ -14305,19 +14421,28 @@ function _renderPreInstallStrip(lead) {
   const muRequired   = leadRequiresMissUtility(lead, quotes);
   const matsRequired = (Array.isArray(lead.materials) && lead.materials.length > 0) || quotes.some(q => (q.specialMaterials || '').trim());
 
+  // crm-2026-11-02b: COMMERCIAL SERVICE tickets get a strip that matches how a
+  // ticket actually closes — Go-Ahead/PO · Parts · Service Visit · Report Sent ·
+  // Invoice Sent · Paid. Permit / 811 / Charger / Inspection only appear when the
+  // job really carries one (a permit fee on a quote, an 811 flag, a recorded
+  // milestone), instead of nagging on every ticket. Residential is unchanged.
+  const _svc = (typeof workClassOf === 'function') && workClassOf(lead) === 'com-service';
+  const _permitInPlay = !_svc || !!(ms.permitReceived?.done) || quotes.some(q => Number(q.permitFee) > 0) || !!lead.specialJurisdiction;
+
   const states = [];
 
   // Quote Approved (read-only, derived).
   const _quoteApproved = latestApproved || ms.quoteApproved?.done;
+  const _poMeta = _svc && (lead.poNo||'').trim() ? ('PO ' + String(lead.poNo).trim()) : '';
   states.push(_quoteApproved
-    ? { state: 'done', icon: '✓', label: 'Quote Approved', meta: mdy((latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||''))), click: `clickQuoteChip('${lead.id}')`, tip: 'Approved — from a CRM quote, or marked manually. Click to change.' }
-    : { state: 'pending', icon: '·', label: 'Quote Pending',  meta: '', click: `clickQuoteChip('${lead.id}')`, tip: 'No approved CRM quote. Click to mark approved manually — for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).' });
+    ? { state: 'done', icon: '✓', label: _svc ? 'Go-Ahead' : 'Quote Approved', meta: _poMeta || mdy((latestApproved ? (latestApproved.customerActionAt||latestApproved.updatedAt||'') : (ms.quoteApproved?.date||''))), click: `clickQuoteChip('${lead.id}')`, tip: _svc ? 'Customer gave the go-ahead (PO / email / accepted quote). Click to change; use ✎ record in Customer & Site to add the PO #.' : 'Approved — from a CRM quote, or marked manually. Click to change.' }
+    : { state: 'pending', icon: '·', label: _svc ? 'Awaiting Go-Ahead' : 'Quote Pending',  meta: _poMeta, click: `clickQuoteChip('${lead.id}')`, tip: _svc ? 'No go-ahead yet. When the PO / approval email lands, accept the quote here (or mark approved manually) and record the PO # under Customer & Site.' : 'No approved CRM quote. Click to mark approved manually — for jobs quoted outside the CRM (Treehouse, Qmerit, Excel).' });
 
   // Charger — shown only for jobs that involve a charger (EV jobs, or any job
   // with charger make/model on file); hidden entirely otherwise. Green means the
   // charger is confirmed ON SITE (an install-readiness check) — the inline editor
   // toggles that and shows the model.
-  const _involvesCharger = isEV || !!(lead.chargerInfo && (lead.chargerInfo.make || lead.chargerInfo.model));
+  const _involvesCharger = !_svc && (isEV || !!(lead.chargerInfo && (lead.chargerInfo.make || lead.chargerInfo.model)));
   if (_involvesCharger) {
     const _ci = lead.chargerInfo || {};
     const _cdesc = [_ci.make, _ci.model].filter(Boolean).join(' ');
@@ -14332,7 +14457,7 @@ function _renderPreInstallStrip(lead) {
   }
 
   // Permit Received — manual upload-or-toggle.
-  states.push(ms.permitReceived?.done
+  if (_permitInPlay) states.push(ms.permitReceived?.done
     ? { state: 'done',    icon: '✓', label: 'Permit',  meta: mdy((ms.permitReceived.date||'')), click: `clickPermitChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' }
     : { state: 'pending', icon: '·', label: 'Permit',  meta: '', click: `clickPermitChip('${lead.id}')`, tip: 'Click to upload permit doc or mark received without doc.' });
 
@@ -14340,7 +14465,7 @@ function _renderPreInstallStrip(lead) {
   // Click on "MU N/A" flags it manually (for jobs quoted outside the CRM —
   // Sherri's Excel quotes have no CRM quote to auto-detect from).
   if (!muRequired) {
-    states.push({ state: 'na', icon: '—', label: 'MU N/A', meta: '', click: `flagMissUtility('${lead.id}')`, tip: 'Not auto-detected. Click to flag manually — e.g., when the quote was done outside the CRM. Creates the 811 task and emails Sherri.' });
+    if (!_svc) states.push({ state: 'na', icon: '—', label: 'MU N/A', meta: '', click: `flagMissUtility('${lead.id}')`, tip: 'Not auto-detected. Click to flag manually — e.g., when the quote was done outside the CRM. Creates the 811 task and emails Sherri.' });
   } else {
     states.push(muTask?.status === 'done'
       ? { state: 'done',    icon: '✓', label: 'MU Called', meta: '', click: `clickMissUtilityChip('${lead.id}')`, tip: 'Auto-flips when the Miss Utility task is marked done.' }
@@ -14349,7 +14474,7 @@ function _renderPreInstallStrip(lead) {
 
   // Special Order Materials — structured tracker (vendor / PO / ETA / arrival per item).
   if (!matsRequired) {
-    states.push({ state: 'na', icon: '+', label: 'Materials', meta: '', click:`openChipEditor('${lead.id}','materials')`, tip: 'No special-order materials detected for this job. Click to add and track them — vendor, PO #, ETA, arrival.' });
+    states.push({ state: 'na', icon: '+', label: _svc ? 'Parts' : 'Materials', meta: '', click:`openChipEditor('${lead.id}','materials')`, tip: _svc ? 'No parts on order for this ticket. Click to list what the fix needs — vendor, PO #, ETA, arrival.' : 'No special-order materials detected for this job. Click to add and track them — vendor, PO #, ETA, arrival.' });
   } else {
     const _mItems = (typeof getJobMaterials === 'function') ? getJobMaterials(lead) : (Array.isArray(lead.materials) ? lead.materials : []);
     const _arr = _mItems.filter(m => m.arrived).length;
@@ -14382,17 +14507,31 @@ function _renderPreInstallStrip(lead) {
     } else if (_cs === 'pending') {
       states.push({ state:'pending', icon:'⏳', label:'Awaiting confirm', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Confirmation request sent — waiting on the customer\'s reply.' });
     } else {
-      states.push({ state:'done', icon:'📅', label:'Scheduled', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip:'Install date & time. Click to view or change it on the milestone.' });
+      states.push({ state:'done', icon:'📅', label: _svc ? 'Service Visit' : 'Scheduled', meta:mdy(_schedDate)+_tt, click:`clickScheduleChip('${lead.id}')`, tip: _svc ? 'Service visit date & time. Click to view or change.' : 'Install date & time. Click to view or change it on the milestone.' });
     }
   } else {
-    states.push({ state:'pending', icon:'📅', label:'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip:'No install date set. Click to set the day & time.' });
+    states.push({ state:'pending', icon:'📅', label: _svc ? 'Service Visit' : 'Schedule', meta:'set date/time', click:`clickScheduleChip('${lead.id}')`, tip: _svc ? 'No visit booked yet. Click to set the day & time (or use Schedule now / Find a slot under Appointments).' : 'No install date set. Click to set the day & time.' });
+  }
+
+  // crm-2026-11-02b: COMMERCIAL SERVICE closes with a REPORT to the customer
+  // (findings / photos / what was done) and an INVOICE on terms — two manual
+  // chips, stored as milestones. "Paid" below stays the revenue trigger.
+  if (_svc) {
+    states.push(ms.reportSent?.done
+      ? { state:'done',    icon:'✓', label:'Report Sent', meta:mdy((ms.reportSent.date||'')), click:`openChipEditor('${lead.id}','report')`, tip:'Service report / photos sent to the customer. Click to view or undo.' }
+      : { state:'pending', icon:'·', label:'Report Sent', meta:'', click:`openChipEditor('${lead.id}','report')`, tip:'Send the service report (findings, photos, what was done) to the customer contact, then mark it here.' });
+    states.push(ms.invoiceSent?.done
+      ? { state:'done',    icon:'✓', label:'Invoice Sent', meta:mdy((ms.invoiceSent.date||'')), click:`openChipEditor('${lead.id}','invoice')`, tip:'Invoice sent on terms. Click to view or undo.' }
+      : { state:'pending', icon:'·', label:'Invoice Sent', meta:'', click:`openChipEditor('${lead.id}','invoice')`, tip:'Invoice the company (Net terms on the customer record). Mark it here once it goes out.' });
   }
 
   // Final Inspection — manual upload-or-toggle. 2026-08-18k (Jon): the chip
   // now says WHERE the inspection stands without opening it — "request sent",
   // the scheduled/picked day, "call them", "link expired". Passed stays the
   // green ✓ it always was; everything pre-pass stays amber, only the meta talks.
-  if (ms.finalInspPassed?.done) {
+  if (_svc && !_permitInPlay && !ms.finalInspPassed?.done && !lead.inspection) {
+    // no inspection on a permit-less service ticket
+  } else if (ms.finalInspPassed?.done) {
     states.push({ state: 'done', icon: '✓', label: 'Inspection', meta: mdy((ms.finalInspPassed.date||'')), click: `clickInspectionChip('${lead.id}')`, tip: 'Click to view options (upload doc, undo).' });
   } else {
     const _ins = lead.inspection || null;
@@ -14736,8 +14875,53 @@ function _chipEditorHTML(leadId, key){
         : btnP('Mark closeout submitted',`_setMilestone('${leadId}','platformCloseout',true);renderJobDetail('${leadId}')`))
         + note('Submitting the platform closeout clears this job from the "Awaiting Closeout" list on the dashboard.'));
     }
+    // crm-2026-11-02b — commercial-service chips.
+    case 'report': {
+      const r=ms.reportSent||{};
+      return _chipEditorShell('Service report', row(r.done
+        ? `<span style="font-size:12px;color:var(--green)">✓ Sent ${mdy((r.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','reportSent',false);renderJobDetail('${leadId}')`)
+        : btnP('Mark report sent',`_setMilestone('${leadId}','reportSent',true);renderJobDetail('${leadId}')`))
+        + note('The report = findings, photos and what was done, sent to the customer contact (use Send Email, or attach the field photos). Marking it here is what tells the office the ticket is ready to invoice.'));
+    }
+    case 'invoice': {
+      const r=ms.invoiceSent||{};
+      const _c = getCustomer(lead.customerId);
+      const _terms = (_c && (_c.paymentTerms||'').trim()) || '';
+      return _chipEditorShell('Invoice', row(r.done
+        ? `<span style="font-size:12px;color:var(--green)">✓ Sent ${mdy((r.date||''))}</span>`+btn('Undo',`_setMilestone('${leadId}','invoiceSent',false);renderJobDetail('${leadId}')`)
+        : btnP('Mark invoice sent',`_setMilestone('${leadId}','invoiceSent',true);renderJobDetail('${leadId}')`))
+        + note(`Invoice the company${_terms ? ' — terms on file: <strong>' + escHtml(_terms) + '</strong>' : ' (no payment terms on the customer record — add them under ✎ Edit)'}. "Paid" turns green on its own when the payment is recorded.`));
+    }
+    case 'po': {
+      const _po=(lead.poNo||''), _tk=(lead.ticketNo||'');
+      return _chipEditorShell('Go-ahead / PO', row(
+        `<label style="font-size:11px;color:var(--text-muted)">Ticket / WO #</label><input class="jd-fi" id="po-ed-ticket" value="${escHtml(_tk)}" placeholder="customer's ticket #" style="width:150px;font-size:12px;padding:4px 6px">`+
+        `<label style="font-size:11px;color:var(--text-muted)">PO #</label><input class="jd-fi" id="po-ed-po" value="${escHtml(_po)}" placeholder="PO / approval ref" style="width:150px;font-size:12px;padding:4px 6px">`+
+        btnP('Save',`_savePoFields('${leadId}')`))
+        + note('A PO, an approval email, or an accepted quote all count as the go-ahead. Record the reference here so the invoice and the Outlook entry carry it.'));
+    }
     default: return _chipEditorShell('—', note('Nothing to edit.'));
   }
+}
+
+// crm-2026-11-02b: save Ticket / PO from the inline editor (commercial service).
+function _savePoFields(leadId){
+  const lead = getLead(leadId); if (!lead) return;
+  const tk = ((document.getElementById('po-ed-ticket')||{}).value||'').trim();
+  const po = ((document.getElementById('po-ed-po')||{}).value||'').trim();
+  const patch = { id: leadId, ticketNo: tk, poNo: po };
+  if (po && !(lead.poNo||'').trim()) {
+    patch.jobNotes = (Array.isArray(lead.jobNotes) ? lead.jobNotes : []).concat([{
+      id: 'note-po-' + Date.now().toString(36),
+      text: `PO / go-ahead recorded: ${po}${tk ? ' (ticket ' + tk + ')' : ''}`,
+      author: (S.user && S.user.id) || 'system', authorName: (S.user && S.user.name) || 'System',
+      timestamp: new Date().toISOString()
+    }]);
+  }
+  upsertLead(patch);
+  closeChipEditor();
+  toast('Saved', 'success');
+  renderJobDetail(leadId);
 }
 
 // Click handlers for the strip's chips — all now route to the unified inline
@@ -16665,17 +16849,25 @@ function renderJobDetail(id) {
     </button>
     <div class="jd-meta">
       <div class="jd-id">${id}${lead.createdAt?`<span style="font-weight:400;color:var(--text-muted);font-size:11px;margin-left:8px">· Received ${mdy(lead.createdAt)}</span>`:''}</div>
-      <div class="jd-name">${cust
-        ? `<span onclick="openCustomerFromJob('${cust.id}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px" title="Open ${escHtml(custName)}'s customer page — all their jobs">${custName}</span>`
-        : custName}</div>
+      ${(() => {
+        // crm-2026-11-02b: commercial jobs are titled by the CONTRACTING COMPANY
+        // (+ site name); the POC / ticket / PO sit underneath. Residential = person.
+        const _ct = leadCardTitle(lead);
+        const _ttl = _ct.cls === 'residential' ? custName : _ct.main;
+        const _link = cust
+          ? `<span onclick="openCustomerFromJob('${cust.id}')" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:4px" title="Open ${escHtml(_ttl)}'s customer page — all their jobs">${escHtml(_ttl)}</span>`
+          : escHtml(_ttl);
+        const _subLn = _ct.cls !== 'residential' && _ct.sub ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${escHtml(_ct.sub)}</div>` : '';
+        return `<div class="jd-name">${_link}</div>${_subLn}`;
+      })()}
       <div class="jd-chips">
-        ${typeChip(lead.jobType)}${lead.source==='Qmerit'?`<span onclick="showQmeritInfo('${id}')" style="cursor:pointer" title="View Qmerit program details">${sourceChip(lead.source)}</span>`:sourceChip(lead.source)}<span id="jd-stage-chips">${stageChip(lead.stage)}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
+        ${typeChip(lead.jobType)}${lead.source==='Qmerit'?`<span onclick="showQmeritInfo('${id}')" style="cursor:pointer" title="View Qmerit program details">${sourceChip(lead.source)}</span>`:sourceChip(lead.source)}${(() => { const _c = workClassOf(lead); return _c === 'residential' ? '' : `<span class="chip" style="background:rgba(142,68,173,.14);color:#a55ecc;border:1px solid rgba(142,68,173,.35)" title="Derived from Property + Work kind on Edit Info">🏢 ${escHtml(WORK_CLASS_LABELS[_c])}</span>`; })()}<span id="jd-stage-chips">${workClassOf(lead)==='residential' ? stageChip(lead.stage) : `<span class="chip chip-${(STAGE_MAP[lead.stage]||{}).col||'muted'} stg-pill" title="${escHtml((STAGE_MAP[lead.stage]||{}).label||'')}">${escHtml(stageLabelFor(lead))}</span>`}${lead.lostInfo?.isLost?`<span class="chip chip-lost" style="margin-left:6px">Lost${lead.lostInfo.reason?' · '+escHtml(lead.lostInfo.reason):''}</span>`:''}</span>
         ${lead.inspectionRequired?`<span class="chip chip-flag">⚠ In-person Inspection</span>`:''}
       </div>
       <div class="stg-row">
         <span class="stg-row-lbl">Stage:</span>
         <select class="stg-row-sel" id="jd-stage-sel" onchange="updateJobStage('${id}',this.value)">
-          ${STAGES.map(s=>`<option value="${s.id}"${s.id===lead.stage?' selected':''}>${s.label}</option>`).join('')}
+          ${STAGES.map(s=>`<option value="${s.id}"${s.id===lead.stage?' selected':''}>${escHtml(stageLabelFor(lead, s.id))}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -16698,7 +16890,9 @@ function renderJobDetail(id) {
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#0a66c2;color:#0a66c2" onclick="openJobFolder('${id}')" title="Open this job's SharePoint folder (all its files &amp; documents) in a new tab">📁 Files</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#f1c40f;color:#f1c40f" onclick="recordPaymentForJob('${id}')" title="Record a deposit, partial payment or balance for this job, and see everything already paid — opens the Payments page with the form pointed at this customer and a Back button to return here.">💵 Payments</button>
       <button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#8cc63f;color:#8cc63f" onclick="openLoadCalcModal('${id}')" title="NEC 220.83 load calc — snap the panel, the AI reads it and asks what it needs, PDF files to this job's Documents">⚡ Load Calc</button>
-      ${lead.customerId ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>` : ''}
+      ${lead.customerId ? (workClassOf(lead) === 'com-service'
+          ? `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a NEW TICKET for this same company — bill-to, contact, source and work kind carry over; you type the site name, address and ticket #. Nothing else is copied: new quote, new visit.">+ New Ticket for ${escHtml((cust && cust.businessName) || 'Customer')}</button>`
+          : `<button class="btn btn-g" style="padding:6px 12px;font-size:12px;border-color:#9b59b6;color:#9b59b6" onclick="openNewLeadForCustomer('${lead.customerId}')" title="Start a SEPARATE job for this same customer — name, phone, email and address prefill. Nothing is copied from this job: new quotes, new schedule, new milestones.">+ New Job for Customer</button>`) : ''}
     </div>
   </div>`;
 
@@ -16832,6 +17026,20 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">Email</div><div class="jd-fv">${cust?.email||lead.customerEmail||'—'}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
       </div>
+      ${(() => {
+        // crm-2026-11-02b: commercial jobs carry the SITE NAME (the property the
+        // ticket is for), the customer's TICKET / WORK ORDER #, and the PO #.
+        // Edited in Edit Info; shown here because they are what the office and
+        // the tech actually ask for ("which Red E site is this?").
+        if (workClassOf(lead) === 'residential') return '';
+        const _sn = (lead.siteName||'').trim(), _tk = (lead.ticketNo||'').trim(), _po = (lead.poNo||'').trim();
+        const _miss = `<span style="color:var(--text-muted)">—</span>`;
+        return `<div class="jd-fg" style="margin-top:6px">
+          <div class="jd-f"><div class="jd-fl">Site Name</div><div class="jd-fv">${_sn ? escHtml(_sn) : _miss}</div></div>
+          <div class="jd-f"><div class="jd-fl">Ticket / WO #</div><div class="jd-fv">${_tk ? escHtml(_tk) : _miss}</div></div>
+          <div class="jd-f"><div class="jd-fl">PO #</div><div class="jd-fv">${_po ? escHtml(_po) : _miss}${!_po ? ` <button class="jd-edit-link" onclick="openChipEditor('${lead.id}','po')" title="Record the customer's go-ahead / PO and ticket number">✎ record</button>` : ''}</div></div>
+        </div>`;
+      })()}
       <div class="jd-f" style="margin-top:6px"><div class="jd-fl">Site Address</div><div class="jd-fv">${addr}</div></div>
       ${(() => {
         // AHJ row (2026-08-05). The county comes from the geocoder, not the
@@ -17190,7 +17398,11 @@ function renderJobDetail(id) {
     </div>`;
   }).join('') : `<div style="font-size:12.5px;color:var(--text-muted);padding:6px 0">No appointments yet. Add one below, or use the <strong>Schedule</strong> button at the top to book one straight away.</div>`;
 
-  const _apptDefType = ['lead-received','info-gathering','estimating'].includes(lead.stage) ? 'walkdown' : 'installation';   // crm-2026-10-03c: pre-quote jobs default to Site Visit
+  // crm-2026-10-03c: pre-quote jobs default to Site Visit.
+  // crm-2026-11-02b: repair / maintenance work defaults to Service Call — a Red E
+  // Charge ticket was offering "Installation" and writing an install-style event.
+  const _apptDefType = (lead.workKind === 'repair' || lead.workKind === 'maintenance') ? 'troubleshoot'
+                     : (['lead-received','info-gathering','estimating'].includes(lead.stage) ? 'walkdown' : 'installation');
   const _apptAdd = `<div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap">
     <select id="appt-add-${id}" class="jd-fi" style="flex:1;min-width:190px;font-size:12.5px;padding:5px 8px">
       ${Object.keys(APPT_LABELS).map(t=>`<option value="${t}"${t===_apptDefType?' selected':''}>${escHtml(APPT_LABELS[t])}</option>`).join('')}
@@ -20539,6 +20751,8 @@ function openInspectorSMS(inspId, preJobId){
     <textarea id="insp-sms-body" placeholder="Message to the inspector…" style="width:100%;min-height:52px;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-size:13px;resize:vertical;box-sizing:border-box"></textarea>
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-g" style="font-size:12px" onclick="_inspTogglePicker()">📎 Attach job photos</button>
+      <button class="btn btn-g" style="font-size:12px" onclick="document.getElementById('insp-local-file').click()" title="Pick photos saved on this computer or phone (not in the CRM)">🖼️ From this computer</button>
+      <input type="file" id="insp-local-file" accept="image/jpeg,image/png,image/webp,image/gif" multiple style="display:none" onchange="_inspAddLocalFiles(this)">
       <button class="btn btn-p" style="flex:1;min-width:100px" onclick="sendInspectorSMS(this)">Send</button>
     </div>
     <div id="insp-picker" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"></div>`;
@@ -20552,7 +20766,31 @@ function openInspectorSMS(inspId, preJobId){
 function closeInspectorSMS(){ const m=document.getElementById('inspector-sms-modal'); if(m) m.style.display='none'; if(_inspSmsPoll){ clearInterval(_inspSmsPoll); _inspSmsPoll=null; } _inspSmsId=null; _inspSelPhotos={}; }
 function _renderInspAttachBar(){
   const bar=document.getElementById('insp-attachbar'); if(!bar) return; const ks=Object.keys(_inspSelPhotos);
-  bar.innerHTML = ks.length ? (`<span style="font-size:11px;color:var(--text-muted);align-self:center">Attached:</span>`+ks.map(k=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:2px 8px;font-size:11px">📷 ${escHtml((_inspSelPhotos[k].name||'photo').slice(0,18))}<span style="cursor:pointer;color:var(--red)" onclick="_inspUnpick('${k}')">✕</span></span>`).join('')) : '';
+  bar.innerHTML = ks.length ? (`<span style="font-size:11px;color:var(--text-muted);align-self:center">Attached:</span>`+ks.map(k=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:2px 8px;font-size:11px">${_inspSelPhotos[k].local?'🖼️':'📷'} ${escHtml((_inspSelPhotos[k].name||'photo').slice(0,18))}<span style="cursor:pointer;color:var(--red)" onclick="_inspUnpick('${k}')">✕</span></span>`).join('')) : '';
+}
+// crm-2026-11-02a (Jon): "I need to be able to select pics from outside the CRM
+// when texting inspectors." Local files join the same _inspSelPhotos map the job
+// picker uses (key 'local-…', dataUrl only), so sendInspectorSMS / _inspMediaUrl
+// resize + re-host them exactly like job photos. HEIC is refused — Chrome/Edge
+// can't decode it to resize, and carriers drop the raw file.
+async function _inspAddLocalFiles(input){
+  const files = Array.from((input && input.files) || []);
+  let added = 0, skipped = [];
+  for (const f of files) {
+    const nm = f.name || 'photo.jpg';
+    if (/\.(heic|heif)$/i.test(nm) || /hei[cf]/i.test(f.type || '')) { skipped.push(nm); continue; }
+    if (!/^image\//.test(f.type || '')) { skipped.push(nm); continue; }
+    try {
+      const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(f); });
+      const k = 'local-' + Date.now() + '-' + added;
+      _inspSelPhotos[k] = { url: dataUrl, dataUrl, name: nm, mimeType: f.type || 'image/jpeg', local: true };
+      added++;
+    } catch (e) { skipped.push(nm); }
+  }
+  if (input) input.value = '';
+  _renderInspAttachBar();
+  if (skipped.length) toast(`Skipped ${skipped.length}: ${skipped.slice(0,3).join(', ')}${skipped.length>3?'…':''} — HEIC/non-image. Save as JPG first.`, 'warning');
+  else if (added) toast(added + ' photo' + (added > 1 ? 's' : '') + ' attached', 'success');
 }
 function _inspUnpick(k){ delete _inspSelPhotos[k]; _renderInspAttachBar(); _renderInspPhotoGrid(); }
 function _inspTogglePicker(forceOpen){
@@ -20759,7 +20997,7 @@ async function sendInspectorSMS(btn){
     if(body){ try{ await send({ leadId:key, to:insp.phone, message:body, customerName:(insp.name||'')+' (inspector)' }); sent++; }catch(e){ failed++; console.warn('[GK] inspector text failed:',e); } }
     // 2) Each photo: resize + re-host (small) then send, spaced out to avoid carrier filtering.
     for(let i=0;i<photos.length;i++){
-      try{ const mediaUrl=await _inspMediaUrl(photos[i], token); await send({ leadId:key, to:insp.phone, message:'', mediaUrl, customerName:(insp.name||'')+' (inspector)' }); sent++; }
+      try{ const mediaUrl=await _inspMediaUrl(photos[i], token); if(/^data:/i.test(String(mediaUrl||''))) throw new Error('photo upload failed (local file could not be re-hosted)'); await send({ leadId:key, to:insp.phone, message:'', mediaUrl, customerName:(insp.name||'')+' (inspector)' }); sent++; }
       catch(e){ failed++; console.warn('[GK] inspector photo failed:',(photos[i]&&photos[i].name),e); }
       await new Promise(r=>setTimeout(r,400));
     }
@@ -35806,10 +36044,16 @@ function _buildSchedContent(lead, cust, quote, type) {
   if (_isComCust && !_schedIsRemote(type) && type !== 'material-pickup') {
     const biz = cust.businessName.trim();
     const typeLbl = (typeof _apptLabel === 'function') ? _apptLabel(type) : type;
-    const subjectC = `${biz} — ${typeLbl}${lead.siteCity ? ' (' + lead.siteCity + ')' : ''}`;
+    // crm-2026-11-02b: site NAME beats city in the subject when the ticket has one;
+    // ticket / PO numbers ride in the body so the tech can quote them on site.
+    const _siteNm = (lead.siteName || '').trim();
+    const subjectC = `${biz} — ${typeLbl}${_siteNm ? ' (' + _siteNm + ')' : (lead.siteCity ? ' (' + lead.siteCity + ')' : '')}`;
     const sec = [];
     sec.push(`${typeLbl} for ${biz}.`);
-    if (location) sec.push('Site: ' + location);
+    if (_siteNm) sec.push('Site: ' + _siteNm + (location ? '\n' + location : ''));
+    else if (location) sec.push('Site: ' + location);
+    const _tkLn = [(lead.ticketNo||'').trim() ? 'Ticket / WO: ' + String(lead.ticketNo).trim() : '', (lead.poNo||'').trim() ? 'PO: ' + String(lead.poNo).trim() : ''].filter(Boolean).join(' · ');
+    if (_tkLn) sec.push(_tkLn);
     const req = scope || desc || (quote && quote.scope) || '';
     if (req) sec.push('Request / scope:\n' + req);
     if (quote) sec.push(`Quote: ${quote.id || ''}${quote.quoteTotal ? ' — $' + Number(quote.quoteTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}${quote.poNumber ? ' · PO ' + quote.poNumber : ''}`);
