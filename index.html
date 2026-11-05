@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05e</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -11401,6 +11401,13 @@ function _emCombinedPaymentText(qs) {
   txt += _paymentHowToText(qs.some(x => x.contingentOnUtility), true);
   return txt;
 }
+// Permit paragraph for a quote that carries a permit fee (commercial template +
+// combined emails). Jurisdiction named when the quote has one. (11-05e)
+function _emPermitParagraph(q) {
+  const fee = fmt$(parseFloat(q.permitFee) || 0);
+  const jur = String(q.jurisdiction || '').trim();
+  return `\n\nPERMIT & INSPECTION: This quote includes a ${fee} electrical permit${jur ? ' (' + jur + ')' : ''}. Once you accept, we apply for the permit before work begins, and the jurisdiction inspects the completed work. Permit approval typically takes 1–2 weeks; some jurisdictions take longer. If the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.`;
+}
 function _emBuildCombinedEmail(quotes, bc) {
   const ordered = _emOrder(quotes);
   const isEVq = x => x.jobType === 'ev-residential' || x.jobType === 'nema-1450';
@@ -11423,7 +11430,8 @@ function _emBuildCombinedEmail(quotes, bc) {
   else body = body.replace(/^(Hi [^,\n]+,)\n\n/, `$1\n\n${intro}\n\n`);
   // QUOTE SUMMARY
   const pad = '           ';
-  const qLines = ordered.map((x, i) => `${i ? pad : 'Quote #:   '}${x.id} — ${_emCap(_emPhrase(x))} — ${fmt$(_emNet(x))}`).join('\n');
+  const _hasPermit = x => (parseFloat(x.permitFee) || 0) > 0;
+  const qLines = ordered.map((x, i) => `${i ? pad : 'Quote #:   '}${x.id} — ${_emCap(_emPhrase(x))} — ${fmt$(_emNet(x))}${_hasPermit(x) ? ' (includes ' + fmt$(parseFloat(x.permitFee)) + ' permit)' : ''}`).join('\n');
   body = body.replace(/Quote #:[^\n]*/, qLines);
   body = body.replace(/\nTotal:[^\n]*/, `\nTotal:     ${fmt$(total)} (${ordered.length === 2 ? 'both quotes' : 'all quotes'})`);
   body = body.replace('This quote is valid for 30 days.', 'These quotes are valid for 30 days.');
@@ -11444,6 +11452,19 @@ function _emBuildCombinedEmail(quotes, bc) {
     body = m ? body.slice(0, m.index) + scope + '\u0000PAY\u0000' + body.slice(m.index) : body + scope + '\u0000PAY\u0000';
   }
   if (p0 && body.includes(p0)) { body = body.replace(p0, ''); }
+  // PERMIT & INSPECTION — one block naming which quote carries the permit and
+  // which does not (11-05e). Replaces the base quote's own permit paragraph /
+  // sentence, which could not say WHICH quote it meant.
+  const permQs = ordered.filter(_hasPermit), noPermQs = ordered.filter(x => !_hasPermit(x));
+  if (permQs.length) {
+    body = body.replace(/\n*PERMIT & INSPECTION: This quote includes[^\n]*/g, '').replace(/ A \$[\d,.]+ permit fee is included\./g, '');
+    const permTxt = `\n${bar}\nPERMIT & INSPECTION\n${bar}\n`
+      + permQs.map(x => { const jur = String(x.jurisdiction || '').trim(); return `The ${_emPhrase(x)} quote includes a ${fmt$(parseFloat(x.permitFee))} electrical permit${jur ? ' (' + jur + ')' : ''}.`; }).join('\n')
+      + `\nOnce you accept, we apply for the permit before that work begins, and the jurisdiction inspects the completed work. Permit approval typically takes 1–2 weeks; some jurisdictions take longer. If the project is cancelled after the permit application is submitted, the permit fee is non-refundable and will be invoiced.`
+      + (noPermQs.length ? `\n${noPermQs.map(x => `The ${_emPhrase(x)} quote does not require a permit.`).join('\n')}` : '')
+      + '\n';
+    body = body.replace('\u0000PAY\u0000', permTxt + '\u0000PAY\u0000');
+  }
   body = body.replace('\u0000PAY\u0000', pay);
   // Subject
   const ids = ordered.map(x => x.id).join(' & ');
@@ -12578,7 +12599,10 @@ function _buildCommercialServiceEmail({ q, cust, custFirst, total, addr }) {
     (q.rentals || []).forEach(r => { const c = parseFloat(r.cost) || 0; if (c > 0) rows.push(`  • Rental — ${(r.desc || 'equipment')} — ${fmt$(Math.ceil(c))}`); });
     if (rows.length) lineItems = `\nLine items:\n${rows.join('\n')}\n`;
   }
-  const permitLine = ((q.permitFee || 0) > 0) ? ` A ${fmt$(q.permitFee)} permit fee is included.` : '';
+  // crm-2026-11-05e (Jon, Lakeside): "I want that to be clear when a permit is
+  // involved." The commercial template has no 'we apply for your permit' step,
+  // so the {permitLine} is now a full paragraph instead of a tacked-on sentence.
+  const permitLine = ((q.permitFee || 0) > 0) ? _emPermitParagraph(q) : '';
   const ctx = {
     firstName: custFirst, quoteId: q.id, address: addr, total, lineItems, permitLine,
     scopeBlock: _buildScopeText(q),
