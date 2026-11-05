@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05e</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05g</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -11136,20 +11136,13 @@ async function emailQuote(qid){
     return;
   }
 
-  // Determine charger recommendations based on plug type
-  const plugType = lead?.chargerInfo?.plugType || '';
-  const isNACS    = plugType === 'NACS';
-  const isJ1772   = plugType === 'J1772';
-  const isBoth    = plugType === 'Both' || !plugType;
-
-  // Assembled from the editable snippets (Settings → Email Templates), by
-  // the customer's connector type. Order: NACS → J1772 → multi-EV → not-sure
-  // → hardwired warning, joined by blank lines.
+  // crm-2026-11-05f (Jon): the section used to branch on the customer's
+  // connector type, so a Tesla-connector household only ever saw Tesla
+  // products. Now every EV quote lists GreenKey's three preferred brands
+  // (Tesla, ChargePoint, Emporia — all offered with either connector) and
+  // invites questions. Snippets stay editable in Settings → Email Templates.
   const chargerRecs = [
-    (isNACS || isBoth)  ? _emailTplText('chargerNACS', {})  : '',
-    (isJ1772 || isBoth) ? _emailTplText('chargerJ1772', {}) : '',
-    _emailTplText('chargerMulti', {}),
-    _emailTplText('chargerNotSure', {}),
+    _emailTplText('chargerPreferred', {}),
     _emailTplText('chargerHardwired', {})
   ].filter(Boolean).join('\n\n');
 
@@ -12770,22 +12763,17 @@ Your quote covers the electrical installation only — the EV charger itself is 
 
 {chargerRecs}
 ` },
-  chargerNACS: { group:'Building blocks', label:'Charger recs — NACS connector',
-    body: `FOR NACS CONNECTOR (Tesla, and Ford/GM/Rivian/Hyundai/Kia and most new 2025+ EVs):
-  • Tesla Wall Connector (Hardwired)
-    https://shop.tesla.com/product/wall-connector` },
-  chargerJ1772: { group:'Building blocks', label:'Charger recs — J1772 connector',
-    body: `FOR J1772 CONNECTOR (most EVs sold before 2025):
-  • ChargePoint Home Flex (Hardwired, 50-amp)
+  chargerPreferred: { group:'Building blocks', label:'Charger recs — preferred brands (Tesla / ChargePoint / Emporia)',
+    body: `OUR PREFERRED CHARGERS — all three are reliable, well supported, and we install them every week. Each is available with either connector (NACS for Tesla and most 2025+ EVs, J1772 for most earlier EVs):
+
+  • Tesla Wall Connector — the natural choice for Tesla and other NACS vehicles; the Universal Wall Connector version serves both connector types for mixed households.
+    https://shop.tesla.com/product/wall-connector
+  • ChargePoint Home Flex — up to 50 amps, NACS or J1772, with an excellent app for scheduling and tracking.
     https://www.chargepoint.com/drivers/home/chargepoint-home-flex/
-  • Emporia Classic (Hardwired, 48-amp)
-    https://www.emporiaenergy.com/` },
-  chargerMulti: { group:'Building blocks', label:'Charger recs — multiple EVs / future-proofing',
-    body: `FOR HOUSEHOLDS WITH MULTIPLE EVs (or want future-proofing):
-  • Tesla Universal Wall Connector — works with both NACS and J1772 vehicles
-    https://shop.tesla.com/product/universal-wall-connector` },
-  chargerNotSure: { group:'Building blocks', label:'Charger recs — "not sure" line',
-    body: `Not sure which connector your vehicle uses? Just reply to this email with your EV's year, make, and model and we'll confirm.` },
+  • Emporia EV Charger — 48 amps, NACS or J1772, the best value of the three; the Pro version includes the Vue energy monitor and PowerSmart load management.
+    https://www.emporiaenergy.com/
+
+Any of these works with the installation we've quoted. Not sure which connector your vehicle uses, or which charger fits your situation? Just reply to this email with your EV's year, make, and model — or give us a call — and we'll point you to the right one.` },
   chargerHardwired: { group:'Building blocks', label:'Charger recs — hardwired warning',
     body: `⚠ IMPORTANT: When ordering, please select the HARDWIRED version of whichever charger you choose — that is what our installation and permit are designed for.` },
   chargerArrivedSuffix: { group:'Building blocks', label:'Platform emails — "charger arrived" scheduling aside',
