@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-03b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -14823,10 +14823,18 @@ function _chipEditorHTML(leadId, key){
         row(btnP('📅 Reschedule — move the calendar event &amp; re-send confirmation',
                  `scheduleInOutlook('${leadId}'${_instAppt ? `,'${_instAppt.id}'` : ''})`)) +
         note('Opens the booking window prefilled — creating it REPLACES the old Outlook event and emails the customer a fresh Confirm/Reschedule request.') +
-        row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
-            `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
-            (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
-        note('⚠ These two boxes update the CRM record ONLY — they do not move the Outlook event and the customer is not notified. Use the Reschedule button above for the real move.')+
+        // crm-2026-11-05a (Jon, Milby 11/5): he changed the date in these boxes
+        // and the Outlook event stayed on the old day — the pill editor offered
+        // a CRM-only edit beside the real move. Rule now: when the install is
+        // LINKED to an Outlook event the boxes are gone and the date is shown
+        // read-only (Reschedule above is the only way to move it). The boxes
+        // remain only for an unlinked date (no calendar event to keep in step).
+        (_instAppt && _instAppt.outlookEventId
+          ? row(`<span style="font-size:12px;color:var(--text-muted)">Booked: <strong style="color:var(--text-primary)">${im.date ? mdy(im.date) : '—'}${im.time ? ' · ' + (function(t){ const m=String(t).match(/^(\d{1,2}):(\d{2})/); return m ? _fsMinTo12(Number(m[1])*60+Number(m[2])) : t; })(im.time) : ''}</strong> <span style="font-size:11px">· linked to the Outlook event — change it with Reschedule above, not here</span></span>`)
+          : row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
+                `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
+                (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
+            note('⚠ No calendar event is linked to this install, so these boxes update the CRM record ONLY — the customer is not notified. Use the Reschedule button above to book it on the calendar.')) +
         _replyBlock);
     }
     case 'inspection': {
