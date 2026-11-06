@@ -825,11 +825,11 @@
       </div>
       <div>
         <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Start</div>
-        <input id="sched-start-input" type="time" onchange="onSchedStartChange()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        <input id="sched-start-input" type="time" step="1800" onchange="onSchedStartChange()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
       </div>
       <div>
         <div style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">End</div>
-        <input id="sched-end-input" type="time" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
+        <input id="sched-end-input" type="time" step="1800" style="width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;font-family:var(--font);font-size:13px;color:var(--text-primary);outline:none">
       </div>
     </div>
     <div style="margin-bottom:8px;font-size:11px;color:var(--text-muted);background:var(--bg-elevated);padding:8px 10px;border-radius:var(--r);line-height:1.5">
@@ -1206,7 +1206,7 @@
       <div class="frow2" style="margin-bottom:14px">
         <div class="fg"><div class="fl">Panel location (optional)</div>
           <select class="fsel" id="ai-panel-loc">
-            <option value="">— unknown —</option>
+            <option value="">— select option —</option>
             <option value="garage">Garage</option>
             <option value="interior">Interior / basement</option>
             <option value="exterior">Exterior wall</option>
@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05h</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-05j</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -3239,19 +3239,19 @@ function renderSchedulingSettings() {
       <input class="sinput" id="set-daylen" style="width:80px" type="number" step="0.5" value="${getPrefs().dayHours||8}">
     </div>
     <div class="srow"><div><div class="srl">Crew Start Time</div><div class="srd">Time the crew actually starts driving (after gathering at the shop). Default 8:00 AM. Per-day overrides available in the Scheduler when an inspection or special start is needed.</div></div>
-      <input class="sinput" id="set-starttime" style="width:120px" type="time" value="${getPrefs().crewStartTime||'08:00'}">
+      <input class="sinput" id="set-starttime" style="width:120px" type="time" step="1800" value="${getPrefs().crewStartTime||'08:00'}">
     </div>
     <div class="srow"><div><div class="srl">Technicians</div><div class="srd">Who can be assigned to a job (the Technician dropdown on the job screen). Comma-separated first names. Every name and every pair ("A and B") becomes an option, and the name goes on the end of each Outlook event subject as [Name]. Add a person here — no code change needed.</div></div>
       <input class="sinput" id="set-techroster" style="width:300px" placeholder="Chase, Jon" value="${escHtml(getTechRoster().join(', '))}">
     </div>
     <div class="srow"><div><div class="srl">Find a slot — earliest arrival</div><div class="srd">Earliest a proposed stop may start. Default 8:30 AM.</div></div>
-      <input class="sinput" id="set-fs-earliest" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotEarliest||'08:30')}">
+      <input class="sinput" id="set-fs-earliest" style="width:120px" type="time" step="1800" value="${escHtml(getPrefs().findSlotEarliest||'08:30')}">
     </div>
     <div class="srow"><div><div class="srl">Find a slot — early-start floor</div><div class="srd">A slot between this time and the earliest arrival is still offered, flagged "early start — confirm with crew". Default 7:30 AM.</div></div>
-      <input class="sinput" id="set-fs-earlyfloor" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotEarlyFloor||'07:30')}">
+      <input class="sinput" id="set-fs-earlyfloor" style="width:120px" type="time" step="1800" value="${escHtml(getPrefs().findSlotEarlyFloor||'07:30')}">
     </div>
     <div class="srow"><div><div class="srl">Find a slot — latest start</div><div class="srd">Never propose a stop that starts after this. Default 5:00 PM.</div></div>
-      <input class="sinput" id="set-fs-latest" style="width:120px" type="time" value="${escHtml(getPrefs().findSlotLatestStart||'17:00')}">
+      <input class="sinput" id="set-fs-latest" style="width:120px" type="time" step="1800" value="${escHtml(getPrefs().findSlotLatestStart||'17:00')}">
     </div>
     <div class="srow"><div><div class="srl">Find a slot — priority window (business days)</div><div class="srd">Options inside this many business days rank first; squeeze options are only offered inside it. Default 3.</div></div>
       <input class="sinput" id="set-fs-firstpass" style="width:80px" type="number" min="1" max="10" step="1" value="${getPrefs().findSlotFirstPassDays||3}">
@@ -10102,9 +10102,10 @@ function renderDetailedQuoteForm(q){
       <div id="dq-stack-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
         <span style="font-size:12px;color:var(--text-muted);font-weight:600">Stack a scope:</span>
         <select class="fsel" id="dq-scope-pick" style="max-width:220px;flex:0 1 auto">
+          <option value="">— select option —</option>
           ${Object.keys(SCOPE_TEMPLATES).map(k=>`<option value="${k}">${SCOPE_TEMPLATES[k].label}</option>`).join('')}
         </select>
-        <button class="li-add" onclick="addScopeToQuote('${q.id}',document.getElementById('dq-scope-pick').value)">
+        <button class="li-add" onclick="(function(v){ if(!v){ toast('Pick a scope to add first','error'); return; } addScopeToQuote('${q.id}',v); })(document.getElementById('dq-scope-pick').value)">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>Add scope
         </button>
         <span style="font-size:11px;color:var(--text-muted)">Drops a labeled section with starter line items + scope text — all editable.</span>
@@ -14869,7 +14870,7 @@ function _chipEditorHTML(leadId, key){
         (_instAppt && _instAppt.outlookEventId
           ? row(`<span style="font-size:12px;color:var(--text-muted)">Booked: <strong style="color:var(--text-primary)">${im.date ? mdy(im.date) : '—'}${im.time ? ' · ' + (function(t){ const m=String(t).match(/^(\d{1,2}):(\d{2})/); return m ? _fsMinTo12(Number(m[1])*60+Number(m[2])) : t; })(im.time) : ''}</strong> <span style="font-size:11px">· linked to the Outlook event — change it with Reschedule above, not here</span></span>`)
           : row(`<input type="date" class="jd-fi" style="width:160px" value="${im.date||''}" onchange="saveMsField('${leadId}','installScheduled','date',this.value)">`+
-                `<input type="time" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
+                `<input type="time" step="1800" class="jd-fi" style="width:130px" value="${im.time||''}" onchange="saveMsField('${leadId}','installScheduled','time',this.value)">`+
                 (im.viaOutlook?`<span style="font-size:11px;color:var(--text-muted)">· from Outlook</span>`:''))+
             note('⚠ No calendar event is linked to this install, so these boxes update the CRM record ONLY — the customer is not notified. Use the Reschedule button above to book it on the calendar.')) +
         _replyBlock);
@@ -17447,7 +17448,7 @@ function renderJobDetail(id) {
         <div style="font-size:11.5px;color:${col};margin-top:1px">${booked?'📅 ':'⏳ '}${escHtml(when)}${tech?' · '+escHtml(tech.name||tech.email||''):''}${done?' · completed':''}</div>
       </div>
       <div style="display:flex;gap:5px;flex-shrink:0;align-items:center">
-        ${booked && !done && !a.outlookEventId ? `<input type="time" value="${escHtml(a.time||'')}" onchange="setApptTime('${id}','${a.id}',this.value)" title="Set the time in the CRM only — no calendar event is created or changed. For appointments linked to a calendar event, use Reschedule instead." style="font-size:11px;padding:2px 4px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:6px">` : ''}
+        ${booked && !done && !a.outlookEventId ? `<input type="time" step="1800" value="${escHtml(a.time||'')}" onchange="setApptTime('${id}','${a.id}',this.value)" title="Set the time in the CRM only — no calendar event is created or changed. For appointments linked to a calendar event, use Reschedule instead." style="font-size:11px;padding:2px 4px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:6px">` : ''}
         <button class="btn btn-g" style="padding:3px 9px;font-size:11px" onclick="scheduleInOutlook('${id}','${a.id}')" title="${booked?'Move this appointment: pick the new date/time — the old Outlook event is replaced automatically.':'Pick a date and time and create the Outlook event'}">${booked?'Reschedule':'Schedule'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px" onclick="completeAppt('${id}','${a.id}')" title="${done?'Mark as not completed':'Mark this appointment completed so it drops out of the scheduler'}">${done?'↺':'✓'}</button>
         <button class="btn btn-g" style="padding:3px 7px;font-size:11px;color:var(--red)" onclick="removeAppt('${id}','${a.id}')" title="Remove from the CRM (does NOT delete the Outlook event)">×</button>
@@ -17718,7 +17719,7 @@ function renderJobDetail(id) {
     const done = !!m.done;
     let metaHtml = '';
     if (opts.date) metaHtml += `<span class="ms-ml">Date:</span><input type="date" class="ms-di d" value="${m.date||''}" onchange="saveMsField('${id}','${key}','date',this.value)">`;
-    if (opts.time) metaHtml += `<span class="ms-ml">Time:</span><input type="time" class="ms-di d" value="${m.time||''}" onchange="saveMsField('${id}','${key}','time',this.value)">`;
+    if (opts.time) metaHtml += `<span class="ms-ml">Time:</span><input type="time" step="1800" class="ms-di d" value="${m.time||''}" onchange="saveMsField('${id}','${key}','time',this.value)">`;
     if (opts.date2) metaHtml += `<span class="ms-ml">${opts.date2Label||'End'}:</span><input type="date" class="ms-di d" value="${m[opts.date2Key]||''}" onchange="saveMsField('${id}','${key}','${opts.date2Key}',this.value)">`;
     if (opts.text) metaHtml += `<input type="text" class="ms-di t" placeholder="${opts.textPlaceholder||'Note'}" value="${m[opts.textKey||'text']||''}" onchange="saveMsField('${id}','${key}','${opts.textKey||'text'}',this.value)">`;
     if (opts.num)  metaHtml += `<span class="ms-ml">${opts.numLabel||''}</span><input type="number" class="ms-di n" placeholder="0" value="${m[opts.numKey||'num']||''}" onchange="saveMsField('${id}','${key}','${opts.numKey||'num'}',this.value)">`;
@@ -19778,7 +19779,7 @@ function openNewTask(linkedType, linkedId) {
       </div>
       <div id="task-cal-fields" style="display:none">
         <div class="frow2">
-          <div class="fg"><div class="fl">Start Time</div><input class="fi" type="time" id="task-cal-start" value="09:00"></div>
+          <div class="fg"><div class="fl">Start Time</div><input class="fi" type="time" step="1800" id="task-cal-start" value="09:00"></div>
           <div class="fg"><div class="fl">Duration</div>
             <select class="fi" id="task-cal-dur">
               <option value="30">30 minutes</option>
@@ -19855,7 +19856,7 @@ function openTaskDetail(id) {
       </div>
       <div id="task-cal-fields" style="display:none">
         <div class="frow2">
-          <div class="fg"><div class="fl">Start Time</div><input class="fi" type="time" id="task-cal-start" value="09:00"></div>
+          <div class="fg"><div class="fl">Start Time</div><input class="fi" type="time" step="1800" id="task-cal-start" value="09:00"></div>
           <div class="fg"><div class="fl">Duration</div>
             <select class="fi" id="task-cal-dur">
               <option value="30">30 minutes</option>
@@ -22324,15 +22325,15 @@ function editJobTimeWindow(leadId) {
         <input type="radio" name="twmode" value="window"${sel('window')} onchange="_twModeChange()"> <span>Within a window</span></label>
       <div id="tw-window" style="display:${c.mode==='window'?'flex':'none'};gap:8px;align-items:center;margin:0 0 10px 26px">
         <span style="font-size:12px;color:var(--text-muted)">no earlier than</span>
-        <input type="time" id="tw-early" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.earliest||''):'')}">
+        <input type="time" step="1800" id="tw-early" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.earliest||''):'')}">
         <span style="font-size:12px;color:var(--text-muted)">no later than</span>
-        <input type="time" id="tw-late" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.latest||''):'')}">
+        <input type="time" step="1800" id="tw-late" class="jd-fi" style="width:120px" value="${escHtml(c.mode==='window'?(c.latest||''):'')}">
       </div>
       <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer">
         <input type="radio" name="twmode" value="fixed"${sel('fixed')} onchange="_twModeChange()"> <span>🔒 Fixed — it must start at a set time</span></label>
       <div id="tw-fixed" style="display:${c.mode==='fixed'?'flex':'none'};gap:8px;align-items:center;margin:0 0 10px 26px">
         <span style="font-size:12px;color:var(--text-muted)">starts at</span>
-        <input type="time" id="tw-at" class="jd-fi" style="width:120px" value="${escHtml(c.at||'')}">
+        <input type="time" step="1800" id="tw-at" class="jd-fi" style="width:120px" value="${escHtml(c.at||'')}">
       </div>
       <div style="margin-top:6px">
         <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Why? (so it still makes sense in six weeks)</div>
@@ -23925,7 +23926,7 @@ function renderSchedulerPage() {
       </div>
       <div>
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Start</div>
-        <input type="time" class="psel" value="${_sched.startTime || (getPrefs().crewStartTime || '08:00')}"
+        <input type="time" step="1800" class="psel" value="${_sched.startTime || (getPrefs().crewStartTime || '08:00')}"
           onchange="_sched.startTime=this.value;_sched.built=false;renderSchedulerPage()"
           title="Start time for the crew (when driving begins). Defaults to your Settings → Scheduling start time. Override here for inspections or special early starts.">
       </div>
@@ -34510,9 +34511,12 @@ function openAIDraftModal(qid) {
   const seed = q.scope || lead?.scopeOfWork || '';
   const scopeEl = document.getElementById('ai-scope-input');
   if (scopeEl) scopeEl.value = seed;
-  // Pre-fill panel location if previously captured on the quote.
+  // Pre-fill panel location only if it was chosen in THIS estimator before
+  // (q.aiPanelLoc). q.qq.panelLocation defaults to 'garage' for Quick-Quote
+  // pricing on every new quote, so it must NOT seed this field — detailed /
+  // commercial quotes were opening with "Garage" preselected (2026-11-05).
   const panelEl = document.getElementById('ai-panel-loc');
-  if (panelEl) panelEl.value = (q.qq && q.qq.panelLocation) || '';
+  if (panelEl) panelEl.value = q.aiPanelLoc || '';
   const distEl = document.getElementById('ai-distance');
   if (distEl) distEl.value = '';
   // Pre-fill drive time and difficulty if previously stamped on the quote
@@ -34630,6 +34634,7 @@ async function submitAIDraft() {
     }
     _aiDraftResponse = data.draft;
     _aiDraftResponse._meta = data.meta || {};
+    q.aiPanelLoc = panelLoc || '';   // remember the estimator's own panel-location pick for next open
     _renderAIDraftResult(_aiDraftResponse);
   } catch (e) {
     console.error('[AI Estimator] submit failed:', e);
