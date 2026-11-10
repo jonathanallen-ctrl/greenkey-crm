@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-06a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-10a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -9755,13 +9755,13 @@ function autoInclusions(q){
     lines.push('• Forming and pouring a new concrete pad with the conduit set into it (first visit)');
     lines.push('• Return visit after cure to set the pedestal and install the charger');
   }
-  if ((q.qq?.jbLugs || 0) > 0) {
+  if ((q.qq?.jbLugs || 0) > 0 || _stackedQQAddOns(q).lugs > 0) {
     lines.push('• Junction box and insulated multi-tap connectors for splicing into the existing conductors');
   }
   // Access covers ride in Inclusions WITHOUT a price — the charge lives inside
   // L&M by design (Jonathan, 2026-08-19: a separate $20 line drew attention).
-  if ((q.qq?.accessCovers || 0) > 0) {
-    const _acN = q.qq.accessCovers;
+  if ((q.qq?.accessCovers || 0) + _stackedQQAddOns(q).covers > 0) {
+    const _acN = (q.qq?.accessCovers || 0) + _stackedQQAddOns(q).covers;
     lines.push('• ' + (_acN > 1 ? _acN + ' flush wall-access covers' : 'Flush wall-access cover') + ' where wall access is needed at the panel');
   }
   if ((parseFloat(q.qq?.breakerSwapFee) || 0) > 0) {
@@ -9906,7 +9906,11 @@ function _qqScopeRead(){
     amps:  parseInt(g('qqs-amps')?.value)||60,
     nemaLoc: g('qqs-nemaloc')?.value || 'inside',
     loc:   (g('qqs-loc')?.value||'').trim().slice(0,160),
-    panelText: (g('qqs-paneltext')?.value||'').trim().slice(0,120)
+    panelText: (g('qqs-paneltext')?.value||'').trim().slice(0,120),
+    // crm-2026-11-10a: Quick-Quote add-ons on the stacked EV scope
+    tandem: Math.min(3, Math.max(0,parseInt(g('qqs-tandem')?.value)||0)),
+    lugs:   Math.min(12,Math.max(0,parseInt(g('qqs-lugs')?.value)||0)),
+    covers: Math.min(6, Math.max(0,parseInt(g('qqs-covers')?.value)||0))
   };
 }
 function _qqScopePrice(o){
@@ -9918,9 +9922,29 @@ function _qqScopePrice(o){
   else if(o.run==='machine-trench'){ const mft=Math.max(ft,50); lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10; }
   if(o.kind==='nema') lm+=(o.nemaLoc==='outside'?p.nema1450Outside:p.nema1450Inside);
   else { if(o.mount==='post') lm+=p.post; else if(o.mount==='pedestal-existing') lm+=p.pedestalExistingPad; else if(o.mount==='pedestal-newpad') lm+=p.pedestalNewPad; }
+  lm += _qqScopeAddOnTotal(o);
   return Math.round(lm);
 }
+// crm-2026-11-10a (Jon, Vivelo sub-panel + EV quote): the stacked EV card had no
+// add-ons. Same constants and math as the Quick Quote rows (tandem breakers,
+// junction box + Polaris lugs at +30%, access covers).
+function _qqScopeAddOnTotal(o){
+  const p=getQQPricing();
+  const t=Math.max(0,parseInt(o&&o.tandem)||0), l=Math.max(0,parseInt(o&&o.lugs)||0), c=Math.max(0,parseInt(o&&o.covers)||0);
+  return t*(p.tandemBreaker||0) + (l>0 ? ((p.jbBoxCost||0)+(p.jbLugCost||0)*l)*1.30 : 0) + c*(p.accessCover||0);
+}
 function _qqScopeText(o){
+  const base=_qqScopeTextBase(o);
+  const t=Math.max(0,parseInt(o&&o.tandem)||0), l=Math.max(0,parseInt(o&&o.lugs)||0);
+  const W=['','One','Two','Three'];
+  let extra='';
+  if(t>0) extra+=` ${W[t]||t} tandem breaker${t>1?'s are':' is'} required to make space in the panel.`;
+  if(l>0) extra+=' Includes a junction box and insulated multi-tap connectors for splicing into the existing conductors.';
+  if(!extra) return base;
+  const tail=' All work is performed to NEC and local code.';
+  return base.endsWith(tail) ? base.slice(0,-tail.length)+extra+tail : base+extra;
+}
+function _qqScopeTextBase(o){
   const RUN={surface:'in surface-mounted conduit',unfinished:'through the unfinished space',crawl:'through the crawl space',attic:'through the attic','hand-trench':'in conduit through a hand-dug trench','machine-trench':'in conduit through a machine-dug trench'};
   const INS={surface:'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2',crawl:'SEU',attic:'SEU',unfinished:'SEU'};
   const from = o.panelText || (o.panel==='interior' ? 'the main panel' : 'the panel in the garage');
@@ -9937,10 +9961,13 @@ function _qqScopeDesc(o){
   const kind = o.kind==='nema' ? `NEMA 14-50 outlet (${o.nemaLoc})` : `Level 2 EV charger, hardwired, ${o.amps||60} A circuit`;
   const run  = o.ft>0 ? `, ${o.ft} ft ${o.run.replace('-',' ')} run` : ', at the panel';
   const mount = (o.kind!=='nema' && o.mount!=='wall') ? `, ${o.mount.replace('pedestal-','pedestal / ').replace('newpad','new pad').replace('existing','existing pad')}` : '';
-  return `EV circuit — ${kind}${run}${mount} (all-in, Quick Quote pricing)`;
+  const _t=Math.max(0,parseInt(o.tandem)||0), _l=Math.max(0,parseInt(o.lugs)||0), _c=Math.max(0,parseInt(o.covers)||0);
+  const adds=(_t>0?`, ${_t} tandem breaker${_t>1?'s':''}`:'')+(_l>0?`, junction box + ${_l} Polaris lug${_l>1?'s':''}`:'')+(_c>0?`, ${_c} access cover${_c>1?'s':''}`:'');
+  return `EV circuit — ${kind}${run}${mount}${adds} (all-in, Quick Quote pricing)`;
 }
 const _qqsDraft = {};   // qid → last values typed into the Quick-Quote EV card (survives form redraws)
 let _qqsOpenQid = null;
+let _qqsEditId = null;   // crm-2026-11-10a: id of the all-in line being re-edited (null = adding a new scope)
 function qqScopeRefresh(){
   const o=_qqScopeRead();
   if(_qqsOpenQid) _qqsDraft[_qqsOpenQid]=o;
@@ -9959,7 +9986,7 @@ function openQQScopeForm(qid, prev){
   const sel=(id,opts,val)=>`<select class="fsel" id="${id}" onchange="qqScopeRefresh()" style="width:100%">${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}</select>`;
   const html=`<div id="dq-qqscope-form" class="card" style="margin:0 0 12px;padding:14px 16px;border:1px solid var(--accent, #2e7d32);background:var(--bg-elev, rgba(46,125,50,.05))">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
-      <div style="font-size:13px;font-weight:700">EV charger circuit — Quick Quote pricing (one all-in line)</div>
+      <div style="font-size:13px;font-weight:700">EV charger circuit — Quick Quote pricing (one all-in line)${_qqsEditId?' — editing the line already on this quote':''}</div>
       <div style="font-size:18px;font-weight:700;color:var(--accent, #2e7d32)">Price: <span id="qqs-price">$0</span></div>
     </div>
     <div class="frow2">
@@ -9974,10 +10001,15 @@ function openQQScopeForm(qid, prev){
       <div class="fg" id="qqs-mount-row"><div class="fl">Mount</div>${sel('qqs-mount',[['wall','Wall'],['post','4x4 post (+$'+getQQPricing().post+')'],['pedestal-existing','Pedestal — existing pad'],['pedestal-newpad','Pedestal — new pad']],d.mount||'wall')}</div>
       <div class="fg" id="qqs-nema-row" style="display:none"><div class="fl">Outlet location</div>${sel('qqs-nemaloc',[['inside','Inside'],['outside','Outside']],d.nemaLoc||'inside')}</div>
     </div>
+    <div class="frow3">
+      <div class="fg"><div class="fl">Tandem breakers ($${getQQPricing().tandemBreaker} each)</div>${sel('qqs-tandem',[['0','None'],['1','1'],['2','2'],['3','3']],String(parseInt(d.tandem)||0))}</div>
+      <div class="fg"><div class="fl">Junction box + Polaris lugs (how many lugs)</div><input class="fi" id="qqs-lugs" type="number" min="0" max="12" step="1" value="${parseInt(d.lugs)||0}" oninput="qqScopeRefresh()" title="0 = no junction box. Box $${getQQPricing().jbBoxCost} + $${getQQPricing().jbLugCost} per lug, +30% — same as Quick Quote."></div>
+      <div class="fg"><div class="fl">Access covers ($${getQQPricing().accessCover} each)</div><input class="fi" id="qqs-covers" type="number" min="0" max="6" step="1" value="${parseInt(d.covers)||0}" oninput="qqScopeRefresh()"></div>
+    </div>
     <div class="fg"><div class="fl">Charger / outlet location (customer wording)</div><input class="fi" id="qqs-loc" value="${esc(d.loc)}" placeholder="e.g. the garage wall beside the sub-panel" oninput="qqScopeRefresh()" style="width:100%"></div>
     <div id="qqs-preview" style="font-size:12px;color:var(--text-secondary);margin:8px 0 10px;line-height:1.45"></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button class="btn btn-p" onclick="addQQScopeToQuote('${qid}')">Add to quote</button>
+      <button class="btn btn-p" onclick="addQQScopeToQuote('${qid}')">${_qqsEditId?'Update this scope':'Add to quote'}</button>
       <button class="btn btn-g" onclick="closeQQScopeForm()">Cancel</button>
       <span style="font-size:11px;color:var(--text-muted)">Same math as Quick Quote. No permit added (this quote already has one). Not buffered 10%.</span>
     </div>
@@ -9987,30 +10019,65 @@ function openQQScopeForm(qid, prev){
 }
 function closeQQScopeForm(){
   if(_qqsOpenQid) delete _qqsDraft[_qqsOpenQid];
-  _qqsOpenQid=null;
+  _qqsOpenQid=null; _qqsEditId=null;
   document.getElementById('dq-qqscope-form')?.remove();
+}
+// crm-2026-11-10a (Jon: "make it so its entry window can be reopened in the event
+// I forget to do something like add locations"): ✎ Edit on an all-in EV line
+// re-opens the card with what was entered; saving UPDATES that line and swaps
+// its paragraph in the Scope of Work instead of adding a second scope.
+function editQQScopeLine(qid,lineId){
+  const q=getQuote(qid); if(!q) return;
+  const ln=(q.lines||[]).find(l=>l&&l.id===lineId);
+  if(!ln||!ln.qqScope){ toast('That line has no saved EV entries to re-open','error'); return; }
+  delete _qqsDraft[qid];
+  _qqsEditId=lineId;
+  openQQScopeForm(qid, ln.qqScope);
+  try{ document.getElementById('dq-qqscope-form')?.scrollIntoView({behavior:'smooth',block:'center'}); }catch(_){}
+}
+function _stackedQQAddOns(q){
+  let lugs=0,covers=0;
+  if(q && q.type!=='quick') (Array.isArray(q.lines)?q.lines:[]).forEach(l=>{ if(l&&l.qqScope){ lugs+=parseInt(l.qqScope.lugs)||0; covers+=parseInt(l.qqScope.covers)||0; } });
+  return {lugs,covers};
 }
 function addQQScopeToQuote(qid){
   const q=getQuote(qid); if(!q) return;
   const o=_qqScopeRead();
-  delete _qqsDraft[qid]; _qqsOpenQid=null;
+  const editId=_qqsEditId;
+  delete _qqsDraft[qid]; _qqsOpenQid=null; _qqsEditId=null;
   const price=_qqScopePrice(o);
   const stamp=Date.now();
   const lines=[...(q.lines||[])];
-  lines.push({id:'ln-'+stamp+'-h',header:true,label: o.kind==='nema' ? 'NEMA 14-50 Outlet (all-in)' : 'EV Charger — Level 2 (all-in)'});
-  lines.push({id:'ln-'+stamp+'-0',desc:_qqScopeDesc(o),qty:1,unit:'per job',unitCost:price,markup:0,allIn:true,qqScope:o});
-  let scope=(q.scope||'').trim();
+  const STOCK=['NEMA 14-50 Outlet (all-in)','EV Charger — Level 2 (all-in)'];
+  const hdrLabel = o.kind==='nema' ? STOCK[0] : STOCK[1];
   const txt=_qqScopeText(o);
-  scope = scope ? (scope+'\n\n'+txt) : txt;
+  let scope=(q.scope||'').trim();
+  let msg;
+  const ei = editId ? lines.findIndex(l=>l&&l.id===editId) : -1;
+  if(ei>=0){
+    // crm-2026-11-10a: update the existing all-in line in place.
+    const old=lines[ei];
+    lines[ei]={...old,desc:_qqScopeDesc(o),qty:1,unit:'per job',unitCost:price,markup:0,allIn:true,qqScope:o};
+    for(let i=ei-1;i>=0;i--){ if(lines[i]&&lines[i].header){ if(STOCK.includes(lines[i].label)) lines[i]={...lines[i],label:hdrLabel}; break; } }
+    const oldTxt = old.qqScope ? _qqScopeText(old.qqScope) : '';
+    if(oldTxt && scope.includes(oldTxt)){ scope=scope.replace(oldTxt,()=>txt); msg='EV scope updated — $'+price.toLocaleString()+' (all-in)'; }
+    else if(scope.includes(txt)){ msg='EV scope updated — $'+price.toLocaleString()+' (all-in)'; }
+    else { scope = scope ? (scope+'\n\n'+txt) : txt; msg='EV line updated to $'+price.toLocaleString()+'. The old EV paragraph in Scope of Work had been edited by hand, so the new one was added at the end — delete the old one.'; }
+  } else {
+    lines.push({id:'ln-'+stamp+'-h',header:true,label:hdrLabel});
+    lines.push({id:'ln-'+stamp+'-0',desc:_qqScopeDesc(o),qty:1,unit:'per job',unitCost:price,markup:0,allIn:true,qqScope:o});
+    scope = scope ? (scope+'\n\n'+txt) : txt;
+    msg='EV circuit added at $'+price.toLocaleString()+' (all-in)';
+  }
   upsertQuote({...q,lines,scope});
   onDQChange(qid);
   renderDetailedQuoteForm(getQuote(qid));
-  toast('EV circuit added at $'+price.toLocaleString()+' (all-in)','success');
+  toast(msg, /by hand/.test(msg)?'warning':'success');
 }
 function addScopeToQuote(qid,key){
   const q=getQuote(qid); if(!q) return;
   const t=SCOPE_TEMPLATES[key]; if(!t) return;
-  if(t.quick){ openQQScopeForm(qid); return; }   // 2026-10-14: Quick-Quote-priced EV scope → inline form, not seed lines
+  if(t.quick){ if(_qqsEditId){ _qqsEditId=null; delete _qqsDraft[qid]; } openQQScopeForm(qid); return; }   // 2026-10-14: Quick-Quote-priced EV scope → inline form, not seed lines
   const lines=[...(q.lines||[])];
   const stamp=Date.now();
   lines.push({id:'ln-'+stamp+'-h',header:true,label:t.label});
@@ -10053,7 +10120,7 @@ function _detailedLineRowsHTML(q){
         <td><input class="li-inp num" type="number" value="${ln.unitCost||0}" min="0" step="0.01" oninput="updateLine('${q.id}',${i},'unitCost',this.value)"></td>
         <td><input class="li-inp num" type="number" value="${Number.isFinite(parseFloat(ln.markup))?parseFloat(ln.markup):30}" min="0" max="200" step="5" oninput="updateLine('${q.id}',${i},'markup',this.value)" title="Set 0 when the unit cost you entered ALREADY includes markup"></td>
         <td style="font-family:var(--mono);text-align:right;font-size:12px;color:var(--green)" id="li-ext-${i}">${fmt$(calcLine(ln))}</td>
-        <td><button class="li-del" onclick="removeLine('${q.id}',${i})">×</button></td>
+        <td style="white-space:nowrap">${(ln.qqScope&&ln.id)?`<button class="btn btn-g" style="padding:2px 7px;font-size:11px;margin-right:4px" onclick="editQQScopeLine('${q.id}','${ln.id}')" title="Re-open the EV charger entry window for this line (locations, run, mount, add-ons)">✎ Edit</button>`:''}<button class="li-del" onclick="removeLine('${q.id}',${i})">×</button></td>
       </tr>`;
     }
   });
@@ -10179,6 +10246,16 @@ function renderDetailedQuoteForm(q){
         </div>
       </div>`}
     </div>
+    <div class="qq-section">
+      <div class="qq-title">Travel <span style="font-size:11px;color:var(--text-muted);font-weight:400">(drive time from the home base to the job address)</span></div>
+      <div class="qq-row">
+        <div>
+          <div class="qq-lbl">Round-trip drive time (min)</div>
+          <div class="qq-sub">${TRAVEL_FREE_MIN} min round trip free · +$${TRAVEL_BLOCK_FEE} per ${TRAVEL_BLOCK_MIN} min over, rounded to nearest · adds one "Travel" line to Materials (no markup, no 10% buffer) · Calculated: <span id="dq-travel-calc" style="color:var(--green);font-weight:600">$${travelAdderFor(q.dqTravelMin)}</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px"><button class="btn btn-g" style="padding:4px 9px;font-size:11px;white-space:nowrap" id="dq-travel-auto" onclick="autoCalcTravelDQ('${q.id}')" title="Auto-calc round-trip drive time from your home base (Settings → Scheduling)">📍 Auto</button><input class="li-inp num" type="number" id="dq-travel-min" value="${parseInt(q.dqTravelMin)||0}" min="0" step="15" onchange="onDQTravelChange('${q.id}')" style="width:90px"></div>
+      </div>
+    </div>
     ${isQmerit?`<div class="qq-section">
       <div class="qq-title">Travel Fee <span style="font-size:11px;color:var(--text-muted);font-weight:400">(Qmerit only)</span></div>
       <div class="frow2">
@@ -10224,6 +10301,8 @@ function renderDetailedQuoteForm(q){
     </div>`;
   // 2026-10-14b: a Quick-Quote EV card that was open survives the redraw (auto-sync / line edits re-render this form).
   try { if (typeof _qqsDraft==='object' && _qqsDraft[q.id]) openQQScopeForm(q.id, _qqsDraft[q.id]); } catch(e) { console.warn('[GK] qq-scope restore', e); }
+  // crm-2026-11-10a: travel auto-fill also covers a quote switched to Detailed after opening (no-op once tried).
+  setTimeout(()=>{ try{ autoCalcTravelIfNeeded(q.id); }catch(e){} }, 150);
 }
 
 // Pre-install items captured on the quote — Miss Utility flag + special
@@ -10704,7 +10783,7 @@ function calcQuoteCostBasis(q){
   if(!q || q.type==='quick') return null;
   if(!(q.lines||[]).length && !(parseFloat(q.laborHours)||0)) return null;
   let cost=0;
-  for(const ln of (q.lines||[])) cost += (parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0);
+  for(const ln of (q.lines||[])) cost += (parseFloat(ln.qty)||0)*(parseFloat(ln.unitCost)||0)*((ln&&ln.travelAuto)?(65/160):1);   // 11-10a: auto travel line is crew drive time ($65/hr cost against the $160/hr charge)
   // Materials allowance: conservative — assume it gets fully spent at cost.
   cost += (q.matAllowance||0);
   // Internal labor cost: crew ≈ $65/hr (licensed $40 + apprentice $25) when
@@ -21910,12 +21989,85 @@ async function autoCalcTravelAI(){
     toast('Round trip ≈ '+roundTrip+' min','success');
   } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
 }
+// ── DETAILED-QUOTE TRAVEL (crm-2026-11-10a) ──
+// Jon (Vivelo sub-panel + stacked EV quote): "I don't see where travel was
+// included in any of this … can we include travel for any quote based on
+// customer address?" Quick Quote already had the drive-time row + 📍 Auto +
+// auto-fill on open; Detailed had only the manual Qmerit Travel Fee box.
+// Detailed now has the same row. The charge rides as ONE material line flagged
+// travelAuto (allIn → skips the 10% buffer, markup 0) — the same shape the AI
+// Estimator already uses for travel ("Travel — <place>", per job, 0% markup),
+// so every reader (sidebar, PDF, email, Job Value, field app) picks it up with
+// no new total field. Minutes live on q.dqTravelMin.
+function _dqTravelLineIdx(lines){ return (lines||[]).findIndex(l=>l&&l.travelAuto); }
+function _dqHasManualTravel(q){
+  return (q.lines||[]).some(l=>l&&!l.header&&!l.travelAuto&&/^\s*travel\b/i.test(l.desc||'')) || (parseFloat(q.travelFee)||0)>0;
+}
+function onDQTravelChange(qid){
+  const q=getQuote(qid); if(!q) return;
+  const el=document.getElementById('dq-travel-min');
+  if(typeof quoteLocked==='function' && quoteLocked(q)){ _warnQuoteLocked(); if(el) el.value=parseInt(q.dqTravelMin)||0; return; }
+  const minutes=Math.max(0,parseInt(el?el.value:q.dqTravelMin)||0);
+  const adder=travelAdderFor(minutes);
+  const lines=[...(q.lines||[])];
+  const ti=_dqTravelLineIdx(lines);
+  if(adder>0){
+    const ln={id:(ti>=0&&lines[ti].id)||('ln-'+Date.now()+'-trv'),desc:'Travel — '+minutes+'-minute round trip (first '+TRAVEL_FREE_MIN+' minutes included)',qty:1,unit:'per job',unitCost:adder,markup:0,allIn:true,travelAuto:true};
+    if(ti>=0) lines[ti]=ln; else lines.push(ln);
+  } else if(ti>=0) lines.splice(ti,1);
+  upsertQuote({...q,lines,dqTravelMin:minutes,dqTravelAdder:adder});
+  const tb=document.getElementById('lines-tbody'); if(tb) tb.innerHTML=_detailedLineRowsHTML(getQuote(qid));
+  const c=document.getElementById('dq-travel-calc'); if(c) c.textContent='$'+adder;
+  onDQChange(qid);
+}
+async function autoCalcTravelDQ(qid){
+  const q=getQuote(qid); if(!q) return;
+  const jobAddr=_jobAddrForQuote(q);
+  if(!jobAddr){ toast('Add the job site address first so I can route to it.','warning'); return; }
+  const btn=document.getElementById('dq-travel-auto'); const orig=btn?btn.innerHTML:'';
+  if(btn){ btn.disabled=true; btn.innerHTML='…'; }
+  try{
+    const oneWay=await homeToJobDriveMinOneWay(jobAddr);
+    if(oneWay==null){ toast('Could not calculate drive time — check the job address.','error'); return; }
+    const roundTrip=Math.round(oneWay*2/5)*5;
+    const inp=document.getElementById('dq-travel-min'); if(inp) inp.value=roundTrip;
+    onDQTravelChange(qid);
+    toast('Round trip ≈ '+roundTrip+' min ('+Math.round(oneWay)+' each way) — travel $'+travelAdderFor(roundTrip),'success');
+  } finally{ if(btn){ btn.disabled=false; btn.innerHTML=orig||'📍 Auto'; } }
+}
+// Auto-fill once per DRAFT detailed quote. Never touches a quote that has gone
+// out (status other than draft), one that already carries travel (a typed
+// "Travel…" line such as the AI Estimator's, or a Qmerit Travel Fee), or one
+// where minutes were already set.
+async function _autoCalcTravelDQIfNeeded(qid){
+  const q=getQuote(qid); if(!q || q.type!=='detailed') return;
+  if(q._dqTravelAutoTried) return;
+  if(q.status && q.status!=='draft') return;
+  if(parseInt(q.dqTravelMin)>0 || _dqHasManualTravel(q)) return;
+  const jobAddr=_jobAddrForQuote(q);
+  if(!jobAddr) return;
+  upsertQuote({...q,_dqTravelAutoTried:true});
+  const oneWay=await homeToJobDriveMinOneWay(jobAddr);
+  if(oneWay==null) return;
+  const roundTrip=Math.round(oneWay*2/5)*5;
+  const cur=getQuote(qid);
+  if(!cur || (cur.status && cur.status!=='draft') || parseInt(cur.dqTravelMin)>0 || _dqHasManualTravel(cur)) return;
+  const inp=document.getElementById('dq-travel-min');
+  if(!inp || (typeof S==='object' && S.quoteId!==qid)) return;       // builder moved on while routing
+  inp.value=roundTrip;
+  if(travelAdderFor(roundTrip)>0){
+    onDQTravelChange(qid);
+    toast('Travel auto-set: round trip ≈ '+roundTrip+' min → +$'+travelAdderFor(roundTrip)+' (edit in the Travel section if needed)','success');
+  } else {
+    upsertQuote({...cur,dqTravelMin:roundTrip,dqTravelAdder:0});   // local job — record the minutes, no charge, no redraw
+  }
+}
 // Auto-fill travel once per quote when the Quick Quote opens — only if the field
 // is empty and we have a job address. Never overwrites a value you've set, and
 // the 📍 Auto button stays for manual re-calc. Stamps _travelAutoTried so it
 // won't re-fire on every re-render or reopen.
 async function autoCalcTravelIfNeeded(qid){
-  if(!document.getElementById('qq-travel-min')) return;   // QQ travel field not on screen (e.g. detailed quote)
+  if(!document.getElementById('qq-travel-min')){ if(document.getElementById('dq-travel-min')) return _autoCalcTravelDQIfNeeded(qid); return; }   // QQ travel field not on screen → Detailed quote has its own
   const q=getQuote(qid); if(!q) return;
   const qq=q.qq||{};
   if(qq._travelAutoTried) return;                          // already auto-tried for this quote
