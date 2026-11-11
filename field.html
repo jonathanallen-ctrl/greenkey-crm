@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-10-22 field-41';
+const BUILD = '2026-11-11 field-42';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -221,6 +221,21 @@ function getCustomer(id){ return getCustomers().find(c=>c.id===id)||null; }
 function custName(l){ const c=l.customerId?getCustomer(l.customerId):null; if(c){ const n=((c.firstName||'')+' '+(c.lastName||'')).trim(); return n||c.businessName||l.customerName||l.id; } return l.customerName||((l.customerFirstName||'')+' '+(l.customerLastName||'')).trim()||l.id; }
 function leadAddr(l){ return [l.siteStreet,l.siteCity,l.siteState||'VA',l.siteZip].filter(Boolean).join(', '); }
 function leadPhone(l){ const c=l.customerId?getCustomer(l.customerId):null; return (c&&c.phone)||l.customerPhone||''; }
+// field-42 (Jon 11/11): the OFFICE can point a job's texts at the customer's
+// second phone (spouse/partner) — lead.fieldTextTo === 'phone2', set on the job
+// page in the CRM. Every text this app sends goes through leadTextPhone();
+// the call button and search keep using the main number (leadPhone).
+function leadTextPhone(l){
+  const c=l.customerId?getCustomer(l.customerId):null;
+  if(l.fieldTextTo==='phone2' && c && c.phone2) return c.phone2;
+  return leadPhone(l);
+}
+// "Texting: wife's cell · (804) 555-9876" — what the tech sees above the Send box.
+function leadTextWho(l){
+  const c=l.customerId?getCustomer(l.customerId):null;
+  if(l.fieldTextTo==='phone2' && c && c.phone2) return (c.phone2Label||'second phone')+' \u00b7 '+c.phone2;
+  const p=leadPhone(l); return p ? (c&&c.phone2 ? 'main number \u00b7 '+p : p) : '';
+}
 function prettyType(t){ if(!t) return ''; return String(t).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase()); }
 function schedDate(l){ return (l.milestones&&l.milestones.installScheduled&&l.milestones.installScheduled.date)||l.scheduleAt||''; }
 // ── APPOINTMENTS (2026-07-31) ──
@@ -1841,7 +1856,7 @@ async function _hydrateFldMedia(root){
 }
 async function _sendFldSMS(jobId, message, templateKey){
   const l=getLeads().find(x=>x.id===jobId); if(!l) throw new Error('Job not found');
-  const phone=leadPhone(l); if(!phone) throw new Error('No phone number on file');
+  const phone=leadTextPhone(l); if(!phone) throw new Error('No phone number on file');
   const token=await _acquireWorkerToken();
   const r=await fetch(SMS_WORKER_URL+'/sms/send',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
     body:JSON.stringify({leadId:l.id,to:phone,message:message,templateKey:templateKey||'field_thread',customerName:custName(l)})});
@@ -1866,9 +1881,10 @@ function _smsGrow(){
   });
 }
 function _smsCardHTML(l){
-  var phone=leadPhone(l);
+  var phone=leadTextPhone(l);
   if(!phone) return '';
   return '<div class="card"><div class="lab">Customer texts</div>'
+    + '<div class="muted" style="font-size:12px;margin:-2px 0 10px">Texting: '+esc(leadTextWho(l))+(l.fieldTextTo==='phone2'?' <span style="color:#8CC63F">(set by the office)</span>':'')+'</div>'
     + '<button class="btn green" onclick="sendOnMyWay(\''+esc(l.id)+'\')">🚐 Text \u201cOn my way\u201d</button>'
     + '<div style="height:8px"></div>'
     + '<button class="btn ghost" id="fld-sms-toggle" onclick="toggleFldThread(\''+esc(l.id)+'\')">💬 Open conversation</button>'
@@ -1891,7 +1907,7 @@ async function sendFldReply(jobId){
 }
 function sendOnMyWay(jobId){
   const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
-  const phone=leadPhone(l);
+  const phone=leadTextPhone(l);
   if(!phone){ alert('No phone number on file for this customer — add one in the CRM first.'); return; }
   const first=(custName(l).trim().split(/\s+/)[0])||'there';
   let tech='your GreenKey technician';
@@ -2059,7 +2075,7 @@ async function _acquireWorkerToken(){
 async function textPayLink(jobId){
   const l=getLeads().find(x=>x.id===jobId); if(!l){ alert('Job not found'); return; }
   if(!isDirect(l)){ alert(l.source+' invoices the customer — do not collect on site.'); return; }
-  const phone=leadPhone(l);
+  const phone=leadTextPhone(l);
   if(!phone){ alert('No phone number on file for this customer — add one in the CRM first.'); return; }
   let amt=jobPayAmounts(l).card;
   if(!amt){ const v=prompt('Card amount to charge ($):',''); if(v===null) return; amt=Math.round(parseFloat(v)||0); }

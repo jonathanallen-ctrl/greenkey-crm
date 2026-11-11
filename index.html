@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-10b</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-11a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2409,6 +2409,18 @@ function getUnmatchedPayments(){ try { return JSON.parse(localStorage.getItem(UP
 function saveUnmatchedPayments(arr){ localStorage.setItem(UPK, JSON.stringify(arr)); queueSPSync(); }
 function getLead(id) { return getLeads().find(l=>l.id===id)||null; }
 
+// crm-2026-11-11a (Jon): office-only choice of which number the FIELD APP texts
+// for this job — main or the customer's second phone (spouse/partner). Stored
+// on the lead so it is per job; field-42 reads it in leadTextPhone().
+function setFieldTextTo(leadId, v) {
+  const l = getLead(leadId); if (!l) return;
+  const val = v === 'phone2' ? 'phone2' : 'primary';
+  upsertLead({ ...l, fieldTextTo: val });
+  const c = l.customerId ? getCustomer(l.customerId) : null;
+  toast(val === 'phone2'
+    ? `Field-app texts for this job now go to ${(c && (c.phone2Label || 'the second phone')) || 'the second phone'}.`
+    : 'Field-app texts for this job go to the main number.', 'success');
+}
 function upsertLead(data) {
   data = _prettyPhoneFields(data, ['customerPhone','phone']);       // crm-2026-10-20b
   const arr = getLeads();
@@ -17418,6 +17430,10 @@ function renderJobDetail(id) {
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv" style="display:flex;align-items:center;gap:8px">${custName}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
         <div class="jd-f"><div class="jd-fl">Phone</div><div class="jd-fv">${cust?.phone||lead.customerPhone||'—'}</div></div>
         ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Second phone</div><div class="jd-fv">${escHtml(cust.phone2)}${cust.phone2Label ? ` <span style="color:var(--text-muted);font-size:12px">(${escHtml(cust.phone2Label)})</span>` : ''}</div></div>` : ''}
+        ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Field-app texts go to</div><div class="jd-fv"><select class="fsel" style="display:inline-block;width:auto;padding:3px 8px;font-size:12.5px" onchange="setFieldTextTo('${lead.id}', this.value)" title="Which number the technicians' app texts for this job (On my way, replies, payment links). Office-only — set here, not in the field app.">
+          <option value="primary"${lead.fieldTextTo === 'phone2' ? '' : ' selected'}>${escHtml(cust.phone || lead.customerPhone || '—')} — main</option>
+          <option value="phone2"${lead.fieldTextTo === 'phone2' ? ' selected' : ''}>${escHtml(cust.phone2)} — ${escHtml(cust.phone2Label || 'second phone')}</option>
+        </select></div></div>` : ''}
         <div class="jd-f"><div class="jd-fl">Email</div><div class="jd-fv">${cust?.email||lead.customerEmail||'—'}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>` : ''}
       </div>
@@ -37326,7 +37342,7 @@ function openSMSModal(leadId) {
   if (_p2) {
     const _d10 = x => String(x || '').replace(/\D/g, '').slice(-10);
     const _last = _d10(_smsLastInPhone[leadId]);
-    const _use2 = _last && _last === _d10(_p2);
+    const _use2 = _last ? (_last === _d10(_p2)) : (lead.fieldTextTo === 'phone2');   // 11-11a: office choice when nothing inbound yet
     _toEl.innerHTML = `${escHtml(name)} · <select id="sms-to-sel" class="fsel" style="display:inline-block;width:auto;padding:4px 8px;font-size:13px">
         <option value="${escHtml(phone)}"${_use2 ? '' : ' selected'}>${escHtml(phone)} (main)</option>
         <option value="${escHtml(_p2)}"${_use2 ? ' selected' : ''}>${escHtml(_p2)} (${escHtml(cust.phone2Label || 'second phone')})</option>
