@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-11a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-11b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -2420,6 +2420,36 @@ function setFieldTextTo(leadId, v) {
   toast(val === 'phone2'
     ? `Field-app texts for this job now go to ${(c && (c.phone2Label || 'the second phone')) || 'the second phone'}.`
     : 'Field-app texts for this job go to the main number.', 'success');
+}
+// crm-2026-11-11b: inline "+ Add second phone" on the job page (Customer & Site).
+// Jonathan: the second number was only reachable through ✎ Edit on the customer —
+// "not obvious". Saves phone2/phone2Label on the CUSTOMER (follows the person across
+// jobs) via upsertCustomer, then re-renders so the "Field-app texts go to" selector
+// appears. Deliberately asks whether field-app texts should go to it right away.
+function _jdPhone2Toggle(leadId) {
+  const f = document.getElementById('jd-p2-form-' + leadId);
+  const b = document.getElementById('jd-p2-add-' + leadId);
+  if (!f) return;
+  const open = f.style.display === 'none';
+  f.style.display = open ? 'flex' : 'none';
+  if (b) b.style.display = open ? 'none' : '';
+  if (open) { const n = document.getElementById('jd-p2-num-' + leadId); if (n) n.focus(); }
+}
+function saveJobPhone2(leadId) {
+  const l = getLead(leadId); if (!l || !l.customerId) return;
+  const c = getCustomer(l.customerId); if (!c) return;
+  const num = (document.getElementById('jd-p2-num-' + leadId)?.value || '').trim();
+  const lbl = (document.getElementById('jd-p2-label-' + leadId)?.value || '').trim();
+  if (num.replace(/\D/g, '').length < 10) { toast('Enter a full 10-digit phone number.', 'error'); return; }
+  upsertCustomer({ ...c, phone2: num, phone2Label: lbl });
+  toast(`Second phone saved${lbl ? ' for ' + lbl : ''}.`, 'success');
+  renderJobDetail(leadId);
+  // One follow-up question, because adding the number usually means "text them".
+  setTimeout(() => {
+    if (confirm(`Should the field app text ${lbl || 'the second phone'} (${num}) for THIS job instead of the main number?\n\nYou can change this any time with "Field-app texts go to".`)) {
+      setFieldTextTo(leadId, 'phone2'); renderJobDetail(leadId);
+    }
+  }, 50);
 }
 function upsertLead(data) {
   data = _prettyPhoneFields(data, ['customerPhone','phone']);       // crm-2026-10-20b
@@ -17429,7 +17459,15 @@ function renderJobDetail(id) {
         <div class="jd-f"><div class="jd-fl">${_custHeaderLabel}</div><div class="jd-fv" style="font-weight:500;display:flex;align-items:center;gap:8px">${_custHeaderValue}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>
         ${_custBiz && custName ? `<div class="jd-f"><div class="jd-fl">Contact</div><div class="jd-fv" style="display:flex;align-items:center;gap:8px">${custName}${cust?`<button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Edit name, email, phone, address">✎ Edit</button>`:''}</div></div>` : `<div class="jd-f"><div class="jd-fl">Assigned To</div><div class="jd-fv">${assignee?.name||'—'}</div></div>`}
         <div class="jd-f"><div class="jd-fl">Phone</div><div class="jd-fv">${cust?.phone||lead.customerPhone||'—'}</div></div>
-        ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Second phone</div><div class="jd-fv">${escHtml(cust.phone2)}${cust.phone2Label ? ` <span style="color:var(--text-muted);font-size:12px">(${escHtml(cust.phone2Label)})</span>` : ''}</div></div>` : ''}
+        ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Second phone</div><div class="jd-fv">${escHtml(cust.phone2)}${cust.phone2Label ? ` <span style="color:var(--text-muted);font-size:12px">(${escHtml(cust.phone2Label)})</span>` : ''} <button class="jd-edit-link" onclick="openEditCustomer('${cust.id}')" title="Change or remove the second phone">✎</button></div></div>`
+        : (cust ? `<div class="jd-f"><div class="jd-fl">Second phone</div><div class="jd-fv">
+            <button class="jd-edit-link" id="jd-p2-add-${lead.id}" onclick="_jdPhone2Toggle('${lead.id}')" title="Add a spouse / partner / site-contact number the field app can text instead of the main number">+ Add second phone (spouse / partner)</button>
+            <div id="jd-p2-form-${lead.id}" style="display:none;margin-top:6px;flex-wrap:wrap;gap:6px;align-items:center">
+              <input class="fi" id="jd-p2-num-${lead.id}" type="tel" placeholder="(804) 555-1234" style="width:150px;padding:5px 8px;font-size:12.5px" onkeydown="if(event.key==='Enter'){saveJobPhone2('${lead.id}')}">
+              <input class="fi" id="jd-p2-label-${lead.id}" type="text" placeholder="Whose? (e.g. wife, Maria)" style="width:170px;padding:5px 8px;font-size:12.5px" onkeydown="if(event.key==='Enter'){saveJobPhone2('${lead.id}')}">
+              <button class="btn btn-p" style="padding:5px 12px;font-size:12.5px" onclick="saveJobPhone2('${lead.id}')">Save</button>
+              <button class="jd-edit-link" onclick="_jdPhone2Toggle('${lead.id}')">Cancel</button>
+            </div></div></div>` : '')}
         ${cust?.phone2 ? `<div class="jd-f"><div class="jd-fl">Field-app texts go to</div><div class="jd-fv"><select class="fsel" style="display:inline-block;width:auto;padding:3px 8px;font-size:12.5px" onchange="setFieldTextTo('${lead.id}', this.value)" title="Which number the technicians' app texts for this job (On my way, replies, payment links). Office-only — set here, not in the field app.">
           <option value="primary"${lead.fieldTextTo === 'phone2' ? '' : ' selected'}>${escHtml(cust.phone || lead.customerPhone || '—')} — main</option>
           <option value="phone2"${lead.fieldTextTo === 'phone2' ? ' selected' : ''}>${escHtml(cust.phone2)} — ${escHtml(cust.phone2Label || 'second phone')}</option>
