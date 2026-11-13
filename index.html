@@ -1300,7 +1300,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-13a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-13b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5584,6 +5584,16 @@ function getQQPricing(){
     addl10Surface:150, handDig10:250, machineTrenchBase:650, machineTrench10:150,
     // HVAC Circuit — decomposed labor-only rates (wire is a separate line item)
     hvacAddl10Surface:115, hvacHandDig10:170, hvacMachineTrenchBase:620, hvacMachineTrench10:115,
+    // ── Additional "Circuit" task (crm-2026-11-13b, Jon 11/13) ── the old card
+    // charged the HVAC $115/10 ft from ZERO feet, so a 15 ft stapled 12/2 run
+    // was billed like 15 ft of bent EMT and a 50 ft attic run to an outlet hit
+    // $639. Labour is a fixed part (breaker, box, device, terminations — the
+    // same at 10 ft or 40 ft) plus a per-10-ft part that depends on the METHOD,
+    // not the gauge; the wire itself is a separate catalog line. At $160/hr for
+    // the 2-tech crew ($80 a tech-hour): setup ≈ 1 tech-hour for an outlet, more
+    // for a hard-wired disconnect; cable ≈ 15 tech-min per 10 ft; conduit ≈ 30
+    // min + ~$12 of EMT/straps per 10 ft. Trench rates unchanged (hvacHandDig10 …).
+    atSetupOutlet:85, atSetupEquip:125, atCable10:25, atConduit10:55,
     // HVAC disconnect at the unit
     hvacDisconnectNonFused:75, hvacDisconnectFused:150,
     // Circuit Replacement — flat fees by amperage tier (no permit)
@@ -8383,13 +8393,14 @@ function _calcAdditionalTask_HVAC(task) {
   const runType = task.runType || 'surface';
   const wireId = task.wireId || 'm-001'; // 10/2 default
   const disconnect = task.disconnect || 'none';
-  // Run labor (surface / hand-trench / machine-trench rates from HVAC pricing)
-  let labor = 0;
-  if (runType === 'surface' || runType === 'crawl' || runType === 'attic' || runType === 'unfinished') labor = (runFt / 10) * p.hvacAddl10Surface;
-  else if (runType === 'hand-trench')  labor = (runFt / 10) * p.hvacHandDig10;
+  // 11-13b: flat setup + per-10-ft by METHOD (see getQQPricing atSetup* / atCable10 / atConduit10)
+  let labor = (_atFeeds(task) === 'outlet') ? p.atSetupOutlet : p.atSetupEquip;
+  if (runType === 'crawl' || runType === 'attic' || runType === 'unfinished') labor += (runFt / 10) * p.atCable10;
+  else if (runType === 'surface') labor += (runFt / 10) * p.atConduit10;
+  else if (runType === 'hand-trench')  labor += (runFt / 10) * p.hvacHandDig10;
   else if (runType === 'machine-trench') {
     const mft = Math.max(runFt, 50);
-    labor = p.hvacMachineTrenchBase + Math.max(0, Math.ceil((mft - 50) / 10)) * p.hvacMachineTrench10;
+    labor += p.hvacMachineTrenchBase + Math.max(0, Math.ceil((mft - 50) / 10)) * p.hvacMachineTrench10;
   }
   // Wire materials
   const wireMat = getMaterials().find(m => m.id === wireId);
@@ -8671,10 +8682,10 @@ function _renderAdditionalTaskCard(qid, task, idx) {
       </div>`}
       <div class="fg"><div class="fl">Run Type</div>
         <select class="fsel" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runType', this.value)">
-          <option value="crawl"${task.runType === 'crawl' ? ' selected' : ''}>Crawl space — concealed cable — $115/10 ft</option>
-          <option value="attic"${task.runType === 'attic' ? ' selected' : ''}>Attic — concealed cable — $115/10 ft</option>
-          <option value="unfinished"${task.runType === 'unfinished' ? ' selected' : ''}>Unfinished space — cable — $115/10 ft</option>
-          <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface conduit on walls — $115/10 ft</option>
+          <option value="crawl"${task.runType === 'crawl' ? ' selected' : ''}>Crawl space — concealed cable — $${getQQPricing().atCable10}/10 ft</option>
+          <option value="attic"${task.runType === 'attic' ? ' selected' : ''}>Attic — concealed cable — $${getQQPricing().atCable10}/10 ft</option>
+          <option value="unfinished"${task.runType === 'unfinished' ? ' selected' : ''}>Unfinished space — cable — $${getQQPricing().atCable10}/10 ft</option>
+          <option value="surface"${(task.runType || 'surface') === 'surface' ? ' selected' : ''}>Surface conduit on walls — $${getQQPricing().atConduit10}/10 ft</option>
           <option value="hand-trench"${task.runType === 'hand-trench' ? ' selected' : ''}>Trench — hand dig — $170/10 ft</option>
           <option value="machine-trench"${task.runType === 'machine-trench' ? ' selected' : ''}>Trench — machine — $620 base + $115/10 ft beyond 50</option>
         </select>
@@ -8684,6 +8695,7 @@ function _renderAdditionalTaskCard(qid, task, idx) {
       <input class="fi" type="number" min="0" step="10" value="${task.runFt || 25}" onchange="updateAdditionalTaskField('${qid}', '${task.id}', 'runFt', parseInt(this.value)||0)">
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">Total <strong>conduit-path length</strong> — include vertical drops, risers, exit-through-wall, and bends. Not tape-measure distance.</div>
     </div>
+    <div style="font-size:11px;color:var(--text-muted);line-height:1.4">Price = $${_isOut ? getQQPricing().atSetupOutlet : getQQPricing().atSetupEquip} circuit setup (breaker, box, ${_isOut ? 'device' : 'disconnect'}, terminations, test) + run by method + wire by gauge from the catalog + breaker${_isOut ? ' + receptacle' : ' + disconnect'}.</div>
     <div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
         <span style="color:var(--text-muted)">Calculated subtotal</span>
