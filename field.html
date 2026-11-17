@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-11-11 field-42';
+const BUILD = '2026-11-17 field-43';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -440,8 +440,21 @@ function payKindLabel(p){
 // Everything that quotes a number to a customer or charges a card goes through
 // here — the amount card, the Collect Payment buttons, Tap to Pay and the texted
 // pay link — so netting the deposit out HERE fixes all of them at once and none
-// can drift. A deposit is a flat dollar credit, so it comes off the card and the
-// cash/Zelle figure equally, which leaves the card buffer intact on the balance.
+// can drift.
+// ⚠ field-43 (2026-11-17, Jon — Fenchuck: $1,890 job, $250 deposit): the card
+// figure used to be the quote's CARD total minus what was paid (1,950 − 250 =
+// $1,700), which kept the 3% on the WHOLE job in the balance — the deposit's
+// share of the fee was charged a second time. Jon: "it definitely needs to be
+// 3% of the remaining balance." Once anything has been paid, the card figure is
+// now the no-fee balance × (1 + the quote's card %), rounded up to the dollar —
+// the same sum the office's payment-options text uses (1,640 → $1,690). With
+// nothing paid it is still the quote's own card total, unchanged.
+function cardFeePct(l){
+  const pick=function(id){ return id ? getQuotes().find(function(x){ return x && x.id===id; }) : null; };
+  const q=pick(l && l.acceptedQuoteId) || pick(l && l.jobValue && l.jobValue.quoteId);
+  if(q && typeof q.paymentBuffer==='number' && isFinite(q.paymentBuffer) && q.paymentBuffer>=0) return q.paymentBuffer;
+  return 3;
+}
 function jobPayAmounts(l){
   let base;
   if(l && l.priceOverride && typeof l.priceOverride.amount==='number' && isFinite(l.priceOverride.amount)){
@@ -451,7 +464,11 @@ function jobPayAmounts(l){
   const paid=allPaid(l);
   if(!paid) return {net:base.net, card:base.card, overridden:!!base.overridden, base:base, paid:0};
   const cut=v=>(v==null?null:Math.max(0, v-paid));
-  return {net:cut(base.net), card:cut(base.card), overridden:!!base.overridden, base:base, paid:paid};
+  const net=cut(base.net); let card=cut(base.card);
+  if(base.net!=null && base.card!=null && base.card>base.net){
+    card = net>0 ? Math.min(card, Math.ceil(net*(1+cardFeePct(l)/100))) : 0;
+  }
+  return {net:net, card:card, overridden:!!base.overridden, base:base, paid:paid};
 }
 // Is this job actually settled? field-26: the payment card used to read
 // `if (l.payment)`, i.e. "any payment at all exists" — so the first office
