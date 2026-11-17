@@ -1314,7 +1314,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-17c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-17d</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -36901,6 +36901,28 @@ function _buildSchedContent(lead, cust, quote, type) {
   // Helper: due-on-completion line for direct customers
   const paymentLine = (() => {
     if (!isDirect) return `Lead source: ${source} — platform invoices the customer. Do NOT collect payment on site.`;
+    // crm-2026-11-17d (Jon — Ryan Edwards: $1,560 install + $200 uninstall both
+    // accepted, $250 deposit): this line priced ONE quote (the pointer — the $200
+    // add-on) and never looked at recorded payments, so the invite disagreed with
+    // the job page. When the job has an accepted quote, say what the job page
+    // says: customer total (all accepted direct scopes) less money recorded.
+    try {
+      const _accN = (typeof getAcceptedQuoteIds === 'function') ? getAcceptedQuoteIds(lead).length : 0;
+      const _jt = (_accN && typeof _pcJobTotal === 'function') ? _pcJobTotal(lead) : null;
+      if (_jt != null && _jt > 0) {
+        const _pd  = (typeof _pcPaidTotal === 'function') ? (_pcPaidTotal(lead) || 0) : 0;
+        const _bal = (typeof _pcBalance === 'function') ? _pcBalance(lead) : Math.max(0, _jt - _pd);
+        const _d = n => '$' + Math.round(n).toLocaleString('en-US');
+        if (_bal > 0) {
+          const _bits = [];
+          if (_accN > 1) _bits.push(`job total ${_d(_jt)} across ${_accN} accepted quotes`);
+          else if (_pd) _bits.push(`job total ${_d(_jt)}`);
+          if (_pd) _bits.push(`${_d(_pd)} already paid`);
+          return `${_d(_bal)} due on completion${_bits.length ? ' (' + _bits.join(', ') + ')' : ''} (we can invoice if a check isn't available).`;
+        }
+        if (_pd > 0) return `Paid in full (${_d(_pd)} received) — nothing to collect on site.`;
+      }
+    } catch (_) {}
     if (quote && quote.quoteTotal) {
       // Collect the NET amount on site (NO 3% card fee) — we can't take cards yet,
       // so on-site/check collection is the fee-free price. Whole dollars.
@@ -38023,15 +38045,19 @@ async function _smsInsertPaymentOptions() {
   else if (total != null && total - paid > 0) { def = total - paid; label = paid ? 'remaining balance' : 'payment'; }
   else if (!paid && qNet) { def = qNet; label = 'payment'; }
   const _fmt = n => '$' + Math.round(n).toLocaleString('en-US');
-  const info = [ qNet ? 'Quote total: ' + _fmt(qNet) + (qAccepted ? '' : ' (not accepted yet)') : '',
+  const _multiAcc = Array.isArray(lead.acceptedQuoteIds) && lead.acceptedQuoteIds.length > 1;   // 11-17d: 'Quote total' named only the newest scope ($200 on Edwards)
+  const info = [ (qNet && !_multiAcc) ? 'Quote total: ' + _fmt(qNet) + (qAccepted ? '' : ' (not accepted yet)') : '',
                  (!paid && dep) ? 'Deposit on the quote: ' + _fmt(dep) : '',
                  (total != null && (paid || total !== qNet)) ? 'Job total: ' + _fmt(total) + ' · Paid so far: ' + _fmt(paid) : (paid ? 'Paid so far: ' + _fmt(paid) : '') ].filter(Boolean).join('\n');
-  const v = prompt('Amount to request — the NO-FEE (Zelle / cash) price.' + (info ? '\n\n' + info : ''), def ? String(def) : '');
+  // crm-2026-11-17d (Jon, Ryan Edwards: "it only offers Zelle for 1510. They want
+  // to use a CC"): this box only asks HOW MUCH; the old wording read as Zelle-only.
+  const v = prompt('STEP 1 of 2 — How much to request?\nEnter the amount BEFORE any card fee. The next box asks Zelle, credit card or both (card adds 3%).' + (info ? '\n\n' + info : ''), def ? String(def) : '');
   if (v === null) return;
   const base = Math.ceil(parseFloat(String(v).replace(/[$,\s]/g, '')) || 0);
   if (!base || base <= 0) { toast('Enter a valid amount', 'error'); return; }
   if (base !== def) label = 'payment';
-  const how = prompt('Which ways to pay?\n\n1 = Zelle only (no fee)\n2 = Credit card only (+3%)\n3 = Both\n\nType 1, 2 or 3:', '3');
+  const _cardPrev = Math.ceil(base * 1.03);
+  const how = prompt('STEP 2 of 2 — Which ways to pay?\n\n1 = Zelle only — ' + _fmt(base) + ' (no fee)\n2 = Credit card only — ' + _fmt(_cardPrev) + ' (includes 3%)\n3 = Both\n\nType 1, 2 or 3:', '3');
   if (how === null) return;
   const mode = String(how).trim();
   if (!['1', '2', '3'].includes(mode)) { toast('Type 1, 2 or 3', 'error'); return; }

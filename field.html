@@ -102,7 +102,7 @@
 
 <script>
 // ============ GreenKey Field — lean mobile tool (Phase 1: read) ============
-const BUILD = '2026-11-17 field-43';
+const BUILD = '2026-11-17 field-44';
 // Memo code shown with the Zelle QR so the deposit self-identifies at the bank.
 // MUST match payMemoCode() in the CRM's index.html.
 function payMemoCode(id){ const d=String(id||'').replace(/[^0-9]/g,''); return 'GK-'+(d.slice(-4)||'0000'); }
@@ -298,7 +298,38 @@ function activeLeads(){ return getLeads().filter(l=>l && !['archived','closed-wo
 function getQuotes(){ try{return JSON.parse(_store.getItem('gk_quotes')||'[]')}catch(e){return[]} }
 function fmt$(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
 // The quote amount as originally priced: card = quoteTotal (w/ fee), net = preProcessingTotal. Falls back to jobValue.
+// field-44 (2026-11-17, Jon — Ryan Edwards: $1,560 install + $200 uninstall, both
+// accepted, $250 deposit): the CRM keeps EVERY accepted scope in
+// `acceptedQuoteIds[]`, and `acceptedQuoteId` is only a pointer at the most
+// recent one. This app read the pointer alone, so the job was "$200", the $250
+// deposit covered it, and the tech was told nothing was owed ($1,510 was). When
+// a job has more than one accepted quote the customer pays us for (not a
+// platform quote), the job amount is their SUM — same rule as the CRM's
+// _pcJobTotal. One accepted quote, or any quote missing from this phone's copy,
+// → the old single-quote path below, unchanged.
+function acceptedDirectQuotes(l){
+  const ids=(l && Array.isArray(l.acceptedQuoteIds)) ? l.acceptedQuoteIds : [];
+  if(ids.length<2) return null;
+  const all=getQuotes(); const out=[];
+  for(let i=0;i<ids.length;i++){
+    const q=all.find(function(x){ return x && x.id===ids[i]; });
+    if(!q) return null;
+    if(!PLATFORMS.includes(q.source)) out.push(q);
+  }
+  return out.length>1 ? out : null;
+}
 function quoteAmounts(l){
+  const _multi = acceptedDirectQuotes(l);
+  if(_multi){
+    let net=0, card=0, ok=true;
+    _multi.forEach(function(mq){
+      const c=(typeof mq.quoteTotal==='number'&&isFinite(mq.quoteTotal))?Math.round(mq.quoteTotal):null;
+      const n=(typeof mq.preProcessingTotal==='number'&&isFinite(mq.preProcessingTotal))?Math.round(mq.preProcessingTotal):c;
+      if(n==null){ ok=false; return; }
+      net+=n; card+=(c!=null?c:n);
+    });
+    if(ok) return {net:net, card:card, scopes:_multi.length};
+  }
   const q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
   if(q){ const net=(typeof q.preProcessingTotal==='number'&&isFinite(q.preProcessingTotal))?Math.round(q.preProcessingTotal):null;
          const card=(typeof q.quoteTotal==='number'&&isFinite(q.quoteTotal))?Math.round(q.quoteTotal):net; return {net,card}; }
@@ -352,7 +383,13 @@ function _installSpecRows(l){
   // wires). Shows "— not recorded —" when neither is known, so the tech can see
   // the gap rather than silently getting no breaker line at all.
   const bkr = s.breakerSize==='Other' ? (s.breakerSizeOther||'') : (s.breakerSize||'');
-  const q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
+  let q = l.acceptedQuoteId ? getQuotes().find(x=>x.id===l.acceptedQuoteId) : null;
+  // field-44: with several accepted quotes the pointer can be an add-on with no
+  // Quick Quote data (Edwards' $200 uninstall) — take wire / run from the one that has it.
+  if(!(q && q.qq) && Array.isArray(l.acceptedQuoteIds)){
+    const _sq=getQuotes().find(function(x){ return x && x.qq && l.acceptedQuoteIds.includes(x.id); });
+    if(_sq) q=_sq;
+  }
   const qq = q && q.qq ? q.qq : null;
   const w = qq ? EV_WIRE_SPEC[qq.evWireId||'6cu'] : null;
   if(bkr)                 rows.push(['Breaker', bkr]);
@@ -1291,6 +1328,7 @@ function renderDetail(id){
   let amountCard = '<div class="card"><div class="lab">Amount to collect</div>'
     + (_collect!=null ? '<div style="font-size:22px;font-weight:700;color:#e8eaed">'+fmt$(_collect)+'</div>' : '<div class="muted" style="font-size:14px">No quote amount on file</div>')
     + ((_amt.card!=null&&_amt.net!=null&&_amt.card!==_amt.net) ? '<div class="muted" style="font-size:12.5px;margin-top:2px">Card '+fmt$(_amt.card)+' · Cash/Zelle '+fmt$(_amt.net)+'</div>' : '')
+    + ((_qa.scopes && !_ov) ? '<div class="muted" style="font-size:12.5px;margin-top:2px">Total of '+_qa.scopes+' accepted quotes on this job</div>' : '')
     + (_prior ? '<div style="font-size:12.5px;color:#7fe0a6;margin-top:6px;font-weight:600">'+(_gross!=null?('Job '+fmt$(_gross)+' \u00b7 '):'')+'less '+fmt$(_prior)+' already paid</div>'
         + _pp.map(p=>'<div class="muted" style="font-size:12px;display:flex;justify-content:space-between;gap:10px;padding:3px 0">'
             + '<span>'+esc(payKindLabel(p))+' '+fmt$(p.amount)+(p.method?(' \u00b7 '+esc(p.method)):'')+(p.at?(' \u00b7 '+esc(mdy(p.at))):'')+(p.note?('<br>'+esc(p.note)):'')+'</span>'
