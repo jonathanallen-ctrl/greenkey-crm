@@ -1302,7 +1302,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-17a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-17b</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5704,6 +5704,19 @@ function getQQPricing(){
     // neutral wire + outlet/box (~$65) + GFCI breaker (~$100 over standard)
     // ≈ $175 cost → ~$200 with ~30% markup. Same indoor or outdoor.
     nema1450Inside:200, nema1450Outside:200,
+    // crm-2026-11-17b (Jon: "we charge the same per foot for a NEMA 14-50 outlet
+    // as we do for an EV charger… we are running an additional #6 THHN for the
+    // outlet and we don't have SEU as an option so we typically run fully in
+    // conduit"). The flat $200 above only ever covered the device, box, GFCI
+    // breaker and a SHORT neutral. Outlet runs now also carry, per 10 ft:
+    //   nemaNeutral10 — the 4th conductor on EVERY leg (#6 THHN $1.28/ft cost
+    //     × 1.30 = $16.64 per 10 ft, rounded to $20 for the extra pull);
+    //   nemaConduit10 — crawl / attic / unfinished legs only: a charger goes in
+    //     SEU cable there, an outlet goes in conduit (same $30 gap Jon approved
+    //     11/13 between concealed cable and surface conduit on small circuits).
+    // Applied by _nemaRunExtra() — Quick Quote, the stacked EV card and the run
+    // rows all read it. Hardwired chargers are untouched.
+    nemaNeutral10:20, nemaConduit10:30,
     // Travel: base price includes a 30-min round trip; fees START at 1 hour
     // round trip (2026-06-12 — was 30, which overcharged 30-60 min jobs).
     // 2026-09-12: blocks are 15 min at $40 (still $160/hr) — see travelAdderFor().
@@ -7120,7 +7133,7 @@ function renderQuickQuoteForm(q){
         <select class="fsel" id="qq-wire" onchange="onQQChange('${q.id}')">
           ${EVNEMA_WIRE_OPTIONS.map(o=>`<option value="${o.id}"${(qq.evWireId||'6cu')===o.id?' selected':''}>${q.jobType==='nema-1450' ? (o.nemaLabel||o.label) : o.label}</option>`).join('')}
         </select>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">${q.jobType==='nema-1450' ? 'Names the conductor on the quote. A 14-50 outlet needs a neutral, so concealed runs are written as 3-conductor NM-B (6/3 NM-B is standard); conduit runs as THHN/THWN-2. Wire is included in the run rate, so this changes the wording, not the price.' : 'Names the conductor on the quote. #6 Cu is standard; upsize for long runs (voltage drop). Wire is included in the run rate, so this changes the wording, not the price.'}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.45">${q.jobType==='nema-1450' ? 'Names the conductor on the quote. A 14-50 outlet needs a neutral and cannot use SEU, so the whole run is written — and priced — as THHN/THWN-2 in conduit: every leg adds $'+getQQPricing().nemaNeutral10+' per 10 ft for the neutral, and crawl / attic / unfinished legs add another $'+getQQPricing().nemaConduit10+' per 10 ft for the conduit. The wire SIZE picked here changes the wording, not the price.' : 'Names the conductor on the quote. #6 Cu is standard; upsize for long runs (voltage drop). Wire is included in the run rate, so this changes the wording, not the price.'}</div>
       </div>
     </div>
     <div class="qq-section">
@@ -8205,12 +8218,12 @@ function onQQChange(qid){
   // panel primaries already did this via _finalizeQQTotals; the EV branch
   // rendered the section but never priced it (bug, fixed 2026-07-11).
   lm += (typeof _additionalTasksLM === 'function') ? _additionalTasksLM(q) : 0;
-  runSegs.forEach(seg=>{
-    const ft=Math.max(parseInt(seg.ft)||0,0);
-    if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') lm+=(ft/10)*p.addl10Surface;
-    else if(seg.type==='hand-trench') lm+=(ft/10)*p.handDig10;
-    else if(seg.type==='machine-trench'){const mft=Math.max(ft,50);lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10;}
-  });
+  // 11-17b: priced through qqSegCost — the same function the run rows display —
+  // so a NEMA 14-50 run picks up its neutral / conduit extras and the row
+  // figures always add up to the total. Identical to the old inline math for a
+  // hardwired charger.
+  const _runRates = qqRunRates({jobType: isNema ? 'nema-1450' : 'ev-residential'}, p);
+  runSegs.forEach(seg=>{ lm += qqSegCost(seg, p, _runRates); });
   if(isNema) lm+=(nemaLocation==='outside'?p.nema1450Outside:p.nema1450Inside);
   if(!isNema&&mountType==='post') lm+=p.post;
   // 'pedestal-pad' is the retired placeholder value — treat it as existing-pad
@@ -9298,32 +9311,52 @@ function qqRunRates(q,p){
     surface:     hv ? p.hvacAddl10Surface    : p.addl10Surface,
     handDig:     hv ? p.hvacHandDig10         : p.handDig10,
     machineBase: hv ? p.hvacMachineTrenchBase : p.machineTrenchBase,
-    machine10:   hv ? p.hvacMachineTrench10   : p.machineTrench10
+    machine10:   hv ? p.hvacMachineTrench10   : p.machineTrench10,
+    nema:        !!(q && q.jobType === 'nema-1450')     // 11-17b: outlet runs carry the neutral / conduit extras
   };
+}
+// 11-17b: what a NEMA 14-50 outlet run costs OVER the same run to a hardwired
+// charger — the neutral on every leg, plus conduit where a charger would be
+// SEU cable (crawl / attic / unfinished). See nemaNeutral10 / nemaConduit10.
+function _nemaRunExtra(type, ft, p){
+  ft = Math.max(parseInt(ft)||0,0);
+  if(!(type==='surface'||type==='crawl'||type==='attic'||type==='unfinished'||type==='hand-trench'||type==='machine-trench')) return 0;
+  let per = p.nemaNeutral10||0;
+  if(type==='crawl'||type==='attic'||type==='unfinished') per += (p.nemaConduit10||0);
+  return (ft/10)*per;
 }
 function qqSegCost(seg,p,rates){
   rates = rates || qqRunRates(null,p);
   const ft=Math.max(parseInt(seg.ft)||0,0);
-  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') return (ft/10)*rates.surface;
-  if(seg.type==='hand-trench') return (ft/10)*rates.handDig;
-  if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return rates.machineBase+Math.max(0,Math.ceil((mft-50)/10))*rates.machine10;}
+  const nx = rates.nema ? _nemaRunExtra(seg.type, ft, p) : 0;
+  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') return (ft/10)*rates.surface + nx;
+  if(seg.type==='hand-trench') return (ft/10)*rates.handDig + nx;
+  if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return rates.machineBase+Math.max(0,Math.ceil((mft-50)/10))*rates.machine10 + nx;}
   return 0;
 }
 function renderQQRunSegs(segs,qid){
   const p=getQQPricing();
   const rates=qqRunRates(getQuote(qid),p);
   if(!segs.length) return `<div style="color:var(--text-muted);font-size:12.5px;padding:6px 0">No run segments added — click "+ Add Segment" below.</div>`;
+  // 11-17b: outlet rows show what an outlet run really charges (in conduit, 4 wires).
+  const _nm = !!rates.nema;
+  const _rCab = rates.surface + (_nm ? (p.nemaNeutral10||0)+(p.nemaConduit10||0) : 0);
+  const _rSur = rates.surface + (_nm ? (p.nemaNeutral10||0) : 0);
+  const _rHand = rates.handDig + (_nm ? (p.nemaNeutral10||0) : 0);
+  const _cabTxt = _nm ? 'in conduit' : 'concealed cable';
+  const _unfTxt = _nm ? 'in conduit' : 'cable';
+  const _mchTxt = _nm ? ` + $${p.nemaNeutral10||0} per 10 ft neutral` : '';
   return segs.map((seg,i)=>{
     const isMachine=seg.type==='machine-trench';
     const cost=qqSegCost(seg,p,rates);
     return `<div class="qq-row" style="gap:8px;flex-wrap:wrap">
       <select class="fsel" style="flex:1;min-width:200px" onchange="updateQQRunSegType('${qid}',${i},this.value)">
-        <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — concealed cable — $${rates.surface} per 10 ft</option>
-        <option value="attic"${seg.type==='attic'?' selected':''}>Attic — concealed cable — $${rates.surface} per 10 ft</option>
-        <option value="unfinished"${seg.type==='unfinished'?' selected':''}>Unfinished space — cable — $${rates.surface} per 10 ft</option>
-        <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $${rates.surface} per 10 ft</option>
-        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $${rates.handDig} per 10 ft of trench</option>
-        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $${rates.machineBase} base (first 50 ft)</option>
+        <option value="crawl"${seg.type==='crawl'?' selected':''}>Crawl space — ${_cabTxt} — $${_rCab} per 10 ft</option>
+        <option value="attic"${seg.type==='attic'?' selected':''}>Attic — ${_cabTxt} — $${_rCab} per 10 ft</option>
+        <option value="unfinished"${seg.type==='unfinished'?' selected':''}>Unfinished space — ${_unfTxt} — $${_rCab} per 10 ft</option>
+        <option value="surface"${seg.type==='surface'?' selected':''}>Surface conduit on walls — $${_rSur} per 10 ft</option>
+        <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $${_rHand} per 10 ft of trench</option>
+        <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $${rates.machineBase} base (first 50 ft)${_mchTxt}</option>
       </select>
       <div style="display:flex;align-items:center;gap:6px">
         <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${(seg.type==='hand-trench'||seg.type==='machine-trench')?'(trench)':'(wire run)'}</span>
@@ -9529,9 +9562,9 @@ function autoScope(q) {
 // #4 Cu / #2 Al cover long runs. Wire is baked into the per-foot run rate, so
 // this drives the scope wording, not the price.
 const EVNEMA_WIRE_OPTIONS = [
-  {id:'8cu', gauge:'#8', metal:'Cu', label:'#8 Cu — 50 A (NEMA 14-50)',      nemaLabel:'8/3 NM-B Cu — 40 A (code-minimum for 14-50)'},
-  {id:'6cu', gauge:'#6', metal:'Cu', label:'#6 Cu — 60 A (standard)',        nemaLabel:'6/3 NM-B Cu — 50 A (standard)'},
-  {id:'4cu', gauge:'#4', metal:'Cu', label:'#4 Cu — long runs',              nemaLabel:'4/3 NM-B Cu — long runs'},
+  {id:'8cu', gauge:'#8', metal:'Cu', label:'#8 Cu — 50 A (NEMA 14-50)',      nemaLabel:'#8 Cu THHN/THWN-2 in conduit (code-minimum for 14-50)'},
+  {id:'6cu', gauge:'#6', metal:'Cu', label:'#6 Cu — 60 A (standard)',        nemaLabel:'#6 Cu THHN/THWN-2 in conduit — 50 A (standard)'},
+  {id:'4cu', gauge:'#4', metal:'Cu', label:'#4 Cu — long runs',              nemaLabel:'#4 Cu THHN/THWN-2 in conduit — long runs'},
   {id:'2al', gauge:'#2', metal:'Al', label:'#2 Al — long runs (economical)', nemaLabel:'#2 Al — long runs (conduit)'}
 ];
 function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWireId))||EVNEMA_WIRE_OPTIONS[1]; }
@@ -9557,9 +9590,17 @@ function _evnemaWire(qq){ return EVNEMA_WIRE_OPTIONS.find(o=>o.id===(qq&&qq.evWi
 function _runRoutingSentence(segs, gauge, metal, includedFt, cable){
   const m = metal || 'Cu';
   const nm3 = cable === 'nm3';
+  const cond = cable === 'conduit';   // 11-17b: NEMA 14-50 — every leg is THHN/THWN-2 in conduit
   const _gaugeFor = (t) => (nm3 && INSUL[t] === 'SEU') ? String(gauge||'').replace(/^#/, '') + '/3' : gauge;
-  const _insulFor = (t) => (nm3 && INSUL[t] === 'SEU') ? 'NM-B' : INSUL[t];
-  const PHRASE = {
+  const _insulFor = (t) => cond ? 'THHN/THWN-2' : ((nm3 && INSUL[t] === 'SEU') ? 'NM-B' : INSUL[t]);
+  const PHRASE = cond ? {
+    'crawl':'in conduit through the crawl space',
+    'attic':'in conduit through the attic',
+    'unfinished':'in conduit through the unfinished space',
+    'surface':'in surface-mounted conduit',
+    'hand-trench':'in conduit through a trench',
+    'machine-trench':'in conduit through a trench'
+  } : {
     'crawl':'through the crawl space',
     'attic':'through the attic',
     'unfinished':'through the unfinished space',
@@ -9688,18 +9729,17 @@ function _autoScopePrimary(q){
     const _nBrand = String(_nSnap.panelBrand || '').replace(/^Eaton BRH$/, 'Eaton BR').split(' ').pop() || '';
     const _nBrandWord = (_nBrand && _nBrand !== 'Other') ? _nBrand + ' ' : 'two-pole ';
     const breakerName = `50-amp ${_nBrandWord}GFCI`;
-    const _nINS  = { surface:'THHN/THWN-2', 'hand-trench':'THHN/THWN-2', 'machine-trench':'THHN/THWN-2' };
-    const _nMETH = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'through the crawl space', attic:'through the attic', unfinished:'through the unfinished space' };
+    // 11-17b (Jon): outlet circuits run fully in conduit — no SEU, no NM-B wording.
+    const _nMETH = { surface:'in surface-mounted conduit', 'hand-trench':'in conduit through a hand-dug trench', 'machine-trench':'in conduit through a machine-dug trench', crawl:'in conduit through the crawl space', attic:'in conduit through the attic', unfinished:'in conduit through the unfinished space' };
     const _nLegs = segs.filter(sg => sg && sg.type);
-    const _g3 = String(wireOpt.gauge||'#6').replace(/^#/, '') + '/3';
     let wirePhrase, routeTail = '';
     if (_nLegs.length <= 1) {
       const _t = _nLegs[0] && _nLegs[0].type;
-      const _cable = _nINS[_t] ? `${wireOpt.gauge} ${_nINS[_t]}${wireOpt.metal === 'Al' ? ' (aluminum)' : ''}` : `${_g3} NM-B`;
-      wirePhrase = _t ? `${_cable} ${_nMETH[_t] || 'in conduit'}` : _cable;   // no legs = within 5 ft, no method
+      const _cable = `${wireOpt.gauge} THHN/THWN-2${wireOpt.metal === 'Al' ? ' (aluminum)' : ''}`;
+      wirePhrase = `${_cable} ${(_t && _nMETH[_t]) || 'in conduit'}`;   // no legs = within 5 ft
     } else {
       wirePhrase = `${wireOpt.gauge}${wireOpt.metal === 'Al' ? ' aluminum' : ''} conductors`;
-      routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'nm3').sentence || '';
+      routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'conduit').sentence || '';
     }
     const _oLoc = (qq.chargerLocText || '').trim().replace(/\.+$/,'') || (qq.nemaLocation==='outside' ? '[INSERT OUTLET LOCATION] (exterior)' : '[INSERT OUTLET LOCATION]');
     const _pLoc = (qq.panelLocText || '').trim().replace(/\.+$/,'') || '[INSERT PANEL LOCATION]';
@@ -10071,7 +10111,7 @@ function _qqScopePrice(o){
   if(o.run==='surface'||o.run==='crawl'||o.run==='attic'||o.run==='unfinished') lm+=(ft/10)*p.addl10Surface;
   else if(o.run==='hand-trench') lm+=(ft/10)*p.handDig10;
   else if(o.run==='machine-trench'){ const mft=Math.max(ft,50); lm+=p.machineTrenchBase+Math.max(0,Math.ceil((mft-50)/10))*p.machineTrench10; }
-  if(o.kind==='nema') lm+=(o.nemaLoc==='outside'?p.nema1450Outside:p.nema1450Inside);
+  if(o.kind==='nema') lm+=(o.nemaLoc==='outside'?p.nema1450Outside:p.nema1450Inside) + _nemaRunExtra(o.run, ft, p);   // 11-17b: neutral + conduit, same as Quick Quote
   else { if(o.mount==='post') lm+=p.post; else if(o.mount==='pedestal-existing') lm+=p.pedestalExistingPad; else if(o.mount==='pedestal-newpad') lm+=p.pedestalNewPad; }
   lm += _qqScopeAddOnTotal(o);
   return Math.round(lm);
@@ -10102,7 +10142,7 @@ function _qqScopeTextBase(o){
   const loc  = o.loc || '[INSERT CHARGER LOCATION]';
   const ftTxt = o.ft>0 ? `, approximately ${o.ft+5} ft` : '';
   if(o.kind==='nema'){
-    return `Install a dedicated 240-volt, 50-amp circuit from ${from} with #6 ${INS[o.run]||'THHN/THWN-2'} copper ${RUN[o.run]||'in conduit'}${ftTxt}, protected by a 50-amp GFCI breaker and terminating at a NEMA 14-50 outlet on ${loc}. Includes breaker, wire, conduit, fittings, and outlet. All work is performed to NEC and local code.`;
+    return `Install a dedicated 240-volt, 50-amp circuit from ${from} with #6 THHN/THWN-2 copper ${({crawl:'in conduit through the crawl space',attic:'in conduit through the attic',unfinished:'in conduit through the unfinished space'})[o.run]||RUN[o.run]||'in conduit'}${ftTxt}, protected by a 50-amp GFCI breaker and terminating at a NEMA 14-50 outlet on ${loc}. Includes breaker, wire, conduit, fittings, and outlet. All work is performed to NEC and local code.`;
   }
   const mountTxt = o.mount==='post' ? ' on a new 4x4 post' : o.mount==='pedestal-existing' ? ' on a pedestal on the existing pad' : o.mount==='pedestal-newpad' ? ' on a pedestal on a new concrete pad' : '';
   const amps = o.amps||60, gauge = amps<=40 ? '#8' : '#6', chg = amps<=40 ? 32 : amps<=50 ? 40 : 48;
@@ -35163,7 +35203,9 @@ const AI_ESTIMATOR_PRICING_RULES = {
   base: { garageInstallNoPermit: 500, interiorInstallNoPermit: 750 },
   permit: { standard: 200, qmerit: 250, specialJurisdiction: 500 },
   perFootBeyond10ft: { tier1Standard: 150, tier2Moderate: 195, tier3Hard: 240 },
-  nemaOutletAdder: { indoor: 85, outdoor: 100, wireSurchargePerFootBeyond20ft: 1.0 },
+  // 11-17b: brought in line with Quick Quote (was 85 / 100 + $1/ft beyond 20 ft).
+  nemaOutletAdder: { indoor: 200, outdoor: 200, neutralPer10ftOfRun: 20, conduitInsteadOfCablePer10ftConcealed: 30,
+    note: 'A NEMA 14-50 outlet is wired with FOUR conductors (2 hots + neutral + ground) of THHN/THWN-2 in conduit for the whole run - never SEU or NM-B. Over the same run to a hardwired charger add $20 per 10 ft for the neutral, plus $30 per 10 ft on crawl / attic / unfinished legs where a charger would use SEU cable.' },
   eatonBrPanelAdder: { addedToStandardBreaker: 50 },
   trenching: {
     handDig6inch: { perFoot: 20 },
