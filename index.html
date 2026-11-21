@@ -1314,7 +1314,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-17d</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-21a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -6813,6 +6813,9 @@ function renderQuoteBuilder(qid){
   if (typeof hydrateQuoteStatusFromServer === 'function') {
     setTimeout(() => { try { hydrateQuoteStatusFromServer(qid); } catch(_){} }, 250);
   }
+  // crm-2026-11-21a (Jon): Subpanel / Feeder has no Quick Quote form — its entry card lives on the
+  // Detailed form. Skip the "Use Detailed Quote" stop: flip an unlocked quick quote to detailed here.
+  try { const _q0=getQuote(qid); if(_q0 && _q0.type==='quick' && _q0.jobType==='subpanel' && !(typeof quoteLocked==='function' && quoteLocked(_q0))) upsertQuote({..._q0,type:'detailed'}); } catch(e) { console.warn('[GK] subpanel → detailed', e); }
   const q=getQuote(qid); if(!q){closeQuoteBuilder();return;}
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
@@ -9933,6 +9936,7 @@ function autoInclusions(q){
     lines.push('• Subpanel' + ((_spk && _spk.panel==='mlo') ? '' : ' with main breaker') + ', sized feeder breaker in the main panel, and 4-wire feeder');
     lines.push('• Grounding and bonding at the subpanel per code');
     if (_spk && _spk.loc==='detached') lines.push('• Disconnect and grounding electrode system (two ground rods) at the detached structure');
+    if (_spk && (parseInt(_spk.trenchFt)||0) > 0) lines.push('• Trenching, backfill and rough grade (approximately ' + parseInt(_spk.trenchFt) + ' ft), with Miss Utility locate');   // crm-2026-11-21a
     if (_spk && (parseInt(_spk.circ)||0) > 0) lines.push('• Relocation of ' + _spk.circ + ' existing branch circuit' + (_spk.circ>1?'s':'') + ' to the new subpanel');
   }
   if (_keys.has('panel-replacement') && q.jobType !== 'panel-replacement') {
@@ -10258,76 +10262,172 @@ function _stackedQQAddOns(q){
 // structure — the default there is a main-breaker panel.
 // ⚠ Unit costs below are STARTING POINTS (11/10/2026) — a line whose
 // description exactly matches a Materials Library name takes the library price.
+// ── crm-2026-11-21a (Jon, Travis Hall quote): the card now covers a whole
+// sub-panel job so it no longer needs a write-up for the AI quote engine. ──
+//  • The feeder is up to three RUN SEGMENTS, each with its own method and
+//    footage (SER through crawl / attic / unfinished space, THWN-2 in EMT,
+//    THWN-2 in IMC). Wire and conduit size follow the feeder breaker size.
+//  • SER is ALUMINUM by default ("for service work we want to use al. Copper is
+//    too expensive but it should be an option"). Conductors in conduit stay
+//    COPPER so the conduit stays small.
+//  • Conduit pulls are 3 conductors + a reduced equipment ground (NEC 250.122),
+//    not four full-size wires. Jon's table: 50/60 A → #6 + #10 in ¾"; 80 A → #4 +
+//    #8 in 1"; 100 A → #3 + #8 in 1¼" (legal in 1" but too hard a pull); 125 A →
+//    #1 + #6 in 1¼".
+//  • Panel type 'mlobf' = main-lug panel + a back-fed Homeline breaker matching
+//    the feeder + hold-down kit, which is the disconnect at a detached
+//    structure. Default for a detached structure (a main-breaker panel that
+//    matches the circuit size is hard to find outside 100 A, and costs more).
+//  • Trench footage is its own entry (it is rarely the same as the conduit
+//    footage) with hand dig or rented trencher. Priced from the LABOR-ONLY
+//    trench rates in getQQPricing (hvacHandDig10 / hvacMachineTrench*) because
+//    this card prices the wire and conduit as their own lines — the EV rates
+//    (handDig10 $250 …) have #6 wire and conduit baked in and would double-count.
+//  • Detached structure: two ground rods + 20 ft of #6 bare copper, itemized.
+// A scope saved before this build has no `segs` (V1). Its stored paragraph is
+// still produced by _spkTextV1 so ✎ Edit can find and swap it; opening it in the
+// card converts it to segments and keeps COPPER SER, which is what it was priced with.
+// ⚠ Unit costs. From Jon's Capital Electric ship ticket S063968502 (11/17/2026 — the
+// same 80 A build): HOM816L125PC 8/16 main-lug panel $27.49 (it is a 125 A panel —
+// the card now says so), PK9GTA ground bar $7.76, HOM280 $44.10, HOM250 / HOM260
+// $14.58, HOM4RK2LA retaining kit $20.77, 2-2-2-4 Al SER $1.97/ft, 6x6x4 PVC junction
+// box $33.15, ILSCO PBTS insulated taps $15.58 (to #4) / $21.56 (to 1/0), 3/4" IMC
+// $1.99/ft, 1" IMC $2.78/ft, 3/4" EMT $0.95/ft, THHN #4 $1.73 / #6 $1.13 / #8 $0.73,
+// ground rod $17.89 + clamp $4.17, #6 bare $0.86/ft. The ticket shows THREE taps per
+// transition (two hots + neutral), so that is what the card prices.
+// From the older Capital Electric file: 1 1/4" IMC, 1" EMT, THHN #3 / #10.
+// ESTIMATED (verify): 4-4-4-6, 1/0 and 2/0 Al SER, 1 1/4" EMT, back-fed HOM2100 /
+// HOM2125, #1 THHN, the outdoor (3R) main-lug panel, the larger tap, fittings allowances.
 const SUBPANEL_PRICING = {
-  panel: { mlo:{ indoor:{100:85,125:110}, outdoor:{100:115,125:150} },
+  panel: { mlo:{ indoor:{125:27.49}, outdoor:{125:60} },      // main-lug = HOM816L125PC, 125 A, 8-space/16-circuit
            mb: { indoor:{100:150,125:190}, outdoor:{100:200,125:250} } },
   panelMarkup:35,
-  feederBreaker:{50:18,60:18,80:45,100:50,125:90}, breakerMarkup:40,
-  thwn:{'#6':1.28,'#4':2.00,'#3':2.50,'#1':4.00},
+  feederBreaker:{50:18,60:18,80:45,100:50,125:90}, breakerMarkup:40,   // brand follows the MAIN panel — unchanged
+  backfedBreaker:{50:14.58,60:14.58,80:44.10,100:50,125:90}, holdDown:20.77,
+  thwn:{'#10':0.45,'#8':0.73,'#6':1.13,'#4':1.73,'#3':2.47,'#1':4.00},
   ser:{'6-6-6-6':4.50,'4-4-4-6':6.75,'3-3-3-5':8.60,'2-2-2-4':10.50,'1-1-1-3':13.50},
+  serAl:{'4-4-4-6':1.40,'2-2-2-4':1.97,'1/0-1/0-1/0-2':3.25,'2/0-2/0-2/0-1':4.25},
   wireMarkup:30,
-  groundBar:12, branchBreaker:7.61, misc:25, miscDetached:40,
-  jbox:25, polaris:16,
-  imc:{'1"':0.95,'1¼"':1.15}, imcFittings:{'1"':95,'1¼"':122},
-  groundRods:75,
+  groundBar:7.76, branchBreaker:7.61, misc:25, miscDetached:40,
+  jbox:33.15, tap:{50:15.58,60:15.58,80:21.56,100:21.56,125:30}, tapsPerTransition:3,
+  imc:{'¾"':1.99,'1"':2.78,'1¼"':3.70}, imcFittings:{'¾"':70,'1"':95,'1¼"':122},
+  emt:{'¾"':0.95,'1"':1.52,'1¼"':2.40}, emtFittings:{'¾"':30,'1"':45,'1¼"':60},
+  groundRod:22.06, bareCu6:0.86, gecFt:20,
+  groundRods:75,   // pre-11-21a lump price — kept for reference, no longer used
   hours:{adjacent:2, remote:4, detached:6}
 };
-// Conductor sizing follows the AI Estimator's feeder rules: THWN-2 at 75 °C,
-// SER one step heavier (60 °C column when it may pass through insulation).
-function _spkSizing(amps){
+// Run methods a feeder segment can use. kind 'ser' = cable, 'cond' = conductors pulled in a raceway.
+const SPK_METHODS = {
+  'ser-crawl': {kind:'ser',  label:'SER cable — through the crawlspace',     txt:'through the crawlspace'},
+  'ser-attic': {kind:'ser',  label:'SER cable — through the attic',          txt:'through the attic'},
+  'ser-unf':   {kind:'ser',  label:'SER cable — through unfinished space',   txt:'through unfinished space'},
+  'emt':       {kind:'cond', label:'THWN-2 in EMT — surface, indoors',       txt:'in surface-mounted conduit'},
+  'imc':       {kind:'cond', label:'THWN-2 in IMC — outdoors / underground', txt:'in conduit'},
+  'nipple':    {kind:'cond', label:'THWN-2 through a nipple — panel to panel', txt:'between the panels'}
+};
+// Conductor sizing. THWN-2 copper at 75 °C with a reduced equipment ground;
+// SER one step heavier (60 °C column — it may pass through insulation).
+function _spkSizing(amps, metal){
   const a=parseInt(amps)||60;
-  if(a<=50)  return {thwn:'#6',ser:'6-6-6-6',imc:'1"', panelAmps:100};
-  if(a<=60)  return {thwn:'#6',ser:'4-4-4-6',imc:'1"', panelAmps:100};
-  if(a<=80)  return {thwn:'#4',ser:'3-3-3-5',imc:'1¼"',panelAmps:100};
-  if(a<=100) return {thwn:'#3',ser:'2-2-2-4',imc:'1¼"',panelAmps:100};
-  return {thwn:'#1',ser:'1-1-1-3',imc:'1¼"',panelAmps:125};
+  const z = a<=50  ? {thwn:'#6',gnd:'#10',cond:'¾"', serCu:'6-6-6-6',serAl:'4-4-4-6',      panelAmps:100}
+          : a<=60  ? {thwn:'#6',gnd:'#10',cond:'¾"', serCu:'4-4-4-6',serAl:'4-4-4-6',      panelAmps:100}
+          : a<=80  ? {thwn:'#4',gnd:'#8', cond:'1"',  serCu:'3-3-3-5',serAl:'2-2-2-4',      panelAmps:100}
+          : a<=100 ? {thwn:'#3',gnd:'#8', cond:'1¼"', serCu:'2-2-2-4',serAl:'1/0-1/0-1/0-2',panelAmps:100}
+          :          {thwn:'#1',gnd:'#6', cond:'1¼"', serCu:'1-1-1-3',serAl:'2/0-2/0-2/0-1',panelAmps:125};
+  z.ser = metal==='cu' ? z.serCu : z.serAl;
+  z.imc = z.cond;
+  return z;
 }
 function _spkDefaults(loc){
   const H=SUBPANEL_PRICING.hours;
-  if(loc==='detached') return {panel:'mb', ft:20, ft2:30, circ:0, hours:H.detached};
-  if(loc==='remote')   return {panel:'mlo',ft:30, ft2:0,  circ:0, hours:H.remote};
-  return {panel:'mlo', ft:10, ft2:0, circ:4, hours:H.adjacent};
+  if(loc==='detached') return {panel:'mlobf', segs:[{m:'ser-crawl',ft:20},{m:'imc',ft:30}], trenchFt:25, circ:0, hours:H.detached};
+  if(loc==='remote')   return {panel:'mlo',   segs:[{m:'ser-crawl',ft:30}],                 trenchFt:0,  circ:0, hours:H.remote};
+  return {panel:'mlo', segs:[{m:'nipple',ft:10}], trenchFt:0, circ:4, hours:H.adjacent};
 }
+// A scope saved before crm-2026-11-21a: has entries but no run segments.
+function _spkIsV1(o){ return !!o && typeof o==='object' && !Array.isArray(o.segs) && o.v!==2 && Object.keys(o).length>0; }
 function _spkNorm(o){
   o=o||{};
   const loc=['adjacent','remote','detached'].includes(o.loc)?o.loc:'adjacent';
   const d=_spkDefaults(loc);
   const num=(v,f)=>{ const n=parseFloat(v); return (isNaN(n)||n<0)?f:n; };
-  return { loc, env:o.env==='outdoor'?'outdoor':'indoor',
+  const v1=_spkIsV1(o);
+  let segs;
+  if(Array.isArray(o.segs)) segs=o.segs;
+  else if(v1){
+    const ft=num(o.ft,0), ft2=num(o.ft2,0);
+    segs = loc==='adjacent' ? [{m:'nipple',ft}] : loc==='remote' ? [{m:'ser-unf',ft}] : [{m:'ser-unf',ft},{m:'imc',ft:ft2}];
+  } else segs=d.segs;
+  segs=segs.filter(s=>s&&SPK_METHODS[s.m]).map(s=>({m:s.m,ft:Math.round(num(s.ft,0))})).filter(s=>s.ft>0).slice(0,3);
+  return { v:2, loc, env:o.env==='outdoor'?'outdoor':'indoor',
     amps:[50,60,80,100,125].includes(parseInt(o.amps))?parseInt(o.amps):60,
-    panel:(o.panel==='mb'||o.panel==='mlo')?o.panel:d.panel,
-    ft:Math.round(num(o.ft,d.ft)), ft2:loc==='detached'?Math.round(num(o.ft2,d.ft2)):0,
+    panel:['mlo','mb','mlobf'].includes(o.panel)?o.panel:d.panel,
+    ser:(o.ser==='cu'||o.ser==='al')?o.ser:(v1?'cu':'al'),
+    segs,
+    trenchFt:Math.round(num(o.trenchFt, v1?0:d.trenchFt)), trench:o.trench==='machine'?'machine':'hand',
     circ:Math.min(24,Math.round(num(o.circ,d.circ))), hours:num(o.hours,d.hours),
     where:String(o.where||'').trim().slice(0,160) };
 }
 function _spkRead(){
   const g=id=>document.getElementById(id);
-  return _spkNorm({ loc:g('spk-loc')?.value, env:g('spk-env')?.value, amps:g('spk-amps')?.value, panel:g('spk-panel')?.value,
-    ft:g('spk-ft')?.value, ft2:g('spk-ft2')?.value, circ:g('spk-circ')?.value, hours:g('spk-hours')?.value, where:g('spk-where')?.value });
+  const segs=[1,2,3].map(i=>({m:g('spk-m'+i)?.value||'', ft:g('spk-f'+i)?.value})).filter(s=>s.m);
+  return _spkNorm({ v:2, loc:g('spk-loc')?.value, env:g('spk-env')?.value, amps:g('spk-amps')?.value, panel:g('spk-panel')?.value,
+    ser:g('spk-ser')?.value, segs, trenchFt:g('spk-tft')?.value, trench:g('spk-tm')?.value,
+    circ:g('spk-circ')?.value, hours:g('spk-hours')?.value, where:g('spk-where')?.value });
+}
+// The Homeline main-lug panel GreenKey stocks (8-space/16-circuit) is a 125 A panel at every feeder size.
+function _spkPanelAmps(o,z){ return o.panel!=='mb' ? 125 : z.panelAmps; }
+// Trench price (dig, backfill, rough grade; machine = rental included). Labor-only rates — see header note.
+function _spkTrenchCost(o){
+  const ft=parseFloat(o&&o.trenchFt)||0; if(!(ft>0)) return 0;
+  const p=(typeof getQQPricing==='function')?getQQPricing():{};
+  if(o.trench==='machine'){ const mft=Math.max(ft,50); return (p.hvacMachineTrenchBase||620)+Math.max(0,Math.ceil((mft-50)/10))*(p.hvacMachineTrench10||115); }
+  return Math.ceil(ft/10)*(p.hvacHandDig10||170);
 }
 function _spkBuildLines(o, gid, stamp){
   o=_spkNorm(o);
-  const P=SUBPANEL_PRICING, z=_spkSizing(o.amps), out=[];
+  const P=SUBPANEL_PRICING, z=_spkSizing(o.amps,o.ser), out=[];
   const add=(desc,qty,unit,unitCost,markup)=>{ if(qty>0) out.push({desc,qty,unit,unitCost,markup}); };
   const envTxt = o.env==='outdoor' ? 'NEMA 3R outdoor' : 'NEMA 1 indoor';
-  const spaces = o.panel==='mb' ? (z.panelAmps===125?'24-space':'20-space') : (z.panelAmps===125?'12-space/24-circuit':'8-space/16-circuit');
-  add(`Square D Homeline ${z.panelAmps}A ${o.panel==='mb'?'main-breaker':'main-lug'} sub-panel (${spaces}), ${envTxt}`,1,'each',P.panel[o.panel][o.env][z.panelAmps],P.panelMarkup);
+  const lug = o.panel!=='mb';
+  const pAmps = _spkPanelAmps(o,z);
+  const spaces = lug ? '8-space/16-circuit' : (pAmps===125?'24-space':'20-space');
+  add(`Square D Homeline ${pAmps}A ${lug?'main-lug':'main-breaker'} sub-panel (${spaces}), ${envTxt}`,1,'each',P.panel[lug?'mlo':'mb'][o.env][pAmps],P.panelMarkup);
+  if(o.panel==='mlobf'){
+    add(`Square D Homeline ${o.amps}A 2-pole breaker — back-fed as the sub-panel main (disconnect)`,1,'each',P.backfedBreaker[o.amps],P.breakerMarkup);
+    add('Square D Homeline main-breaker hold-down (retaining) kit',1,'each',P.holdDown,P.breakerMarkup);
+  }
   add(`${o.amps}A 2-pole feeder breaker in the main panel`,1,'each',P.feederBreaker[o.amps],P.breakerMarkup);
-  if(o.loc==='adjacent'){
-    add(`${z.thwn} THHN/THWN-2 (Cu) wire — per ft`,o.ft*4,'per foot',P.thwn[z.thwn],P.wireMarkup);
-  } else {
-    add(`${z.ser} copper SER feeder cable — per ft`,o.ft,'per foot',P.ser[z.ser],P.wireMarkup);
+  const sum=f=>o.segs.filter(f).reduce((t,s)=>t+s.ft,0);
+  const serFt=sum(s=>SPK_METHODS[s.m].kind==='ser'), condFt=sum(s=>SPK_METHODS[s.m].kind==='cond');
+  const emtFt=sum(s=>s.m==='emt'), imcFt=sum(s=>s.m==='imc');
+  if(serFt>0) add(`${z.ser} ${o.ser==='cu'?'copper':'aluminum'} SER feeder cable — per ft`,serFt,'per foot',(o.ser==='cu'?P.ser:P.serAl)[z.ser],P.wireMarkup);
+  let trans=0, prevKind=null;
+  o.segs.forEach(s=>{ const k=SPK_METHODS[s.m].kind; if(prevKind && prevKind!==k) trans++; prevKind=k; });
+  if(trans>0){
+    add('Junction box (SER cable to conduit transition)',trans,'each',P.jbox,P.wireMarkup);
+    add('Insulated tap connector (Polaris-type splice)',P.tapsPerTransition*trans,'each',P.tap[o.amps],P.wireMarkup);
   }
-  if(o.loc==='detached' && o.ft2>0){
-    if(o.ft>0){
-      add('Weatherproof junction box (SER to conduit transition)',1,'each',P.jbox,P.wireMarkup);
-      add('Polaris lug (insulated splice connector)',4,'each',P.polaris,P.wireMarkup);
-    }
-    add(`${z.thwn} THHN/THWN-2 (Cu) wire — per ft`,o.ft2*4,'per foot',P.thwn[z.thwn],P.wireMarkup);
-    add(`${z.imc} IMC conduit — per ft`,Math.ceil(o.ft2/10)*10,'per foot',P.imc[z.imc],P.wireMarkup);
-    add(`${z.imc} IMC fittings — factory 90s, compression couplings/connectors, LB, bushings`,1,'per job',P.imcFittings[z.imc],P.wireMarkup);
+  if(condFt>0){
+    add(`${z.thwn} THHN/THWN-2 (Cu) wire — per ft`,condFt*3,'per foot',P.thwn[z.thwn],P.wireMarkup);
+    add(`${z.gnd} THHN/THWN-2 (Cu) equipment ground — per ft`,condFt,'per foot',P.thwn[z.gnd],P.wireMarkup);
   }
-  if(o.loc==='detached') add('Grounding electrode system (2 rods + GEC)',1,'per job',P.groundRods,P.wireMarkup);
+  if(emtFt>0){
+    add(`${z.cond} EMT conduit — per ft`,Math.ceil(emtFt/10)*10,'per foot',P.emt[z.cond],P.wireMarkup);
+    add(`${z.cond} EMT fittings — connectors, couplings, straps`,1,'per job',P.emtFittings[z.cond],P.wireMarkup);
+  }
+  if(imcFt>0){
+    add(`${z.cond} IMC conduit — per ft`,Math.ceil(imcFt/10)*10,'per foot',P.imc[z.cond],P.wireMarkup);
+    add(`${z.cond} IMC fittings — factory 90s, compression couplings/connectors, LB, bushings`,1,'per job',P.imcFittings[z.cond],P.wireMarkup);
+  }
+  const tc=_spkTrenchCost(o);
+  if(tc>0) add(o.trench==='machine'
+    ? `Trenching — rented trencher, approx. ${o.trenchFt} ft (rental, dig, backfill, rough grade)`
+    : `Trenching — hand dig, approx. ${o.trenchFt} ft (dig, backfill, rough grade)`,1,'per job',tc,0);
+  if(o.loc==='detached'){
+    add('5/8" x 8 ft ground rod with acorn clamp',2,'each',P.groundRod,P.wireMarkup);
+    add('#6 bare copper grounding electrode conductor — per ft',P.gecFt,'per foot',P.bareCu6,P.wireMarkup);
+  }
   add('Ground bar kit for sub-panel',1,'each',P.groundBar,P.breakerMarkup);
   add('Square D Homeline 15/20A 1-pole breakers (relocated circuits)',o.circ,'each',P.branchBreaker,P.wireMarkup);
   add('Misc fittings & hardware (straps, screws, wirenuts, connectors)',1,'per job',o.loc==='detached'?P.miscDetached:P.misc,0);
@@ -10339,29 +10439,44 @@ function _spkBuildLines(o, gid, stamp){
     return ln;
   });
 }
+function _spkRunsText(o){
+  const metal = o.ser==='cu' ? 'copper' : 'aluminum';
+  return o.segs.map(s=>{ const M=SPK_METHODS[s.m];
+    return M.kind==='ser' ? `${s.ft} feet of ${metal} SER feeder cable ${M.txt}` : `${s.ft} feet of copper conductors ${M.txt}`;
+  }).join(', then ');
+}
 function _spkText(o){
+  if(_spkIsV1(o)) return _spkTextV1(o);     // a scope saved before 11-21a keeps the paragraph it was saved with
   o=_spkNorm(o);
+  const _an = o.amps===80 ? 'an' : 'a';
   const enc = o.env==='outdoor' ? ' in a weatherproof (NEMA 3R) outdoor enclosure' : '';
   const circ = o.circ>0 ? ` Relocate ${o.circ} existing branch circuit${o.circ>1?'s':''} from the main panel to the new sub-panel to free space in the main panel.` : '';
   const tail = ' The sub-panel neutral is isolated with a separate ground bar. All work is performed to NEC and local code.';
-  if(o.loc==='adjacent'){
-    return `Furnish and install a Square D Homeline sub-panel ${o.where||'directly beside the main panel'}${enc}, fed from a ${o.amps}-amp 2-pole breaker in the main panel with a 4-wire copper feeder.${circ}${tail}`;
+  const total = o.segs.reduce((t,s)=>t+s.ft,0);
+  const runPart = !o.segs.length ? '' : o.segs.length===1 ? `approximately ${_spkRunsText(o)}` : `approximately ${total} feet in all — ${_spkRunsText(o)}`;
+  const trench = o.trenchFt>0 ? ` Includes approximately ${o.trenchFt} feet of ${o.trench==='machine'?'machine':'hand'}-dug trench, backfill and rough grade; a Miss Utility (811) locate is requested before digging.` : '';
+  if(o.loc==='adjacent' && o.segs.every(s=>s.m==='nipple')){
+    return `Furnish and install a Square D Homeline sub-panel ${o.where||'directly beside the main panel'}${enc}, fed from ${_an} ${o.amps}-amp 2-pole breaker in the main panel with a 4-wire copper feeder.${trench}${circ}${tail}`;
   }
-  if(o.loc==='remote'){
-    return `Furnish and install a Square D Homeline sub-panel ${o.where||'[INSERT SUB-PANEL LOCATION]'}${enc}, fed from a ${o.amps}-amp 2-pole breaker in the main panel with approximately ${o.ft} feet of 4-wire copper feeder cable.${circ}${tail}`;
+  if(o.loc!=='detached'){
+    return `Furnish and install a Square D Homeline sub-panel ${o.where||(o.loc==='adjacent'?'beside the main panel':'[INSERT SUB-PANEL LOCATION]')}${enc}, fed from ${_an} ${o.amps}-amp 2-pole breaker in the main panel with a 4-wire feeder${runPart?', '+runPart:''}.${trench}${circ}${tail}`;
   }
-  const disc = o.panel==='mb' ? 'a main-breaker panel that serves as the disconnect at the structure' : 'a disconnecting means at the structure';
-  return `Furnish and install a ${o.amps}-amp feeder from the main panel to a Square D Homeline sub-panel ${o.where||'in the detached [INSERT STRUCTURE]'}${enc}, approximately ${o.ft+o.ft2} feet, in conduit between the buildings. Includes the feeder breaker in the main panel, ${disc}, and a grounding electrode system (two ground rods) at the structure. Any existing 120-volt line to the structure will be removed or re-fed from the new sub-panel so the building has a single source of power (NEC 225.30).${circ}${tail}`;
+  const disc = o.panel==='mb' ? 'a main-breaker panel that serves as the disconnect at the structure'
+             : o.panel==='mlobf' ? `${_an} ${o.amps}-amp main breaker in the sub-panel that serves as the disconnect at the structure`
+             : 'a disconnecting means at the structure';
+  return `Furnish and install ${_an} ${o.amps}-amp feeder from the main panel to a Square D Homeline sub-panel ${o.where||'in the detached [INSERT STRUCTURE]'}${enc}${runPart?', '+runPart:''}.${trench} Includes the feeder breaker in the main panel, ${disc}, and a grounding electrode system (two ground rods) at the structure. Any existing 120-volt line to the structure will be removed or re-fed from the new sub-panel so the building has a single source of power (NEC 225.30).${circ}${tail}`;
 }
 const _spkDraft = {};      // qid → values in the open sub-panel card (survives form redraws)
+const _spkAutoShown = {};  // qid → 1 once the card has auto-opened on an empty Subpanel / Feeder quote (11-21a)
 let _spkOpenQid = null;
 let _spkEditId = null;     // heading id being re-edited (null = adding a new scope)
 function spkLocChanged(){
   const g=id=>document.getElementById(id);
   const d=_spkDefaults(g('spk-loc')?.value||'adjacent');
   if(g('spk-panel')) g('spk-panel').value=d.panel;
-  if(g('spk-ft'))    g('spk-ft').value=d.ft;
-  if(g('spk-ft2'))   g('spk-ft2').value=d.ft2;
+  [1,2,3].forEach(i=>{ const s=d.segs[i-1]; if(g('spk-m'+i)) g('spk-m'+i).value=s?s.m:''; if(g('spk-f'+i)) g('spk-f'+i).value=s?s.ft:''; });
+  if(g('spk-tft'))   g('spk-tft').value=d.trenchFt;
+  if(g('spk-tm'))    g('spk-tm').value='hand';
   if(g('spk-circ'))  g('spk-circ').value=d.circ;
   if(g('spk-hours')) g('spk-hours').value=d.hours;
   spkRefresh();
@@ -10370,16 +10485,28 @@ function spkRefresh(){
   const o=_spkRead();
   if(_spkOpenQid) _spkDraft[_spkOpenQid]=o;
   const g=id=>document.getElementById(id);
-  if(g('spk-ft2-row')) g('spk-ft2-row').style.display = o.loc==='detached' ? '' : 'none';
-  if(g('spk-ft-lbl'))  g('spk-ft-lbl').textContent = o.loc==='detached' ? 'Feeder inside the house (ft of SER)' : o.loc==='remote' ? 'Feeder length (ft of SER cable)' : 'Feeder length, panel to panel (ft)';
+  const z=_spkSizing(o.amps,o.ser);
+  const hasSer=o.segs.some(s=>SPK_METHODS[s.m].kind==='ser'), hasCond=o.segs.some(s=>SPK_METHODS[s.m].kind==='cond');
+  const imcFt=o.segs.filter(s=>s.m==='imc').reduce((t,s)=>t+s.ft,0);
+  const tc=_spkTrenchCost(o);
   const warn=g('spk-warn');
-  if(warn){ const w = o.loc==='detached' && o.panel==='mlo';
-    warn.style.display = w ? '' : 'none';
-    warn.textContent = w ? '⚠ A detached structure needs a disconnect AT the structure (NEC 225.31 / 225.32) — the feeder breaker in the house does not count. Use a main-breaker panel, or add a separate disconnect line.' : ''; }
-  const z=_spkSizing(o.amps);
+  if(warn){
+    const w=[];
+    if(o.loc==='detached' && o.panel==='mlo') w.push('⚠ A detached structure needs a disconnect AT the structure (NEC 225.31 / 225.32) — the feeder breaker in the house does not count. Pick "Main-lug + back-fed main breaker" or a main-breaker panel, or add a separate disconnect line.');
+    if(!o.segs.length) w.push('⚠ No feeder run entered — the quote will have no feeder wire on it.');
+    if(o.loc==='detached' && imcFt>0 && !(o.trenchFt>0)) w.push('⚠ No trench footage entered — fine only if the conduit is not buried.');
+    if(o.trenchFt>0 && o.trench==='machine' && o.trenchFt<50) w.push('Rented trencher is priced at its 50 ft minimum — hand dig may be cheaper at this length.');
+    warn.style.display = w.length ? '' : 'none';
+    warn.textContent = w.join('  ');
+  }
   const mat=_spkBuildLines(o,'x',0).reduce((s,l)=>s+calcLine(l),0);
-  if(g('spk-price')) g('spk-price').textContent = 'Materials '+fmt$(mat)+' + labor '+o.hours+' h ('+fmt$(o.hours*160)+')';
-  if(g('spk-size'))  g('spk-size').textContent = 'Feeder sized for '+o.amps+' A: '+(o.loc==='adjacent'?z.thwn+' copper THWN-2':z.ser+' copper SER'+(o.loc==='detached'?' inside, '+z.thwn+' THWN-2 in '+z.imc+' IMC between buildings':''))+' · '+z.panelAmps+' A panel.';
+  if(g('spk-price')) g('spk-price').textContent = 'Materials'+(tc>0?' + trench':'')+' '+fmt$(mat)+' + labor '+o.hours+' h ('+fmt$(o.hours*160)+')';
+  if(g('spk-size')){
+    const bits=[];
+    if(hasSer)  bits.push(z.ser+' '+(o.ser==='cu'?'copper':'aluminum')+' SER');
+    if(hasCond) bits.push('three '+z.thwn+' + '+z.gnd+' ground, copper THWN-2'+(o.segs.some(s=>s.m==='emt'||s.m==='imc')?' in '+z.cond+' conduit':''));
+    g('spk-size').textContent = 'Sized for '+o.amps+' A: '+(bits.length?bits.join(' · '):'no feeder run entered')+' · '+_spkPanelAmps(o,z)+' A panel'+(o.panel==='mlobf'?' with a back-fed '+o.amps+' A main':'')+(tc>0?' · trench '+fmt$(tc)+' ('+(o.trench==='machine'?'rented trencher':'hand dig')+')':'')+'.';
+  }
   if(g('spk-preview')) g('spk-preview').textContent=_spkText(o);
 }
 function openSubpanelForm(qid, prev){
@@ -10390,6 +10517,12 @@ function openSubpanelForm(qid, prev){
   const esc = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
   const sel=(id,opts,val,fn)=>`<select class="fsel" id="${id}" onchange="${fn||'spkRefresh()'}" style="width:100%">${opts.map(([v,l])=>`<option value="${v}"${String(v)===String(val)?' selected':''}>${l}</option>`).join('')}</select>`;
   const numIn=(id,val,step,max)=>`<input class="fi" id="${id}" type="number" min="0"${max?` max="${max}"`:''} step="${step}" value="${val}" oninput="spkRefresh()">`;
+  const mOpts=[['','— none —'],...Object.keys(SPK_METHODS).map(k=>[k,SPK_METHODS[k].label])];
+  const segRow=i=>{ const s=d.segs[i-1]||{m:'',ft:''};
+    return `<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:6px">
+      <div class="fg"><div class="fl">Feeder run ${i} — how it is run</div>${sel('spk-m'+i,mOpts,s.m)}</div>
+      <div class="fg"><div class="fl">Run ${i} length (ft)</div>${numIn('spk-f'+i,s.ft,1)}</div>
+    </div>`; };
   const html=`<div id="dq-spk-form" class="card" style="margin:0 0 12px;padding:14px 16px;border:1px solid var(--accent, #2e7d32);background:var(--bg-elev, rgba(46,125,50,.05))">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:700">Sub-panel / feeder${_spkEditId?' — editing the scope already on this quote':''}</div>
@@ -10401,26 +10534,63 @@ function openSubpanelForm(qid, prev){
       <div class="fg"><div class="fl">Feeder breaker size</div>${sel('spk-amps',[[50,'50 A'],[60,'60 A'],[80,'80 A'],[100,'100 A'],[125,'125 A']],d.amps)}</div>
     </div>
     <div class="frow3">
-      <div class="fg"><div class="fl">Panel type</div>${sel('spk-panel',[['mlo','Main-lug only'],['mb','Main-breaker (local disconnect)']],d.panel)}</div>
-      <div class="fg"><div class="fl" id="spk-ft-lbl">Feeder length (ft)</div>${numIn('spk-ft',d.ft,1)}</div>
-      <div class="fg" id="spk-ft2-row" style="display:none"><div class="fl">Conduit run between buildings (ft)</div>${numIn('spk-ft2',d.ft2,5)}</div>
-    </div>
-    <div class="frow3">
+      <div class="fg"><div class="fl">Panel type</div>${sel('spk-panel',[['mlo','Main-lug only'],['mlobf','Main-lug + back-fed main breaker & hold-down'],['mb','Main-breaker panel']],d.panel)}</div>
+      <div class="fg"><div class="fl">SER cable metal</div>${sel('spk-ser',[['al','Aluminum (standard)'],['cu','Copper']],d.ser)}</div>
       <div class="fg"><div class="fl">Circuits to move to the sub-panel</div>${numIn('spk-circ',d.circ,1,24)}</div>
-      <div class="fg"><div class="fl">Labor — crew hours ($160/hr)</div>${numIn('spk-hours',d.hours,0.5)}</div>
-      <div class="fg"><div class="fl">Sub-panel location (customer wording)</div><input class="fi" id="spk-where" value="${esc(d.where)}" placeholder="e.g. beside the main panel in the garage" oninput="spkRefresh()"></div>
     </div>
+    <div style="font-size:11.5px;color:var(--text-muted);margin:8px 0 6px">Feeder runs, in order from the main panel to the sub-panel. Wire and conduit sizes follow the breaker size.</div>
+    ${segRow(1)}${segRow(2)}${segRow(3)}
+    <div class="frow3" style="margin-top:6px">
+      <div class="fg"><div class="fl">Trench length (ft) — 0 if none</div>${numIn('spk-tft',d.trenchFt,5)}</div>
+      <div class="fg"><div class="fl">Trench method</div>${sel('spk-tm',[['hand','Hand dig'],['machine','Rented trencher']],d.trench)}</div>
+      <div class="fg"><div class="fl">Labor — crew hours ($160/hr)</div>${numIn('spk-hours',d.hours,0.5)}</div>
+    </div>
+    <div class="fg" style="margin-top:6px"><div class="fl">Sub-panel location (customer wording)</div><input class="fi" id="spk-where" value="${esc(d.where)}" placeholder="e.g. in the detached shed  /  beside the main panel in the garage" oninput="spkRefresh()"></div>
     <div id="spk-warn" style="display:none;font-size:12px;color:var(--amber, #b45309);margin:6px 0;line-height:1.45"></div>
     <div id="spk-size" style="font-size:11.5px;color:var(--text-muted);margin:6px 0 2px"></div>
     <div id="spk-preview" style="font-size:12px;color:var(--text-secondary);margin:4px 0 10px;line-height:1.45"></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-p" onclick="addSubpanelToQuote('${qid}')">${_spkEditId?'Update this scope':'Add to quote'}</button>
       <button class="btn btn-g" onclick="closeSubpanelForm()">Cancel</button>
-      <span style="font-size:11px;color:var(--text-muted)">Builds the material lines, a labor line and the scope text — all editable afterwards. Trenching is not included: add a Trenching labor line / rental if the run is buried.</span>
+      <span style="font-size:11px;color:var(--text-muted)">Builds the material lines, a labor line and the scope text — all editable afterwards. For an EV charger, outlets or lights fed from this sub-panel, add them afterwards with “Stack a scope”.</span>
     </div>
   </div>`;
   row.insertAdjacentHTML('afterend',html);
   spkRefresh();
+}
+// ── V1 (crm-2026-11-10b … 11-17d) — kept ONLY so a scope saved by those builds still yields the
+// exact paragraph it wrote into Scope of Work (✎ Edit swaps that paragraph). Do not call for new scopes.
+function _spkDefaultsV1(loc){
+  const H={adjacent:2, remote:4, detached:6};
+  if(loc==='detached') return {panel:'mb', ft:20, ft2:30, circ:0, hours:H.detached};
+  if(loc==='remote')   return {panel:'mlo',ft:30, ft2:0,  circ:0, hours:H.remote};
+  return {panel:'mlo', ft:10, ft2:0, circ:4, hours:H.adjacent};
+}
+function _spkNormV1(o){
+  o=o||{};
+  const loc=['adjacent','remote','detached'].includes(o.loc)?o.loc:'adjacent';
+  const d=_spkDefaultsV1(loc);
+  const num=(v,f)=>{ const n=parseFloat(v); return (isNaN(n)||n<0)?f:n; };
+  return { loc, env:o.env==='outdoor'?'outdoor':'indoor',
+    amps:[50,60,80,100,125].includes(parseInt(o.amps))?parseInt(o.amps):60,
+    panel:(o.panel==='mb'||o.panel==='mlo')?o.panel:d.panel,
+    ft:Math.round(num(o.ft,d.ft)), ft2:loc==='detached'?Math.round(num(o.ft2,d.ft2)):0,
+    circ:Math.min(24,Math.round(num(o.circ,d.circ))), hours:num(o.hours,d.hours),
+    where:String(o.where||'').trim().slice(0,160) };
+}
+function _spkTextV1(o){
+  o=_spkNormV1(o);
+  const enc = o.env==='outdoor' ? ' in a weatherproof (NEMA 3R) outdoor enclosure' : '';
+  const circ = o.circ>0 ? ` Relocate ${o.circ} existing branch circuit${o.circ>1?'s':''} from the main panel to the new sub-panel to free space in the main panel.` : '';
+  const tail = ' The sub-panel neutral is isolated with a separate ground bar. All work is performed to NEC and local code.';
+  if(o.loc==='adjacent'){
+    return `Furnish and install a Square D Homeline sub-panel ${o.where||'directly beside the main panel'}${enc}, fed from a ${o.amps}-amp 2-pole breaker in the main panel with a 4-wire copper feeder.${circ}${tail}`;
+  }
+  if(o.loc==='remote'){
+    return `Furnish and install a Square D Homeline sub-panel ${o.where||'[INSERT SUB-PANEL LOCATION]'}${enc}, fed from a ${o.amps}-amp 2-pole breaker in the main panel with approximately ${o.ft} feet of 4-wire copper feeder cable.${circ}${tail}`;
+  }
+  const disc = o.panel==='mb' ? 'a main-breaker panel that serves as the disconnect at the structure' : 'a disconnecting means at the structure';
+  return `Furnish and install a ${o.amps}-amp feeder from the main panel to a Square D Homeline sub-panel ${o.where||'in the detached [INSERT STRUCTURE]'}${enc}, approximately ${o.ft+o.ft2} feet, in conduit between the buildings. Includes the feeder breaker in the main panel, ${disc}, and a grounding electrode system (two ground rods) at the structure. Any existing 120-volt line to the structure will be removed or re-fed from the new sub-panel so the building has a single source of power (NEC 225.30).${circ}${tail}`;
 }
 function closeSubpanelForm(){
   if(_spkOpenQid) delete _spkDraft[_spkOpenQid];
@@ -10740,6 +10910,8 @@ function renderDetailedQuoteForm(q){
   // 2026-10-14b: a Quick-Quote EV card that was open survives the redraw (auto-sync / line edits re-render this form).
   try { if (typeof _qqsDraft==='object' && _qqsDraft[q.id]) openQQScopeForm(q.id, _qqsDraft[q.id]); } catch(e) { console.warn('[GK] qq-scope restore', e); }
   try { if (typeof _spkDraft==='object' && _spkDraft[q.id]) openSubpanelForm(q.id, _spkDraft[q.id]); } catch(e) { console.warn('[GK] subpanel card restore', e); }
+  // crm-2026-11-21a: a Subpanel / Feeder quote with nothing on it yet opens straight to the entry card (once per session; Cancel sticks).
+  try { if (q.jobType==='subpanel' && !(q.lines||[]).length && !_spkAutoShown[q.id] && !document.getElementById('dq-spk-form') && !(typeof quoteLocked==='function' && quoteLocked(q))) { _spkAutoShown[q.id]=1; openSubpanelForm(q.id); } } catch(e) { console.warn('[GK] subpanel card auto-open', e); }
   // crm-2026-11-10a: travel auto-fill also covers a quote switched to Detailed after opening (no-op once tried).
   setTimeout(()=>{ try{ autoCalcTravelIfNeeded(q.id); }catch(e){} }, 150);
 }
