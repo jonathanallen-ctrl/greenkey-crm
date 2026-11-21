@@ -1314,7 +1314,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-21a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-21c</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -3591,6 +3591,12 @@ function renderBackupsExportSettings() {
   return `<div class="stitle">Backups &amp; Export</div>
     <div class="sdesc">Belt-and-suspenders insurance for your customer data. SharePoint already keeps a 50-snapshot rolling backup; this section adds long-term retention and an off-tenant export for true off-Microsoft redundancy.</div>
 
+    <div style="margin-top:18px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--r)">
+      <div class="srl" style="font-size:13px;font-weight:600;margin-bottom:6px">☁ Cloud archive</div>
+      <div class="srd" style="line-height:1.5;margin-bottom:10px">Archived jobs untouched for ${typeof ARCH_DAYS!=='undefined'?ARCH_DAYS:30} days are stored in the cloud database instead of on each computer, so the browser does not fill up. <strong>${typeof _archLiveRows==='function'?_archLiveRows().length:0}</strong> job(s) are in the cloud archive now. A full copy is also written to <code>GreenKeyCRM_Backups/archive</code> in SharePoint after every move and once a day.</div>
+      <button class="btn btn-p" onclick="openArchiveModal()" style="padding:8px 16px">Open cloud archive</button>
+    </div>
+
     <div style="margin-top:18px">
       <div class="srl" style="font-size:13px;font-weight:600;margin-bottom:6px">Automatic backups (running)</div>
       <div class="srd" style="line-height:1.5;margin-bottom:14px">
@@ -3682,6 +3688,18 @@ async function exportDataZip() {
       zip.file('data/' + friendly, JSON.stringify(data[k], null, 2));
     });
     zip.file('data/files-metadata.json', JSON.stringify(fileMetadata, null, 2));
+    // crm-2026-11-21c: jobs that live in the cloud archive are not in gk_leads any more — include them.
+    try {
+      if (typeof _archLiveRows === 'function' && _archLiveRows().length) {
+        const _aj = await _archListAll();
+        zip.file('data/cloud_archive.json', JSON.stringify(_aj.map(x => ({ id: x.id, updatedAt: x.updatedAt, archivedAt: x.archivedAt, state: x.state, data: JSON.parse(x.blob) })), null, 2));
+        counts.cloudArchiveJobs = _aj.length;
+        manifest._notes.push('data/cloud_archive.json holds every job stored in the cloud archive (full job + quotes). Jobs with state "archived" are NOT in data/leads.json.');
+      }
+    } catch (e) {
+      manifest._notes.push('WARNING: the cloud archive could not be read for this export (' + (e && e.message || e) + '). Jobs that live only in the cloud archive are NOT in this ZIP — see GreenKeyCRM_Backups/archive in SharePoint.');
+      try { toast('The cloud archive could not be added to this ZIP — see the note in manifest.json', 'warning', 12000); } catch (_) {}
+    }
 
     // Single combined snapshot for restore (matches the SharePoint backup format)
     zip.file('snapshot.json', JSON.stringify({
@@ -4411,7 +4429,7 @@ function renderLeadsPage() {
   const type   = (document.getElementById('lf-type')||{}).value||'';
   const stage  = (document.getElementById('lf-stage')||{}).value||'';
   const search = ((document.getElementById('lf-search')||{}).value||'').toLowerCase().trim();
-  let leads = getLeads();
+  let leads = getLeadsAll();
   const custs = getCustomers();
   if (src)    leads = leads.filter(l=>l.source===src);
   if (type)   leads = leads.filter(l=>l.jobType===type);
@@ -4487,7 +4505,7 @@ function renderCustomersPage() {
     (c.city||'').toLowerCase().includes(ql)
   );
   custs.sort((a,b)=>custFullName(a).localeCompare(custFullName(b)));
-  const leads = getLeads();
+  const leads = getLeadsAll();
   const wrap = document.getElementById('cust-grid');
   if (!wrap) return;
   if (!custs.length) {
@@ -4556,7 +4574,7 @@ function _leadsForCustomer(custId) {
   const cName = (typeof custFullName === 'function' ? custFullName(c) : '').trim().toLowerCase();
   const seen = new Set(); const out = [];
   const _resolve = _custResolver();   // 09-09a: one parse for the whole scan, not one per job
-  getLeads().forEach(l => {
+  getLeadsAll().forEach(l => {
     if (!l || seen.has(l.id)) return;
     let hit = false;
     const _r = l.customerId ? _resolve(l.customerId) : null;
@@ -4668,8 +4686,8 @@ function renderCustomerDetail(custId) {
 // resurrect from another device. The pointer approach is resurrection-proof and
 // self-heals any reference we didn't explicitly re-point. Reversible from a backup.
 function _custMergeCounts(custId){
-  const leads = getLeads().filter(l=>l.customerId===custId).length;
-  const quotes = (typeof getQuotes==='function') ? getQuotes().filter(q=>q.customerId===custId || q.billToCustomerId===custId).length : 0;
+  const leads = getLeadsAll().filter(l=>l.customerId===custId).length;
+  const quotes = (typeof getQuotes==='function') ? getQuotesAll().filter(q=>q.customerId===custId || q.billToCustomerId===custId).length : 0;
   return { leads, quotes };
 }
 function mergeCustomers(keepId, dropId){
@@ -4874,7 +4892,7 @@ function showLeadForm(lead, prefillCustId) {
   // were already flowing (hidden inputs) — the address was the gap.
   if (prefillCust && isNew && !String(prefillCust.street || '').trim()) {
     try {
-      const prior = getLeads()
+      const prior = getLeadsAll()
         .filter(x => x && x.customerId === prefillCust.id && !x.deleted && String(x.siteStreet || '').trim())
         .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0];
       if (prior) prefillCust = { ...prefillCust, street: prior.siteStreet, city: prior.siteCity || prefillCust.city, state: prior.siteState || prefillCust.state, zip: prior.siteZip || prefillCust.zip, _addrFromJob: prior.id };
@@ -4891,7 +4909,7 @@ function showLeadForm(lead, prefillCustId) {
   let _tplSrc = '', _tplKind = '';
   if (isNew && prefillCust && prefillCust.propertyType === 'commercial') {
     try {
-      const _mine = getLeads()
+      const _mine = getLeadsAll()
         .filter(x => x && x.customerId === prefillCust.id && !x.deleted)
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
       // Prefer the newest job that names the contracting platform (Red E Charge,
@@ -5187,7 +5205,7 @@ function saveLead() {
     try {
       const _d = findDuplicateCustomers(fn, ln, email, phone).filter(x => x.reasons.some(r => r !== 'same name'));
       for (const x of _d) {
-        const _ol = _openLeadForCustomer(x.cust.id);
+        const _ol = _openLeadForCustomer(x.cust.id, true);
         if (_ol) {
           const _st = (STAGE_MAP[_ol.stage] && STAGE_MAP[_ol.stage].label) || _ol.stage;
           if (!confirm(custFullName(x.cust) + ' already has an open job: ' + _ol.id + ' (' + _st + ') — matched on ' + x.reasons.join(', ') + '.\n\nOK = open that job instead (nothing new is created)\nCancel = create a SECOND job anyway')) break;
@@ -5441,7 +5459,7 @@ function doGlobalSearch(q) {
   const custs = custAll.slice(0,SEARCH_LIMIT);
   const leadCusts = getCustomers();
   const _leadName = l => { const lc=leadCusts.find(x=>x.id===l.customerId); return (lc?custFullName(lc):(l.customerName||'')).toLowerCase(); };
-  const leadAll = getLeads().filter(l=>{
+  const leadAll = getLeadsAll().filter(l=>{
     const lc = leadCusts.find(x=>x.id===l.customerId);
     const bn = lc && lc.propertyType==='commercial' ? (lc.businessName||'') : '';
     const lcName = lc ? custFullName(lc).toLowerCase() : '';
@@ -5729,6 +5747,12 @@ function getQQPricing(){
     // Applied by _nemaRunExtra() — Quick Quote, the stacked EV card and the run
     // rows all read it. Hardwired chargers are untouched.
     nemaNeutral10:20, nemaConduit10:30,
+    // crm-2026-11-21b (Jon — fence runs): conduit type on a SURFACE run leg, charged OVER the EMT that
+    // the surface rate already carries. Material difference at 30% markup, per 10 ft, 3/4" — IMC from the
+    // 11/17/2026 Capital Electric ticket ($1.99 vs $0.95 per ft, + connectors / straps / a coupling at cuts;
+    // field-bent, no factory elbows) ≈ $16; rigid from the older price file ($3.40 per ft) ≈ $35; PVC is
+    // priced the same as EMT (cheaper pipe, more straps / fittings). NO extra labor is in these numbers.
+    conduitExtra10:{emt:0, pvc:0, imc:16, rigid:35},
     // Travel: base price includes a 30-min round trip; fees START at 1 hour
     // round trip (2026-06-12 — was 30, which overcharged 30-60 min jobs).
     // 2026-09-12: blocks are 15 min at $40 (still $160/hr) — see travelAdderFor().
@@ -6506,11 +6530,11 @@ function customerActionChip(act, opts) {
 function renderQuotesPage(){
   const status=(document.getElementById('qf-status')||{}).value||'';
   const type=(document.getElementById('qf-type')||{}).value||'';
-  let quotes=getQuotes();
+  let quotes=getQuotesAll();
   if(status) quotes=quotes.filter(q=>q.status===status);
   if(type)   quotes=quotes.filter(q=>q.type===type);
   quotes.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  const custs=getCustomers(), leads=getLeads();
+  const custs=getCustomers(), leads=getLeadsAll();
   const wrap=document.getElementById('quotes-list-wrap');
   if(!wrap) return;
   if(!quotes.length){
@@ -6784,6 +6808,7 @@ function startRecoverQuote() {
 
 // ── QUOTE BUILDER ──
 function openQuoteBuilder(qid){
+  { const _al = (typeof _archLeadOfQuote === 'function' && !getQuote(qid)) ? _archLeadOfQuote(qid) : null; if (_al && _archGate(_al, () => openQuoteBuilder(qid))) return; }   // 11-21c
   // If we're not on the quotes page, navigate there first then open
   if(S.page!=='quotes'){
     navigate('quotes');
@@ -9115,7 +9140,7 @@ function _onQQChange_HVAC(qid) {
   runSegs.forEach(seg => {
     const ft = Math.max(parseInt(seg.ft)||0, 0);
     totalRunFt += ft;
-    if (seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') lm += (ft/10) * p.hvacAddl10Surface;
+    if (seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') lm += (ft/10) * p.hvacAddl10Surface + _condExtra(seg,p);   // 11-21b conduit type
     else if (seg.type==='hand-trench') lm += (ft/10) * p.hvacHandDig10;
     else if (seg.type==='machine-trench') {
       const mft = Math.max(ft, 50);
@@ -9340,11 +9365,32 @@ function _nemaRunExtra(type, ft, p){
   if(type==='crawl'||type==='attic'||type==='unfinished') per += (p.nemaConduit10||0);
   return (ft/10)*per;
 }
+// crm-2026-11-21b: conduit type for a surface run leg (seg.cond). EMT when unset — every older quote.
+const QQ_CONDUIT_TYPES = {
+  emt:  {label:'EMT conduit (standard)'},
+  imc:  {label:'IMC conduit',   txt:'in surface-mounted IMC (heavy-wall steel) conduit'},
+  rigid:{label:'Rigid conduit', txt:'in surface-mounted rigid steel conduit'},
+  pvc:  {label:'PVC conduit',   txt:'in surface-mounted PVC conduit'}
+};
+function _condKey(seg){ return (seg && seg.type==='surface' && QQ_CONDUIT_TYPES[seg.cond]) ? seg.cond : 'emt'; }
+function _condExtra(seg,p){
+  if(!seg || seg.type!=='surface') return 0;
+  const ft=Math.max(parseInt(seg.ft)||0,0);
+  return (ft/10)*((((p&&p.conduitExtra10)||{})[_condKey(seg)])||0);
+}
+function _condSurfaceTxt(seg){ return QQ_CONDUIT_TYPES[_condKey(seg)].txt || null; }   // null = keep the stock wording
+function updateQQRunSegCond(qid,idx,val){
+  const q=getQuote(qid);if(!q)return;
+  const segs=[...(q.qq?.runSegs||[])]; if(!segs[idx]) return;
+  segs[idx]={...segs[idx],cond:QQ_CONDUIT_TYPES[val]?val:'emt'};
+  upsertQuote({...q,qq:{...(q.qq||{}),runSegs:segs}});
+  const nq=getQuote(qid);renderQBForm(nq);onQQChange(qid);
+}
 function qqSegCost(seg,p,rates){
   rates = rates || qqRunRates(null,p);
   const ft=Math.max(parseInt(seg.ft)||0,0);
   const nx = rates.nema ? _nemaRunExtra(seg.type, ft, p) : 0;
-  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') return (ft/10)*rates.surface + nx;
+  if(seg.type==='surface'||seg.type==='crawl'||seg.type==='attic'||seg.type==='unfinished') return (ft/10)*rates.surface + nx + _condExtra(seg,p);
   if(seg.type==='hand-trench') return (ft/10)*rates.handDig + nx;
   if(seg.type==='machine-trench'){const mft=Math.max(ft,50);return rates.machineBase+Math.max(0,Math.ceil((mft-50)/10))*rates.machine10 + nx;}
   return 0;
@@ -9373,6 +9419,7 @@ function renderQQRunSegs(segs,qid){
         <option value="hand-trench"${seg.type==='hand-trench'?' selected':''}>Trench — hand dig — $${_rHand} per 10 ft of trench</option>
         <option value="machine-trench"${seg.type==='machine-trench'?' selected':''}>Trench — machine — $${rates.machineBase} base (first 50 ft)${_mchTxt}</option>
       </select>
+      ${seg.type==='surface' ? `<select class="fsel" style="flex:0 1 215px;min-width:170px" title="Conduit for this surface run (e.g. IMC on a fence). The extra is material only — add labor as a difficulty fee if needed." onchange="updateQQRunSegCond('${qid}',${i},this.value)">${Object.keys(QQ_CONDUIT_TYPES).map(k=>{ const x=((p.conduitExtra10||{})[k])||0; return `<option value="${k}"${_condKey(seg)===k?' selected':''}>${QQ_CONDUIT_TYPES[k].label}${k==='emt'?'':(x>0?` — +$${x} per 10 ft`:' — same price')}</option>`; }).join('')}</select>` : ''}
       <div style="display:flex;align-items:center;gap:6px">
         <input class="fi" type="number" value="${seg.ft||10}" min="${isMachine?50:10}" step="10" style="width:72px" oninput="updateQQRunSegFt('${qid}',${i},this.value)"> <span style="font-size:12px;color:var(--text-muted)">ft ${(seg.type==='hand-trench'||seg.type==='machine-trench')?'(trench)':'(wire run)'}</span>
       </div>
@@ -9628,18 +9675,18 @@ function _runRoutingSentence(segs, gauge, metal, includedFt, cable){
     'surface':'THHN/THWN-2','hand-trench':'THHN/THWN-2','machine-trench':'THHN/THWN-2'
   };
   const list = (segs||[])
-    .map(seg => ({ ft: parseInt(seg.ft)||0, type: seg.type }))
+    .map(seg => ({ ft: parseInt(seg.ft)||0, type: seg.type, cond: seg.cond }))
     .filter(s => s.ft > 0 && PHRASE[s.type]);
   if (!list.length) return { inline: '', sentence: '' };
   list[0].ft += (includedFt || 0);
   if (list.length === 1) {
     const s = list[0];
     const spec = gauge ? ` of ${_gaugeFor(s.type)} ${_insulFor(s.type)} (${m}) wire` : '';
-    return { inline: `${spec} ${PHRASE[s.type]}`, sentence: '' };
+    return { inline: `${spec} ${_condSurfaceTxt(s) || PHRASE[s.type]}`, sentence: '' };
   }
   const parts = list.map(s => {
     const spec = gauge ? ` (${_gaugeFor(s.type)} ${_insulFor(s.type)}, ${m})` : '';
-    return `approximately ${s.ft} ft ${PHRASE[s.type]}${spec}`;
+    return `approximately ${s.ft} ft ${_condSurfaceTxt(s) || PHRASE[s.type]}${spec}`;
   });
   return { inline: '', sentence: ` The route runs ${parts.join(', then ')}.` };
 }
@@ -9751,7 +9798,7 @@ function _autoScopePrimary(q){
     if (_nLegs.length <= 1) {
       const _t = _nLegs[0] && _nLegs[0].type;
       const _cable = `${wireOpt.gauge} THHN/THWN-2${wireOpt.metal === 'Al' ? ' (aluminum)' : ''}`;
-      wirePhrase = `${_cable} ${(_t && _nMETH[_t]) || 'in conduit'}`;   // no legs = within 5 ft
+      wirePhrase = `${_cable} ${_condSurfaceTxt(_nLegs[0]) || (_t && _nMETH[_t]) || 'in conduit'}`;   // no legs = within 5 ft
     } else {
       wirePhrase = `${wireOpt.gauge}${wireOpt.metal === 'Al' ? ' aluminum' : ''} conductors`;
       routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5, 'conduit').sentence || '';
@@ -9857,7 +9904,7 @@ function _autoScopePrimary(q){
   let wirePhrase, routeTail = '';
   if (_legs.length <= 1) {
     const _t = _legs[0] && _legs[0].type;
-    wirePhrase = `${wireOpt.gauge} ${_INSULS[_t] || 'THHN/THWN-2'}${wireOpt.metal === 'Al' ? ' (aluminum)' : ''} ${_METHODS[_t] || 'in conduit'}`;
+    wirePhrase = `${wireOpt.gauge} ${_INSULS[_t] || 'THHN/THWN-2'}${wireOpt.metal === 'Al' ? ' (aluminum)' : ''} ${_condSurfaceTxt(_legs[0]) || _METHODS[_t] || 'in conduit'}`;
   } else {
     wirePhrase = `${wireOpt.gauge}${wireOpt.metal === 'Al' ? ' aluminum' : ''} conductors`;
     routeTail = _runRoutingSentence(segs, wireOpt.gauge, wireOpt.metal, 5).sentence || '';
@@ -12852,7 +12899,7 @@ async function generateInvoice(qid){
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
   // Reuse the existing invoice number on re-download (2026-07-24) — only mint
   // a new INV number the first time this quote is invoiced.
-  const invNum=q.invoiceId||('INV-'+new Date().getFullYear()+'-'+String(getQuotes().filter(x=>x.invoiceId).length+1).padStart(4,'0'));
+  const invNum=q.invoiceId||('INV-'+new Date().getFullYear()+'-'+String(getQuotesAll().filter(x=>x.invoiceId).length+1).padStart(4,'0'));
 
   // Ask ONCE which price this invoice bills at, then remember it on the quote
   // so re-downloads and the email button stay consistent. Only asked when a
@@ -13028,6 +13075,7 @@ async function emailInvoice(qid){
 
 // ── PDF GENERATION ──
 function previewQuotePDF(qid){
+  { const _al = (typeof _archLeadOfQuote === 'function' && !getQuote(qid)) ? _archLeadOfQuote(qid) : null; if (_al && _archGate(_al, () => previewQuotePDF(qid))) return; }   // 11-21c
   const q=getQuote(qid);if(!q)return;
   const lead=getLead(q.leadId);
   const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
@@ -15079,6 +15127,8 @@ function commitMaterialImport(){
 // ══════════════════════════════════════════════════════
 
 function openJobDetail(id) {
+  // crm-2026-11-21c: a job that lives in the cloud archive is fetched first, then this runs again.
+  if (typeof _archGate === 'function' && _archGate(id, () => openJobDetail(id))) return;
   if (!(S.page === 'jobs' && S.jobDetailId === id)) _navRecord();   // 09-09d
   // ⚠ 2026-08-15b — ACTIVATE THE JOBS PAGE FIRST. This function only ever
   // toggled the two views INSIDE page-jobs; called from any other page (the
@@ -18974,7 +19024,7 @@ function renderFilesPage() {
   const pg = document.getElementById('page-files');
   if (!pg) return;
   const fm = fmState();
-  const allLeads  = getLeads();
+  const allLeads  = getLeadsAll();
   const custs     = getCustomers();
 
   const jobOptions = allLeads.map(l => {
@@ -20426,7 +20476,7 @@ function renderTaskList() {
   }
 
   const users = getUsers();
-  const leads = getLeads();
+  const leads = getLeadsAll();
   const custs = getCustomers();
   const overdueCount = tasks.filter(t=>t.dueDate&&t.dueDate<today&&t.status!=='done').length;
   const overdueHdr = overdueCount
@@ -20577,7 +20627,7 @@ function openTaskDetail(id) {
   if (!t) return;
   S.taskEditId = id;
   const users = getUsers();
-  const leads = getLeads();
+  const leads = getLeadsAll();
   const custs = getCustomers();
   const isDone = t.status==='done';
   const userOpts = users.map(u=>`<option value="${u.id}"${u.id===t.assignedTo?' selected':''}>${escHtml(u.name)}</option>`).join('');
@@ -20772,7 +20822,7 @@ function confirmDeleteTask(id) {
 
 // ── FOLLOW-UP SHORTCUTS ──
 function openFollowUp(linkedType, linkedId) {
-  const leads = getLeads();
+  const leads = getLeadsAll();
   const custs = getCustomers();
   const lead = linkedId ? leads.find(l=>l.id===linkedId) : null;
   const cust = lead ? custs.find(c=>c.id===lead.customerId) : null;
@@ -20860,7 +20910,7 @@ function renderNotifList() {
     return;
   }
 
-  const leads = getLeads();
+  const leads = getLeadsAll();
   const custs = getCustomers();
 
   const rows = notifs.map(n=>{
@@ -21010,7 +21060,7 @@ function _maybeBackfillJobValues(){
 function _revenueLines(period){
   _maybeBackfillJobValues();
   const out=[];
-  getLeads().forEach(l=>{
+  getLeadsAll().forEach(l=>{
     if (!isJobInvoiced(l)) return;
     const amt = getJobValueAmount(l); if (!amt) return;
     const at = (l.invoiced && l.invoiced.at) || l.updatedAt;
@@ -21057,7 +21107,7 @@ function updateDashboardWidget() {
   const tasks  = getTasks();
   const leads  = getLeads();
   const custs  = getCustomers();
-  const quotes = getQuotes();
+  const quotes = getQuotesAll();
   const today  = new Date().toISOString().slice(0,10);
   const isAdmin = S.user?.role === 'admin';
 
@@ -26337,7 +26387,7 @@ function rptOpenPipeline() {
 // ── 2. THIS MONTH ──
 function rptThisMonth(period) {
   const quotes=_revenueLines(period);
-  const leads=getLeads(),custs=getCustomers();
+  const leads=getLeadsAll(),custs=getCustomers();
   if (!quotes.length) return emptyRpt('No invoiced jobs for this period.');
   const total=quotes.reduce((s,q)=>s+(q.quoteTotal||0),0);
   const byType={},bySrc={};
@@ -26377,7 +26427,7 @@ function rptThisMonth(period) {
 // ── 3. OVERDUE TASKS ──
 function rptOverdueTasks() {
   const today=new Date().toISOString().slice(0,10);
-  const leads=getLeads(),custs=getCustomers();
+  const leads=getLeadsAll(),custs=getCustomers();
   const tasks=getTasks().filter(t=>t.status!=='done'&&t.dueDate&&t.dueDate<today);
   tasks.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
   if (!tasks.length) return emptyRpt('No overdue tasks. Great job!');
@@ -26445,7 +26495,7 @@ function rptQmeritRoyalty(period) {
   if (!allEV.length) return emptyRpt('No residential EV installs for this period.');
   const totalRev=allEV.reduce((s,q)=>s+(q.quoteTotal||0),0);
   const royalty=totalRev*0.03;
-  const leads=getLeads(),custs=getCustomers();
+  const leads=getLeadsAll(),custs=getCustomers();
   const bySrc={};
   allEV.forEach(q=>{const s=q.source||'Unknown';if(!bySrc[s])bySrc[s]={count:0,rev:0};bySrc[s].count++;bySrc[s].rev+=q.quoteTotal||0;});
   const srcRows=Object.entries(bySrc).sort((a,b)=>b[1].rev-a[1].rev).map(([s,v])=>
@@ -26473,9 +26523,9 @@ function rptQmeritRoyalty(period) {
 // ── 6. MARGIN SUMMARY ──
 function rptMargins(period) {
   if (S.user?.role!=='admin') return `<div class="empty" style="padding:60px 20px"><div class="etitle">Admin Only</div><div class="edesc">Margin data is restricted to Admin users.</div></div>`;
-  const quotes=getQuotes().filter(q=>(q.status==='invoiced'||q.status==='approved'||q.status==='delivered')&&inPeriod(q.invoiceDate||q.updatedAt,period));
+  const quotes=getQuotesAll().filter(q=>(q.status==='invoiced'||q.status==='approved'||q.status==='delivered')&&inPeriod(q.invoiceDate||q.updatedAt,period));
   if (!quotes.length) return emptyRpt('No quote data for this period.');
-  const leads=getLeads(),custs=getCustomers();
+  const leads=getLeadsAll(),custs=getCustomers();
   const bySrc={};
   quotes.forEach(q=>{const s=q.source||'Unknown';if(!bySrc[s])bySrc[s]={count:0,lm:0,fee:0,total:0};bySrc[s].count++;bySrc[s].lm+=q.laborAndMaterials||0;bySrc[s].fee+=q.qmeritFee||0;bySrc[s].total+=q.quoteTotal||0;});
   const srcRows=Object.entries(bySrc).sort((a,b)=>b[1].total-a[1].total).map(([s,v])=>
@@ -26541,7 +26591,7 @@ function rptJurisdiction() {
 // period selector (matched against lostAt) and the in-page reason filter.
 // Surfaces a per-reason breakdown so loss patterns are obvious at a glance.
 function rptLostLeads(period) {
-  const all = getLeads().filter(l => l.lostInfo?.isLost);
+  const all = getLeadsAll().filter(l => l.lostInfo?.isLost);
   // Period filter: 'all' returns everything regardless of when it was lost
   const inWindow = period === 'all'
     ? all
@@ -26552,7 +26602,7 @@ function rptLostLeads(period) {
     : inWindow;
 
   const custs  = getCustomers();
-  const quotes = getQuotes();
+  const quotes = getQuotesAll();
 
   if (!all.length) return emptyRpt('No lost leads recorded yet. When you mark a lead as Lost in its Job Details, it shows up here.');
 
@@ -26664,7 +26714,7 @@ function exportReportCSV() {
     }
     case 'thismonth':case 'revenue':{
       const quotes=_revenueLines(period);
-      const leads=getLeads(),custs=getCustomers();
+      const leads=getLeadsAll(),custs=getCustomers();
       rows=[['Job ID','Customer','Type','Source','Amount','Invoice Date']];
       quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',q.quoteTotal||0,mdy((q.invoiceDate||q.updatedAt||''))]);});
       filename=currentReport==='thismonth'?'jobs-this-period':'revenue-by-type';break;
@@ -26672,21 +26722,21 @@ function exportReportCSV() {
     case 'overdue':{
       const today=new Date().toISOString().slice(0,10);
       const tasks=getTasks().filter(t=>t.status!=='done'&&t.dueDate&&t.dueDate<today);
-      const leads=getLeads(),custs=getCustomers();
+      const leads=getLeadsAll(),custs=getCustomers();
       rows=[['Task','Job ID','Customer','Due Date','Days Overdue','Priority']];
       tasks.forEach(t=>{const lead=t.linkedId?leads.find(l=>l.id===t.linkedId):null;const cust=lead?custs.find(c=>c.id===lead.customerId):null;const daysOver=Math.floor((new Date(today)-new Date(t.dueDate))/86400000);rows.push([t.title,t.linkedId||'',cust?custFullName(cust):'',t.dueDate,daysOver,t.priority||'normal']);});
       filename='overdue-tasks';break;
     }
     case 'royalty':{
       const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
-      const leads=getLeads(),custs=getCustomers();
+      const leads=getLeadsAll(),custs=getCustomers();
       rows=[['Job ID','Customer','Source','Amount','3% Royalty','Date']];
       allEV.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,(q.quoteTotal||0)*0.03,mdy((q.invoiceDate||q.updatedAt||''))]);});
       filename='qmerit-royalty';break;
     }
     case 'margins':{
       const quotes=_revenueLines(period);
-      const leads=getLeads(),custs=getCustomers();
+      const leads=getLeadsAll(),custs=getCustomers();
       rows=[['Job ID','Customer','Type','Source','L&M','Qmerit Fee','Permit','Total','Margin %']];
       quotes.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);const lm=q.laborAndMaterials||0,fee=q.qmeritFee||0;const pct=lm>0?(((lm-fee)/lm)*100).toFixed(1):'';rows.push([q.leadId||'',cust?custFullName(cust):'',q.jobType||'',q.source||'',lm,fee,q.permitFee||0,q.quoteTotal||0,pct]);});
       filename='margin-summary';break;
@@ -26698,10 +26748,10 @@ function exportReportCSV() {
       filename='jobs-by-jurisdiction';break;
     }
     case 'lost':{
-      const all=getLeads().filter(l=>l.lostInfo?.isLost);
+      const all=getLeadsAll().filter(l=>l.lostInfo?.isLost);
       const inWindow=period==='all'?all:all.filter(l=>l.lostInfo?.lostAt&&inPeriod(l.lostInfo.lostAt,period));
       const filtered=_lostFilter?inWindow.filter(l=>l.lostInfo.reason===_lostFilter):inWindow;
-      const custs=getCustomers(),quotes=getQuotes();
+      const custs=getCustomers(),quotes=getQuotesAll();
       rows=[['Date Lost','Job ID','Customer','Type','Source','Stage When Lost','Reason','Notes','Quote $']];
       filtered.sort((a,b)=>new Date(b.lostInfo.lostAt||0)-new Date(a.lostInfo.lostAt||0)).forEach(l=>{
         const c=custs.find(x=>x.id===l.customerId);
@@ -26920,6 +26970,8 @@ let _spDrive = null;
 let _syncTmr = null;
 let _syncing = false;
 
+// crm-2026-11-21c: the cloud-archive index. A LOCAL cache on purpose — NOT a sync key (see CLOUD ARCHIVE).
+const ARCH_KEY = 'gk_arch_index';
 const SYNC_KEYS = [CK, LK, QK, TK, NK, MK, AHJ_KEY, PREFS_KEY, INSPECTORS_KEY, 'gk_sms_templates', 'gk_email_templates', UPK, CALLK, 'gk_vanstock'];
 
 // ── PLATFORM-AWARE AUTH HELPERS ──
@@ -27478,6 +27530,7 @@ async function _syncFromSP() {
   // Buffer SP data first so we can safety-check before overwriting localStorage.
   // Without this, a corrupted SP list would silently destroy good local data —
   // which is exactly what happened during the 2026-05-08 incident.
+  try { await _archRefreshIndex(); } catch (_) {}   // crm-2026-11-21c: cloud-archive index first (never throws; falls back to the cached index)
   const fetched = {};
   let nextLink = `/sites/${_spSite}/lists/${_spList}/items?$expand=fields&$top=200`;
   try {
@@ -27503,6 +27556,11 @@ async function _syncFromSP() {
   // direction (_syncToSP) so that pushing your local copy doesn't wipe
   // records the other user added between your pull and your push.
 
+  // crm-2026-11-21c — CLOUD ARCHIVE: refresh the archive index and decide which full
+  // records the archive already holds, so they are filtered out BEFORE anything is written
+  // to localStorage (a tab on an older build may have re-uploaded them to SharePoint).
+  let _archD = null, _archSpHas = false;
+  try { _archD = _archPrep(fetched); } catch (e) { console.warn('[GK] archive: prep failed on pull — archived jobs are left as they are this round:', e); }
   let mergeStats = {};
   let nonMergeCount = 0;
   for (const [key, val] of Object.entries(fetched)) {
@@ -27518,7 +27576,11 @@ async function _syncFromSP() {
         continue;
       }
       if (key === 'gk_notifications' && typeof pruneNotifications === 'function') { remoteArr = pruneNotifications(remoteArr); localArr = pruneNotifications(localArr); }   // 10-14b: age rule on BOTH sides so pruned notices can't resurrect
-      const { merged, remoteAdded, remoteUpdated } = _mergeArrayByIdAndTs(localArr, remoteArr);
+      let { merged, remoteAdded, remoteUpdated } = _mergeArrayByIdAndTs(localArr, remoteArr);
+      if (_archD && (key === LK || key === QK)) {   // 11-21c: records the cloud archive holds do not come back
+        merged = _archFilter(key, merged, _archD);
+        if (_archFilter(key, remoteArr, _archD).length < remoteArr.length) _archSpHas = true;
+      }
       const wasLocalN = localArr.length, isMergedN = merged.length;
       // If the merge would PRESERVE local-only records, queue a push so SP
       // catches up. This handles the case where a record exists locally but
@@ -27537,6 +27599,15 @@ async function _syncFromSP() {
       nonMergeCount++;
     }
   }
+  if (_archD) {
+    // SharePoint still holds full records the archive has (an older build re-uploaded them):
+    // push our filtered copy so it converges — at most once every 10 minutes.
+    if (_archSpHas && Date.now() - _archConvPushAt > 10 * 60 * 1000 && typeof _setPendingPush === 'function') {
+      _archConvPushAt = Date.now();
+      try { _setPendingPush(); clearTimeout(_syncTmr); _syncTmr = setTimeout(_syncToSP, 3000); } catch (_) {}
+    }
+  }
+  _archAfterSync(_archD, true);
   console.log('[GK] Synced from SharePoint:', Object.keys(fetched).length, 'keys', mergeStats, `(${nonMergeCount} overwritten)`);
   try { if (typeof repairAcceptedPointer20260917 === 'function') repairAcceptedPointer20260917(); } catch (_) {}
   try { if (typeof repairSeedStages20260914 === 'function' && repairSeedStages20260914()) { if (S.page === 'jobs' && !S.jobDetailId && typeof renderPipeline === 'function') renderPipeline(); } } catch (_) {}   // 09-14b
@@ -27640,7 +27711,8 @@ async function _spPatchWithRetry(key, itemId, val, canMerge, attempts) {
         if (canMerge && theirs) {
           const t = JSON.parse(theirs), o = JSON.parse(val);
           if (Array.isArray(t) && Array.isArray(o)) {
-            const { merged } = _mergeArrayByIdAndTs(o, t);
+            let { merged } = _mergeArrayByIdAndTs(o, t);
+            if (_archPushCtx) merged = _archFilter(key, merged, _archPushCtx);   // 11-21c
             val = JSON.stringify(merged);
             localStorage.setItem(key, val);   // keep local consistent with what we're pushing
           }
@@ -27694,6 +27766,7 @@ async function _syncToSP() {
   }
   _syncing = true;
   try {
+    try { await _archRefreshIndex(); } catch (_) {}   // crm-2026-11-21c: cloud-archive index first
     // Fetch existing item map (Title → itemId) AND current DataValue for the safety check.
     // NOTE: previously used `$select=id,fields/Title` which Graph API now rejects with 400.
     // Full $expand=fields is fine — we need the DataValue for the comparison anyway.
@@ -27711,6 +27784,11 @@ async function _syncToSP() {
       nextLink = res['@odata.nextLink'] || null;
     }
 
+    // crm-2026-11-21c — CLOUD ARCHIVE: same decision as the pull, against SharePoint's current values.
+    let _archD = null;
+    try { _archD = _archPrep(existData); } catch (e) { console.warn('[GK] archive: prep failed on push:', e); }
+    _archPushCtx = _archD;
+
     // SAFETY GUARD: before pushing, compare local vs SharePoint counts for critical arrays.
     // If the local copy has fewer entries than SharePoint, it likely means this tab started
     // with stale or partial localStorage (e.g. interrupted sync, broken JS during init,
@@ -27726,6 +27804,7 @@ async function _syncToSP() {
       try { spArr = JSON.parse(spVal); } catch { continue; }
       try { localArr = JSON.parse(localStorage.getItem(key) || '[]'); } catch { localArr = []; }
       if (!Array.isArray(spArr) || !Array.isArray(localArr)) continue;
+      if (_archD) spArr = _archFilter(key, spArr, _archD);   // 11-21c: jobs that live in the cloud archive are not "missing"
       const spN = spArr.length, localN = localArr.length;
       // Only guard when SP has a meaningful amount of data (>=10 items).
       // Block if local has less than 95% of what SP has — small deliberate deletions
@@ -27775,7 +27854,8 @@ async function _syncToSP() {
           const spArr = JSON.parse(existData[key]);
           const localArr = JSON.parse(val);
           if (Array.isArray(spArr) && Array.isArray(localArr)) {
-            const { merged } = _mergeArrayByIdAndTs(localArr, spArr);
+            let { merged } = _mergeArrayByIdAndTs(localArr, spArr);
+            if (_archD) merged = _archFilter(key, merged, _archD);   // 11-21c
             val = JSON.stringify(key === 'gk_notifications' && typeof pruneNotifications === 'function' ? pruneNotifications(merged) : merged);
             // Also update local so subsequent reads have the merged view.
             localStorage.setItem(key, val);
@@ -27794,6 +27874,7 @@ async function _syncToSP() {
     }
     console.log('[GK] Synced to SharePoint:', keys.length, 'keys');
     _clearPendingPush();
+    _archAfterSync(_archD);
     _lastSyncErr = null;
     _renderSyncStatusDot();
   } catch(e) {
@@ -27805,6 +27886,7 @@ async function _syncToSP() {
     _renderSyncStatusDot();
   } finally {
     _syncing = false;
+    _archPushCtx = null;
   }
 }
 
@@ -29646,6 +29728,697 @@ function _startBackupTimer() {
   }, BACKUP_INITIAL_DELAY_MS);
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLOUD ARCHIVE (crm-2026-11-21c) — archived jobs untouched for 30 days leave
+// the browser and live in the Cloudflare D1 database behind the greenkey-sms
+// worker (routes /archive/*, Microsoft sign-in required like /sms/thread).
+//
+// Why: every store is in localStorage (~5.2 M characters per site); Jon's
+// browser was 94% full on 11/21 and 993 of 1,191 jobs were archived.
+//
+// What stays in the browser for a moved job: ONE slim row in gk_arch_index —
+//   { id, updatedAt, l:{slim job, short keys}, q:[slim quotes] }   (decoded to L / Q by _archIndexRaw)
+// — just the fields search, the customer page, the Jobs list, the Quotes list and
+// the reports read, so those keep working with no fetch. Tasks are NOT moved.
+//
+// ⚠ gk_arch_index is a LOCAL CACHE, deliberately NOT in SYNC_KEYS. The database is
+// the single record of what is archived (state 'archived' / 'restored', stamped
+// with SERVER time); every browser refreshes its cache from GET /archive/index
+// before each sync (_archRefreshIndex). It is NOT a SharePoint list item because a
+// tab still running an older build copies EVERY list item into its localStorage —
+// 0.3 M more into a store that is already 94% full (tested: 94% → 100%).
+//
+// ⚠ THE INDEX ROW IS ALSO THE TOMBSTONE. gk_leads / gk_quotes sync by UNION
+// (see _mergeArrayByIdAndTs), so a record removed here comes straight back from
+// SharePoint or from another computer (an older build re-uploads everything it
+// holds). Every merge (pull, pre-push, 409 retry) therefore drops a full record
+// when the index has a live row for its job AND the record is not newer than the
+// version that was archived. A record that IS newer means somebody edited the
+// job after it was archived: the job is "touched" — nothing is dropped and the
+// job is brought back in full.
+//
+// ⚠ ORDER OF OPERATIONS (never change without re-running the tests):
+//   MOVE     1. write the job to D1 ('pending')   2. read it back, compare character for character, then commit ('archived')
+//            3. re-read the browser copy and confirm it still equals what was stored
+//            4. write the index row   5. only then remove the job from gk_leads / gk_quotes
+//   RESTORE  1. fetch from D1   2. write the job into the browser, mark the row gone (pending)
+//            3. only then tell the database it was restored (retried until it succeeds)
+// The database never deletes a row; a restored job keeps its last archived copy.
+//
+// A full copy of the archive is exported to SharePoint (GreenKeyCRM_Backups/
+// archive/) after every move and once a day — see _archExport().
+// ════════════════════════════════════════════════════════════════════════════
+const ARCH_DAYS  = 30;
+const ARCH_BATCH = 25;
+// Slim stand-in fields, stored under short keys (the index is the only thing left in the
+// browser for a moved job, so every character counts). Empty / false values are not stored.
+// The job id, stage ('archived' — nothing else is ever moved) and the quote's job id come from the row.
+const ARCH_LK = { customerId:'c', source:'s', jobType:'t', createdAt:'ca', updatedAt:'ua', description:'d', customerName:'n',
+  customerPhone:'p', customerEmail:'e', phone:'p2', email:'e2', siteStreet:'a1', siteCity:'a2', siteState:'a3', siteZip:'a4',
+  siteName:'sn', address:'ad', businessName:'b', propertyType:'pt', workKind:'wk', specialJurisdiction:'sj', infoComplete:'ic',
+  invoiced:'iv', jobValue:'jv', lostInfo:'li', payment:'py', payments:'ps', priorPayments:'pp', voidedPayments:'vp',
+  poNo:'po', ticketNo:'tk', webInboxId:'wi', webInboxIds:'ws', deleted:'x' };
+const ARCH_QK = { id:'i', customerId:'c', billToCustomerId:'b', customerName:'n', status:'st', type:'ty', jobType:'t', source:'s',
+  quoteTotal:'qt', preProcessingTotal:'pr', paymentProcessingFee:'pf', laborAndMaterials:'lm', qmeritFee:'qf', permitFee:'pm',
+  invoiceDate:'idt', invoiceId:'iid', createdAt:'ca', updatedAt:'ua', external:'ex', pendingRevision:'rv', deleted:'x' };
+const _archTs = r => (r && (r.updatedAt || r.createdAt)) || '';
+function _archEnc(o, map) {
+  const out = {};
+  for (const f in map) { const v = o[f]; if (v === undefined || v === null || v === false || v === '' || (Array.isArray(v) && !v.length)) continue; out[map[f]] = v; }
+  if (out.ua !== undefined && out.ua === out.ca) delete out.ua;   // most imported jobs: updatedAt = createdAt — stored once
+  return out;
+}
+function _archDec(e, map, base) {
+  const out = base;
+  for (const f in map) { const v = e[map[f]]; if (v !== undefined) out[f] = v; }
+  if (out.updatedAt === undefined && out.createdAt !== undefined) out.updatedAt = out.createdAt;
+  out._arch = 1;
+  return out;
+}
+// Stored row → the view everything else reads: { id, updatedAt, gone, L:{slim job}, Q:[slim quotes] }.
+function _archDecodeRow(r) {
+  if (!r || !r.id) return null;
+  if (r.gone || !r.l) return { id: r.id, updatedAt: r.updatedAt, gone: true, pend: !!r.pend, unverified: !!r.p };
+  return { id: r.id, updatedAt: r.updatedAt, L: _archDec(r.l, ARCH_LK, { id: r.id, stage: 'archived' }), Q: (r.q || []).map(q => _archDec(q, ARCH_QK, { leadId: r.id })) };
+}
+function _archMakeRow(lead, quotes, updatedAt) {
+  const row = { id: lead.id, updatedAt, l: _archEnc(lead, ARCH_LK) };
+  if (quotes && quotes.length) row.q = quotes.map(q => _archEnc(q, ARCH_QK));
+  return row;
+}
+let _archIdxCache = { raw: undefined, arr: [] };
+// The index exactly as stored: { c:{since,after}|null, rows:[…] } (fresh parse — safe to change and save).
+function _archStored() {
+  try { const o = JSON.parse(localStorage.getItem(ARCH_KEY) || 'null'); if (o && Array.isArray(o.rows)) return { c: o.c || null, rows: o.rows }; } catch (_) {}
+  return { c: null, rows: [] };
+}
+function _archSaveStore(st) { localStorage.setItem(ARCH_KEY, JSON.stringify({ c: st.c || null, rows: st.rows })); }
+// READ-ONLY decoded view of the index (cached on the raw string). Never save this.
+function _archIndexRaw() {
+  let raw = null; try { raw = localStorage.getItem(ARCH_KEY); } catch (_) {}
+  if (raw === _archIdxCache.raw) return _archIdxCache.arr;
+  let arr = []; try { const o = JSON.parse(raw || 'null'); if (o && Array.isArray(o.rows)) arr = o.rows.map(_archDecodeRow).filter(Boolean); } catch (_) {}
+  _archIdxCache = { raw, arr };
+  return arr;
+}
+function _archLiveRows() { return _archIndexRaw().filter(r => r && !r.gone && r.L); }
+function _archRow(id) { return _archIndexRaw().find(r => r && r.id === id) || null; }
+function _archIsCloudOnly(id) {
+  if (!id) return false;
+  const r = _archRow(id); if (!r || r.gone || !r.L) return false;
+  return !getLead(id);
+}
+// Read-only lookup for a NAME / label: the job if it is here, else its slim stand-in. Never save the result.
+function getLeadOrStub(id) { const l = getLead(id); if (l) return l; const r = _archRow(id); return (r && !r.gone && r.L) ? r.L : null; }
+function _archLeadOfQuote(qid) {   // job id for a quote that lives only in the archive, else null
+  if (!qid) return null;
+  for (const r of _archLiveRows()) { if ((r.Q || []).some(q => q && q.id === qid)) return r.id; }
+  return null;
+}
+// Jobs in the browser PLUS a slim stand-in for every job that lives in the cloud.
+// For lists, search and reports ONLY — never save what this returns.
+function getLeadsAll() {
+  const loc = getLeads(); const rows = _archLiveRows(); if (!rows.length) return loc;
+  const have = new Set(loc.map(l => l && l.id)); const out = loc.slice();
+  rows.forEach(r => { if (!have.has(r.id)) out.push(r.L); });
+  return out;
+}
+function getQuotesAll() {
+  const loc = getQuotes(); const rows = _archLiveRows(); if (!rows.length) return loc;
+  const have = new Set(loc.map(q => q && q.id)); const out = loc.slice();
+  rows.forEach(r => (r.Q || []).forEach(q => { if (q && !q.deleted && !have.has(q.id)) out.push(q); }));
+  return out;
+}
+
+// ── The tombstone decision. Pure: (index, leads, quotes) → which jobs to drop. ──
+function _archDecide(index, leads, quotes) {
+  const rows = new Map();
+  (index || []).forEach(r => { if (r && !r.gone && r.L) rows.set(r.id, r); });
+  const d = { rows, qv: new Map(), drop: new Set(), touched: new Set() };
+  if (!rows.size) return d;
+  rows.forEach((r, id) => { const m = new Map(); (r.Q || []).forEach(q => { if (q && q.id) m.set(q.id, _archTs(q)); }); d.qv.set(id, m); });
+  (leads || []).forEach(l => { const r = l && rows.get(l.id); if (r && _archTs(l) > _archTs(r.L)) d.touched.add(l.id); });
+  (quotes || []).forEach(q => {
+    if (!q) return; const m = d.qv.get(q.leadId); if (!m) return;
+    if (!m.has(q.id) || _archTs(q) > m.get(q.id)) d.touched.add(q.leadId);
+  });
+  rows.forEach((r, id) => { if (!d.touched.has(id)) d.drop.add(id); });
+  return d;
+}
+// Drop the full records the archive already holds. Per record: never drops one
+// that is newer than the archived version, whatever the job-level decision was.
+function _archFilter(key, arr, d) {
+  if (!d || !d.drop.size || !Array.isArray(arr)) return arr;
+  if (key === 'gk_leads') return arr.filter(l => !(l && d.drop.has(l.id) && _archTs(l) <= _archTs(d.rows.get(l.id).L)));
+  if (key === 'gk_quotes') return arr.filter(q => {
+    if (!q || !d.drop.has(q.leadId)) return true;
+    const m = d.qv.get(q.leadId); return !(m.has(q.id) && _archTs(q) <= m.get(q.id));
+  });
+  return arr;
+}
+// Called at the start of a pull (remote = what SharePoint returned) and of a push
+// (remote = SharePoint's current values), right after _archRefreshIndex().
+function _archPrep(remote) {
+  const P = s => { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } };
+  const index = _archIndexRaw();
+  if (!index.some(r => r && !r.gone && r.L)) return null;
+  const leads  = _mergeArrayByIdAndTs(P(localStorage.getItem(LK)), P(remote && remote[LK])).merged;
+  const quotes = _mergeArrayByIdAndTs(P(localStorage.getItem(QK)), P(remote && remote[QK])).merged;
+  return _archDecide(index, leads, quotes);
+}
+// Bring this browser's index up to date from the database. Never throws; if the
+// archive cannot be reached the cached index is used (its tombstones stay valid).
+// Runs before every sync (one small request). The first refresh after the page loads is a
+// full read; later ones ask only for changes since the cursor, with a 5-minute overlap.
+let _archRefreshAt = 0, _archFullDone = false, _archRefreshP = null;
+function _archRefreshIndex() {
+  if (_archRefreshP) return _archRefreshP;
+  _archRefreshP = _archRefreshIndex2().catch(e => { console.warn('[GK] archive: index refresh failed — using the cached index:', e && e.message || e); return false; })
+    .finally(() => { _archRefreshP = null; });
+  return _archRefreshP;
+}
+async function _archRefreshIndex2() {
+  if (typeof _smsConfigured === 'function' && !_smsConfigured()) return false;
+  await _archFlushPending();
+  const st0 = _archStored();
+  let since = '', after = '';
+  if (_archFullDone && st0.c && st0.c.since) { const t = Date.parse(st0.c.since); since = isNaN(t) ? '' : new Date(t - 5 * 60000).toISOString(); }
+  const got = []; let cur = st0.c;
+  for (let guard = 0; guard < 200; guard++) {
+    const j = await _archWorker('/archive/index?limit=500&since=' + encodeURIComponent(since) + '&after=' + encodeURIComponent(after), 'GET', null, { silent: true, timeoutMs: 8000 });
+    (j.rows || []).forEach(x => got.push(x));
+    if (j.rows && j.rows.length) { const last = j.rows[j.rows.length - 1]; cur = { since: last.stateAt, after: last.id }; }
+    if (!j.next) break; since = j.next.since; after = j.next.after;
+  }
+  // No awaits below: apply to the index as it is NOW.
+  const st = _archStored(); const pos = new Map(st.rows.map((r, i) => [r && r.id, i]));
+  let changed = 0;
+  for (const x of got) {
+    if (!x || !x.id || !x.stateAt) continue;
+    const i = pos.has(x.id) ? pos.get(x.id) : -1; const have = i >= 0 ? st.rows[i] : null;
+    if (have && have.pend) continue;                                   // our own restore, not yet acknowledged
+    if (have && (have.updatedAt || '') >= x.stateAt) continue;         // already have this state (or a newer one)
+    let row;
+    if (x.state === 'archived') { let o = null; try { o = JSON.parse(x.stub); } catch (_) {} if (!o || !o.l) continue; row = { id: x.id, updatedAt: x.stateAt, l: o.l }; if (o.q && o.q.length) row.q = o.q; }
+    else { row = { id: x.id, updatedAt: x.stateAt, gone: true }; if (x.state === 'pending') row.p = 1; }   // p: written but never verified — tombstones nothing
+    if (i >= 0) st.rows[i] = row; else { pos.set(x.id, st.rows.length); st.rows.push(row); }
+    changed++;
+  }
+  if (cur && (!st.c || cur.since > st.c.since || (cur.since === st.c.since && cur.after > (st.c.after || '')))) st.c = cur;
+  if (changed || JSON.stringify(st.c) !== JSON.stringify(st0.c)) _archSaveStore(st);
+  _archRefreshAt = Date.now(); _archFullDone = true;
+  if (changed) console.log('[GK] archive: index updated from the database (' + changed + ' change(s))');
+  return true;
+}
+// Tell the database about restores it has not acknowledged yet.
+async function _archFlushPending() {
+  const ids = _archStored().rows.filter(r => r && r.pend).map(r => r.id);
+  if (!ids.length) return;
+  for (let i = 0; i < ids.length; i += 50) {
+    const j = await _archWorker('/archive/restore', 'POST', { ids: ids.slice(i, i + 50) }, { silent: true, timeoutMs: 8000 });
+    const by = new Map((j.jobs || []).map(x => [x.id, x]));
+    const st = _archStored(); let ch = false;
+    st.rows.forEach((r, k) => {
+      if (!r || !r.pend || !ids.includes(r.id)) return;
+      const x = by.get(r.id);
+      st.rows[k] = { id: r.id, updatedAt: (x && x.state === 'restored' && x.stateAt) || r.updatedAt, gone: true }; ch = true;
+    });
+    if (ch) _archSaveStore(st);
+  }
+}
+let _archPushCtx = null;          // the decision in force during a push (used by the 409 retry merge)
+let _archConvPushAt = 0;          // throttle for "SharePoint still holds archived records" pushes
+// After a sync: bring back any job that was edited after it was archived; and (after a
+// pull) fetch any job the database says was restored that this browser does not hold —
+// e.g. another computer brought it back and went offline before its copy reached SharePoint.
+const _archHealTried = new Set();
+function _archAfterSync(d, isPull) {
+  try {
+    const ids = d ? Array.from(d.touched).filter(id => !_archRestoring.has(id)) : [];
+    let heal = [];
+    if (isPull) {
+      const gone = _archIndexRaw().filter(r => r && r.gone && !r.pend && !r.unverified && !_archHealTried.has(r.id));
+      if (gone.length) { const have = new Set(getLeads().map(l => l && l.id)); heal = gone.filter(r => !have.has(r.id)).map(r => r.id).slice(0, 10); }
+    }
+    if (!ids.length && !heal.length) return;
+    if (ids.length) console.log('[GK] archive: ' + ids.length + ' archived job(s) were edited after archiving — bringing them back', ids);
+    if (heal.length) console.log('[GK] archive: ' + heal.length + ' restored job(s) are not in this browser yet — fetching them', heal);
+    (async () => {
+      for (const id of ids) { try { await _archRestoreJob(id); } catch (e) { console.warn('[GK] archive: auto-restore failed for', id, e); } }
+      for (const id of heal) { _archHealTried.add(id); try { await _archHydrate(id); } catch (e) { console.warn('[GK] archive: fetch of restored job failed for', id, e); } }
+    })();
+  } catch (_) {}
+}
+// Merge the database's copy of a job into this browser (a newer browser copy always wins). No index change.
+function _archMergeIn(data) {
+  const leads = getLeads(); const i = leads.findIndex(l => l && l.id === data.lead.id);
+  if (i < 0) leads.push(data.lead); else if (_archTs(data.lead) > _archTs(leads[i])) leads[i] = data.lead;
+  const qraw = _getQuotesRaw(); const qpos = new Map(qraw.map((q, k) => [q && q.id, k]));
+  (Array.isArray(data.quotes) ? data.quotes : []).forEach(q => {
+    if (!q || !q.id) return;
+    if (!qpos.has(q.id)) { qpos.set(q.id, qraw.length); qraw.push(q); }
+    else if (_archTs(q) > _archTs(qraw[qpos.get(q.id)])) qraw[qpos.get(q.id)] = q;
+  });
+  return { leads, qraw };
+}
+async function _archHydrate(id) {
+  const j = (await _archFetchJobs([id], true)).get(id); if (!j) return false;
+  const data = JSON.parse(j.blob); if (!data || !data.lead || data.lead.id !== id) return false;
+  const r = _archRow(id); if (!r || !r.gone || getLead(id)) return false;
+  const m = _archMergeIn(data);
+  localStorage.setItem(LK, JSON.stringify(m.leads)); localStorage.setItem(QK, JSON.stringify(m.qraw));
+  queueSPSync();
+  return true;
+}
+
+// ── Worker calls (Microsoft sign-in token, same as the text routes) ──
+// Background calls use a SILENT token only (never a sign-in pop-up) and a timeout.
+async function _archSilentToken() {
+  if (typeof _msal === 'undefined' || !_msal) throw new Error('not signed in');
+  const accounts = _msal.getAllAccounts(); if (!accounts.length) throw new Error('not signed in');
+  return (await _msal.acquireTokenSilent({ account: accounts[0], scopes: SMS_SCOPES })).accessToken;
+}
+async function _archWorker(path, method, body, opts) {
+  opts = opts || {};
+  const tok = opts.silent ? await _archSilentToken() : await _acquireSMSToken();
+  const h = { 'Authorization': 'Bearer ' + tok }; if (body) h['Content-Type'] = 'application/json';
+  let r, timer = null;
+  try {
+    const init = { method, headers: h, body: body ? JSON.stringify(body) : undefined };
+    if (opts.timeoutMs && typeof AbortController !== 'undefined') { const ac = new AbortController(); init.signal = ac.signal; timer = setTimeout(() => ac.abort(), opts.timeoutMs); }
+    r = await fetch(SMS_WORKER_URL.replace(/\/$/, '') + path, init);
+  } catch (e) { throw new Error('Could not reach the cloud archive (' + (e && e.message || e) + ')'); }
+  finally { if (timer) clearTimeout(timer); }
+  let j = null; try { j = await r.json(); } catch (_) {}
+  if (r.status === 404) throw new Error('The cloud archive is not switched on yet (the worker update has not been deployed).');
+  if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || ('The cloud archive answered with error ' + r.status));
+  return j;
+}
+// ids → Map(id → { blob, updatedAt, archivedAt }). Falls back to the newest SharePoint export if the worker is unreachable.
+async function _archFetchJobs(ids, silent) {
+  const out = new Map();
+  try {
+    for (let i = 0; i < ids.length; i += 50) {
+      const j = await _archWorker('/archive/get', 'POST', { ids: ids.slice(i, i + 50) }, silent ? { silent: true, timeoutMs: 15000 } : null);
+      (j.jobs || []).forEach(x => out.set(x.id, x));
+    }
+    return out;
+  } catch (e) {
+    console.warn('[GK] archive: worker fetch failed, trying the SharePoint export copy:', e);
+    try {
+      const exp = await _archReadLatestExport();
+      (exp && exp.jobs || []).forEach(x => { if (ids.includes(x.id)) out.set(x.id, { id: x.id, updatedAt: x.updatedAt, archivedAt: x.archivedAt, blob: JSON.stringify(x.data), fromExport: true }); });
+    } catch (e2) { console.warn('[GK] archive: SharePoint export fallback failed:', e2); }
+    if (!out.size) throw e;
+    return out;
+  }
+}
+
+// ── Which jobs may move: archived, and nothing about them touched for 30 days. ──
+function _archEligible(nowMs) {
+  const cut = new Date((nowMs || Date.now()) - ARCH_DAYS * 86400000).toISOString();
+  const leads = getLeads(), qraw = _getQuotesRaw();
+  const qBy = new Map();
+  qraw.forEach(q => { if (q && q.leadId) { if (!qBy.has(q.leadId)) qBy.set(q.leadId, []); qBy.get(q.leadId).push(q); } });
+  const idx = new Map(_archIndexRaw().map(r => [r && r.id, r]));
+  const openId = (typeof S !== 'undefined' && S && S.jobDetailId) || null;
+  const out = [];
+  leads.forEach(l => {
+    if (!l || !l.id || l.stage !== 'archived' || l.deleted) return;
+    if (l.id === openId) return;                                   // never the job on screen
+    const t = _archTs(l); if (!t || !(t < cut)) return;            // edited in the last 30 days
+    if (l.stageAt && !(l.stageAt < cut)) return;                   // archived in the last 30 days
+    const qs = qBy.get(l.id) || [];
+    if (qs.some(q => { const qt = _archTs(q); return !qt || !(qt < cut); })) return;   // a quote changed in the last 30 days
+    const r = idx.get(l.id);
+    if (r && !r.gone) return;                                      // already archived; a restore is pending
+    if (r && r.gone && !r.unverified && !((r.updatedAt || '') < cut)) return;   // brought back in the last 30 days
+    out.push({ lead: l, quotes: qs });
+  });
+  return out;
+}
+function _archBlobOf(lead, quotes) { return JSON.stringify({ v: 1, lead, quotes }); }
+function _archWho() { try { return (S.user && (S.user.username || S.user.email || S.user.name || S.user.id)) || ''; } catch (_) { return ''; } }
+
+// Move ONE batch (≤ ARCH_BATCH). Returns { moved:[{id,name}], skipped:[{id,why}] }.
+// Throws before anything is removed if the archive cannot be written or read.
+async function _archMoveBatch(cands) {
+  cands = (cands || []).slice(0, ARCH_BATCH);
+  if (!cands.length) return { moved: [], skipped: [] };
+  const sent = cands.map(c => {
+    const l = c.lead; const cust = (l.customerId && typeof getCustomer === 'function') ? getCustomer(l.customerId) : null;
+    const name = cust ? custFullName(cust) : (l.customerName || '');
+    let ua = _archTs(l); c.quotes.forEach(q => { if (_archTs(q) > ua) ua = _archTs(q); });
+    const row = _archMakeRow(l, c.quotes, '');
+    return { _row: row, id: l.id, updatedAt: ua, blob: _archBlobOf(l, c.quotes), stub: JSON.stringify({ l: row.l, q: row.q || [] }), customerId: l.customerId || null, name,
+      phone: (cust && cust.phone) || l.customerPhone || null,
+      address: [l.siteStreet, l.siteCity, l.siteState, l.siteZip].filter(Boolean).join(', ') || null,
+      source: l.source || null, jobType: l.jobType || null, jobValue: (typeof getJobValueAmount === 'function' ? getJobValueAmount(l) : 0) || null };
+  });
+  // 1. write (pending)   2. read back
+  await _archWorker('/archive/put', 'POST', { jobs: sent.map(s => { const o = Object.assign({}, s); delete o._row; return o; }) });
+  const back = await _archWorker('/archive/get', 'POST', { ids: sent.map(s => s.id) });
+  const got = new Map((back.jobs || []).map(j => [j.id, j]));
+  const skipped = [];
+  const verified = sent.filter(s => {
+    const g = got.get(s.id);
+    if (g && typeof g.blob === 'string' && g.blob === s.blob && g.sha) return true;
+    skipped.push({ id: s.id, why: g ? 'the copy read back from the archive did not match' : 'not found when read back from the archive' });
+    return false;
+  });
+  if (!verified.length) return { moved: [], skipped };
+  // 2b. commit: only now does the database mark them 'archived' (quoting the fingerprint of the text we just compared)
+  const com = await _archWorker('/archive/commit', 'POST', { jobs: verified.map(s => ({ id: s.id, sha: got.get(s.id).sha })) });
+  const cst = new Map((com.jobs || []).map(j => [j.id, j]));
+  // 3–5. No awaits from here to the end: re-read the browser copy, confirm, index, remove.
+  const leadsNow = getLeads(), quotesNow = _getQuotesRaw();
+  const qNowBy = new Map();
+  quotesNow.forEach(q => { if (q && q.leadId) { if (!qNowBy.has(q.leadId)) qNowBy.set(q.leadId, []); qNowBy.get(q.leadId).push(q); } });
+  const st = _archStored(); const index = st.rows;
+  const pos = new Map(index.map((r, i) => [r && r.id, i]));
+  const okIds = new Set(), moved = []; let rowsChanged = false, undo = false;
+  for (const s of verified) {
+    const c = cst.get(s.id);
+    if (!c || c.state !== 'archived' || c.sha !== got.get(s.id).sha || !c.stateAt) { skipped.push({ id: s.id, why: 'the archive did not confirm it — left in place' }); continue; }
+    // The database now says 'archived' for this job. If the browser copy changed while the move
+    // was in flight it is NOT removed and NOT treated as archived: the row is written as
+    // "restored, database not told yet" and _archFlushPending() tells the database.
+    const setRow = row => { if (pos.has(s.id)) index[pos.get(s.id)] = row; else { pos.set(s.id, index.length); index.push(row); } rowsChanged = true; };
+    const cur = leadsNow.find(l => l && l.id === s.id);
+    const curQ = qNowBy.get(s.id) || [];
+    if (!cur) { setRow(Object.assign({}, s._row, { updatedAt: c.stateAt })); skipped.push({ id: s.id, why: 'no longer in this browser (it is safe in the archive)' }); continue; }
+    if (_archBlobOf(cur, curQ) !== s.blob) {
+      setRow({ id: s.id, updatedAt: new Date().toISOString(), gone: true, pend: 1 }); undo = true;
+      skipped.push({ id: s.id, why: 'changed while it was being moved — left in place' }); continue;
+    }
+    setRow(_archMakeRow(cur, curQ, c.stateAt));   // stamped with the DATABASE's time
+    okIds.add(s.id); moved.push({ id: s.id, name: s.name });
+  }
+  if (!okIds.size) { if (rowsChanged) { _archSaveStore(st); queueSPSync(); } if (undo) _archFlushPending().catch(() => {}); return { moved, skipped }; }
+  _archSaveStore(st);                                                                            // 4. index row first
+  localStorage.setItem(LK, JSON.stringify(leadsNow.filter(l => !(l && okIds.has(l.id)))));        // 5. then remove
+  localStorage.setItem(QK, JSON.stringify(quotesNow.filter(q => !(q && okIds.has(q.leadId)))));
+  queueSPSync();
+  console.log('[GK] archive: moved ' + okIds.size + ' job(s) to the cloud', Array.from(okIds));
+  if (undo) _archFlushPending().catch(() => {});
+  return { moved, skipped };
+}
+
+// ── Bring a job back (opening it, or because it was edited elsewhere). ──
+const _archRestoring = new Map();
+function _archRestoreJob(id) {
+  if (_archRestoring.has(id)) return _archRestoring.get(id);
+  const p = _archRestoreJob2(id).finally(() => _archRestoring.delete(id));
+  _archRestoring.set(id, p);
+  return p;
+}
+async function _archRestoreJob2(id) {
+  const row0 = _archRow(id);
+  if (!row0 || row0.gone) return !!getLead(id);
+  const jobs = await _archFetchJobs([id]);
+  const j = jobs.get(id);
+  if (!j) throw new Error('This job was not found in the cloud archive.');
+  let data; try { data = JSON.parse(j.blob); } catch (_) { throw new Error('The archived copy of this job could not be read.'); }
+  if (!data || !data.lead || data.lead.id !== id) throw new Error('The archived copy does not match this job.');
+  if (_archTs(data.lead) < _archTs(row0.L)) throw new Error('The archived copy of this job is older than expected. Nothing was changed — tell Jon / Claude.');
+  // No awaits below: merge the pieces in (a newer browser copy always wins), then retire the index row.
+  const row = _archRow(id); if (!row || row.gone) return !!getLead(id);
+  const m = _archMergeIn(data);
+  const st = _archStored(); const k = st.rows.findIndex(r => r && r.id === id);
+  if (k < 0) return !!getLead(id);
+  st.rows[k] = { id, updatedAt: new Date().toISOString(), gone: true, pend: 1 };   // pend: the database has not been told yet
+  try {
+    localStorage.setItem(LK, JSON.stringify(m.leads));
+    localStorage.setItem(QK, JSON.stringify(m.qraw));
+    _archSaveStore(st);
+  } catch (e) {
+    if (e && (e.name === 'QuotaExceededError' || e.code === 22)) throw new Error('This computer\'s CRM storage is too full to bring the job back. Free up space first (Settings → Backups & Export → Cloud archive).');
+    throw e;
+  }
+  queueSPSync();
+  console.log('[GK] archive: restored job from the cloud', id, j.fromExport ? '(from the SharePoint export copy)' : '');
+  try { await _archFlushPending(); } catch (e) { console.warn('[GK] archive: the database has not been told about the restore yet — it will be retried:', e && e.message || e); }
+  return true;
+}
+// Gate for anything that opens a job: if it lives in the cloud, fetch it first, then run `retry`.
+function _archGate(leadId, retry) {
+  try { if (!_archIsCloudOnly(leadId)) return false; } catch (_) { return false; }
+  try { toast('Bringing this job back from the cloud archive…', 'info', 8000); } catch (_) {}
+  _archRestoreJob(leadId).then(ok => { if (ok) retry(); })
+    .catch(e => { try { toast('Could not open this archived job: ' + (e && e.message || e) + ' Nothing was changed — check the internet connection and try again.', 'error', 15000); } catch (_) {} });
+  return true;
+}
+
+// Before a website / text-intake row is imported: if it comes from a customer whose NEWEST job
+// lives in the cloud archive, bring that job back first, so the import behaves exactly as it
+// always has (it attaches the message to that job). If the archive cannot be reached the import
+// simply creates a new job — nothing is lost.
+async function _archPreImport(row) {
+  try {
+    if (!row || !_archLiveRows().length) return;
+    const digits = String(row.phone || '').replace(/\D/g, '').slice(-10), email = String(row.email || '').toLowerCase();
+    if (!digits && !email) return;
+    const custs = getCustomers().filter(c => !c.mergedInto && !c.deleted);
+    let cust = digits ? custs.find(c => String(c.phone || '').replace(/\D/g, '').slice(-10) === digits) : null;
+    if (!cust && email) cust = custs.find(c => String(c.email || '').toLowerCase() === email);
+    if (!cust) return;
+    const newest = _openLeadForCustomer(cust.id, true);
+    if (newest && newest._arch) await _archRestoreJob(newest.id);
+  } catch (e) { console.warn('[GK] archive: could not restore a job before importing a web lead:', e); }
+}
+
+// ── SharePoint export: a full copy of the archive in Jon's Microsoft account. ──
+const ARCH_EXPORT_DIR  = SP_BACKUP_DIR + '/archive';
+const ARCH_EXPORT_KEEP = 30;
+async function _archListAll() {
+  const jobs = []; let after = '';
+  for (let guard = 0; guard < 500; guard++) {
+    const j = await _archWorker('/archive/list?limit=200&after=' + encodeURIComponent(after), 'GET');
+    (j.jobs || []).forEach(x => jobs.push(x));
+    if (!j.next) break; after = j.next;
+  }
+  return jobs;
+}
+async function _archSpPut(path, body) {
+  const resp = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(path)}:/content`, {
+    method: 'PUT', headers: { 'Authorization': `Bearer ${_gToken}`, 'Content-Type': 'application/json' }, body });
+  if (!resp.ok) throw new Error('SharePoint upload failed (' + resp.status + ')');
+  return await resp.json();
+}
+async function _archExport() {
+  if (!_gToken || !_spDrive) throw new Error('Not signed in to Microsoft.');
+  const rows = await _archListAll();
+  const live = new Map(_archLiveRows().map(r => [r.id, r]));
+  const have = new Set(rows.map(x => x.id));
+  const missing = Array.from(live.keys()).filter(id => !have.has(id));
+  if (missing.length) throw new Error(missing.length + ' archived job(s) are listed in this browser but were not returned by the cloud archive — the export was NOT written. Tell Jon / Claude. First: ' + missing.slice(0, 3).join(', '));
+  const now = new Date();
+  const jobs = rows.map(x => { let data = null; try { data = JSON.parse(x.blob); } catch (_) {} return { id: x.id, updatedAt: x.updatedAt, archivedAt: x.archivedAt, archivedBy: x.archivedBy || '', status: x.state === 'archived' ? 'in the cloud archive only' : 'back in the CRM (this is its last archived copy)', stateAt: x.stateAt, data }; });
+  if (jobs.some(x => !x.data)) throw new Error('An archived job could not be read — the export was NOT written.');
+  const body = JSON.stringify({ _meta: { timestamp: now.toISOString(), timestampLocal: now.toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'long' }),
+    source: 'cloud-archive-export', what: 'Full copy of every job stored in the GreenKey CRM cloud archive (Cloudflare D1, table job_archive). Each job: the complete job record and its quotes.',
+    jobCount: jobs.length, cloudOnlyCount: jobs.filter(x => x.stateAt && x.status === 'in the cloud archive only').length, userEmail: _archWho() }, jobs });
+  const day = now.toISOString().slice(0, 10);
+  const res = await _archSpPut(`${ARCH_EXPORT_DIR}/gk_archive_${day}.json`, body);
+  try { await _archSpPut(`${SP_BACKUP_DIR}/monthly/archive_${day.slice(0, 7)}.json`, body); } catch (e) { console.warn('[GK] archive: monthly export copy failed:', e); }
+  try { localStorage.setItem('gk_arch_export_at', now.toISOString()); localStorage.setItem('gk_arch_export_n', String(jobs.length)); } catch (_) {}
+  console.log('[GK] archive: exported ' + jobs.length + ' job(s) to SharePoint', `${ARCH_EXPORT_DIR}/gk_archive_${day}.json`, res && res.size);
+  _archPruneExports().catch(e => console.warn('[GK] archive: export prune failed:', e));
+  return { count: jobs.length, file: `gk_archive_${day}.json`, size: res && res.size };
+}
+async function _archExportChildren() {
+  const r = await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/root:/${encodeURI(ARCH_EXPORT_DIR)}:/children?$top=200`, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+  if (!r.ok) return [];
+  const d = await r.json();
+  return (d.value || []).filter(it => it.name && /^gk_archive_\d{4}-\d\d-\d\d\.json$/.test(it.name)).sort((a, b) => b.name.localeCompare(a.name));
+}
+async function _archPruneExports() {
+  const items = await _archExportChildren();
+  for (const it of items.slice(ARCH_EXPORT_KEEP)) {
+    try { await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${it.id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${_gToken}` } }); } catch (_) {}
+  }
+}
+async function _archReadLatestExport() {
+  if (!_gToken || !_spDrive) return null;
+  const items = await _archExportChildren(); if (!items.length) return null;
+  const url = items[0]['@microsoft.graph.downloadUrl'];
+  const r = url ? await fetch(url) : await fetch(`https://graph.microsoft.com/v1.0/drives/${_spDrive}/items/${items[0].id}/content`, { headers: { 'Authorization': `Bearer ${_gToken}` } });
+  if (!r.ok) return null;
+  return await r.json();
+}
+// One full, never-rotated snapshot of the browser's data before the first job of the day is moved.
+async function _archSafetyBackup() {
+  const day = new Date().toISOString().slice(0, 10);
+  try { if (localStorage.getItem('gk_arch_prebackup_day') === day) return 'already'; } catch (_) {}
+  if (!_gToken || !_spDrive) throw new Error('Not signed in to Microsoft.');
+  const data = {};
+  for (const k of [...SYNC_KEYS, `gk_seq_${new Date().getFullYear()}`]) { const v = localStorage.getItem(k); if (v) data[k] = v; }
+  const now = new Date();
+  const name = `pre_move_${now.toISOString().replace(/[:.]/g, '-')}.json`;
+  await _archSpPut(`${ARCH_EXPORT_DIR}/${name}`, JSON.stringify({ _meta: { timestamp: now.toISOString(), source: 'before-cloud-archive-move', what: 'Everything in this browser immediately before archived jobs were moved to the cloud. Same format as the gk_backup_ files.', userEmail: _archWho() }, data }));
+  try { localStorage.setItem('gk_arch_prebackup_day', day); } catch (_) {}
+  console.log('[GK] archive: safety snapshot written', name);
+  return name;
+}
+
+// ── A whole run: sync first, move in batches, push, export. ──
+let _archRunning = false;
+async function _archPreflight() {
+  if (!_gToken || !_spSite || !_spList) throw new Error('Sign in to Microsoft first (the sync dot at the top must be green).');
+  if (_lastSyncErr) throw new Error('The last SharePoint sync failed — fix that first. Nothing was moved.');
+  await flushSPSync();
+  await _syncFromSP();          // start from the latest shared data
+  if (_hasPendingPush) await flushSPSync();
+  if (_lastSyncErr) throw new Error('SharePoint sync failed — nothing was moved.');
+  const stats = await _archWorker('/archive/stats', 'GET');   // also proves the archive is deployed and the sign-in is accepted
+  await _archRefreshIndex();
+  return stats;
+}
+// opts: { max, onProgress(text) }. Returns { moved:[…], skipped:[…], left }.
+async function _archRun(opts) {
+  opts = opts || {};
+  if (_archRunning) throw new Error('A move is already running.');
+  _archRunning = true;
+  const say = t => { try { if (opts.onProgress) opts.onProgress(t); } catch (_) {} };
+  const moved = [], skipped = [];
+  try {
+    say('Checking sign-in, SharePoint and the cloud archive…');
+    await _archPreflight();
+    let cands = _archEligible();
+    const max = Math.min(opts.max || cands.length, cands.length);
+    if (!max) return { moved, skipped, left: 0 };
+    say('Saving a full safety copy to SharePoint first…');
+    await _archSafetyBackup();
+    while (moved.length + skipped.length < max) {
+      const tried = new Set(moved.map(m => m.id).concat(skipped.map(s => s.id)));
+      cands = _archEligible().filter(c => !tried.has(c.lead.id));
+      const batch = cands.slice(0, Math.min(ARCH_BATCH, max - moved.length - skipped.length));
+      if (!batch.length) break;
+      say('Moving jobs ' + (moved.length + 1) + '–' + (moved.length + batch.length) + ' of ' + max + '…');
+      const r = await _archMoveBatch(batch);
+      r.moved.forEach(m => moved.push(m)); r.skipped.forEach(s => skipped.push(s));
+      if (!r.moved.length) break;                // nothing verified in this batch — stop rather than loop
+    }
+    say('Saving the change to SharePoint…');
+    await flushSPSync();
+    if (_lastSyncErr) throw new Error('The jobs are safely in the cloud archive, but the SharePoint sync failed (' + _lastSyncErr + '). It will retry by itself; do not close this tab yet.');
+    if (moved.length) { say('Writing the archive copy to your SharePoint backups folder…'); try { await _archExport(); } catch (e) { console.warn('[GK] archive: export after move failed:', e); skipped.push({ id: '(export)', why: 'The SharePoint copy of the archive was not written: ' + (e && e.message || e) }); } }
+    const tried = new Set(moved.map(m => m.id).concat(skipped.map(s => s.id)));
+    return { moved, skipped, left: _archEligible().filter(c => !tried.has(c.lead.id)).length };
+  } finally { _archRunning = false; }
+}
+// Background: once a day, if Jon switched it on (prefs.archAuto), move what became eligible; and keep the SharePoint copy fresh.
+async function _archDailyTick() {
+  try {
+    if (!_gToken || !_spSite || !_spList || !S.user || _archRunning || _syncing) return;
+    await _archRefreshIndex();
+    if (document.querySelector && document.querySelector('.moverlay.show, #arch-modal')) return;
+    const day = 20 * 3600 * 1000, now = Date.now();
+    const p = (typeof getPrefs === 'function') ? getPrefs() : {};
+    const lastAuto = Date.parse(localStorage.getItem('gk_arch_auto_at') || '') || 0;
+    if (p.archAuto && now - lastAuto > day) {
+      localStorage.setItem('gk_arch_auto_at', new Date().toISOString());
+      if (_archEligible().length) {
+        const r = await _archRun({ max: 100 });
+        console.log('[GK] archive: daily run moved ' + r.moved.length + ', skipped ' + r.skipped.length + ', left ' + r.left);
+        if (r.moved.length) { try { gkStorageCheck(); } catch (_) {} }
+        return;
+      }
+    }
+    const lastExp = Date.parse(localStorage.getItem('gk_arch_export_at') || '') || 0;
+    if (_archLiveRows().length && now - lastExp > day) await _archExport();
+  } catch (e) { console.warn('[GK] archive: daily tick failed (nothing is lost; it will try again):', e); }
+}
+
+// ── The Cloud archive window (Settings → Backups & Export → Open cloud archive). ──
+let _archUi = { step: 0, busy: false, last: null };
+function _archFmtMB(n) { return (n / 1e6).toFixed(2) + ' MB'; }
+function openArchiveModal() {
+  if (!S.user || S.user.role !== 'admin') { toast('Admin only', 'error'); return; }
+  let el = document.getElementById('arch-modal'); if (el) el.remove();
+  el = document.createElement('div'); el.id = 'arch-modal';
+  el.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 16px';
+  el.innerHTML = `<div style="background:var(--bg-surface);color:var(--text-primary,inherit);border:1px solid var(--border);border-radius:12px;max-width:680px;width:100%;padding:22px 24px;box-shadow:0 12px 40px rgba(0,0,0,.5)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-size:17px;font-weight:700">☁ Cloud archive</div><button class="btn btn-g" id="arch-close" style="padding:4px 12px">Close</button></div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.55;margin-bottom:14px">Archived jobs that nobody has touched for ${ARCH_DAYS} days are stored in the cloud instead of on each computer. They still show in search, on the customer page and in reports. Opening one brings it back in full.</div>
+    <div id="arch-status" style="font-size:13px;line-height:1.6;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;margin-bottom:14px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn btn-p" id="arch-b1">1 · Count the jobs that can move</button>
+      <button class="btn btn-p" id="arch-b2" disabled>2 · Move the first ${ARCH_BATCH}</button>
+      <button class="btn btn-p" id="arch-b3" disabled>3 · Move the rest</button>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:12px;cursor:pointer"><input type="checkbox" id="arch-auto"> After that, keep doing this automatically once a day</label>
+    <div id="arch-out" style="font-size:13px;line-height:1.6;white-space:pre-wrap"></div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-g" id="arch-exp">Write a copy to SharePoint now</button><span id="arch-exp-lbl" style="font-size:12px;color:var(--text-muted)"></span>
+    </div></div>`;
+  document.body.appendChild(el);
+  const $ = id => document.getElementById(id);
+  $('arch-close').onclick = () => { if (_archRunning) { toast('A move is running — wait for it to finish', 'warning'); return; } el.remove(); };
+  $('arch-auto').checked = !!((typeof getPrefs === 'function' ? getPrefs() : {}).archAuto);
+  $('arch-auto').onchange = e => { const p = getPrefs(); p.archAuto = !!e.target.checked; savePrefs(p); queueSPSync(); toast(p.archAuto ? 'Automatic daily move is ON' : 'Automatic daily move is OFF', 'info'); };
+  $('arch-b1').onclick = () => _archUiCount();
+  $('arch-b2').onclick = () => _archUiMove(ARCH_BATCH);
+  $('arch-b3').onclick = () => _archUiMove(0);
+  $('arch-exp').onclick = async () => { if (_archUi.busy) return; _archUi.busy = true; _archUiOut('Writing the archive copy to SharePoint…'); try { const r = await _archExport(); _archUiOut('✓ Wrote ' + r.count + ' archived job(s) to SharePoint: GreenKeyCRM_Backups → archive → ' + r.file); } catch (e) { _archUiOut('✗ ' + (e && e.message || e)); } _archUi.busy = false; _archUiStatus(); };
+  _archUi = { step: 0, busy: false, last: null, stats: null };
+  _archUiStatus();
+}
+function _archUiOut(t, html) { const o = document.getElementById('arch-out'); if (!o) return; if (html) o.innerHTML = t; else o.textContent = t; }
+function _archUiStatus(stats) {
+  const s = document.getElementById('arch-status'); if (!s) return;
+  if (stats) _archUi.stats = stats; else stats = _archUi.stats;
+  const u = gkStorageUsage(); const live = _archLiveRows().length; const local = getLeads();
+  const arch = local.filter(l => l && l.stage === 'archived').length; const el = _archEligible().length;
+  const exp = localStorage.getItem('gk_arch_export_at');
+  s.innerHTML = `<div><strong>This computer's CRM storage:</strong> ${u.pct}% full (${_archFmtMB(u.chars)})</div>
+    <div><strong>Jobs on this computer:</strong> ${local.length} (${arch} archived)</div>
+    <div><strong>Jobs in the cloud archive only:</strong> ${live}${stats ? ' (the cloud database confirms ' + stats.archived + ')' : ''}</div>
+    <div><strong>Ready to move now:</strong> ${el} archived job(s) untouched for ${ARCH_DAYS}+ days</div>`;
+  const l = document.getElementById('arch-exp-lbl'); if (l) l.textContent = exp ? 'Last SharePoint copy: ' + new Date(exp).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) + ' (' + (localStorage.getItem('gk_arch_export_n') || '?') + ' jobs)' : 'No SharePoint copy written yet';
+  const b2 = document.getElementById('arch-b2'), b3 = document.getElementById('arch-b3');
+  if (b2) b2.disabled = !(_archUi.step >= 1 && el > 0) || _archUi.busy;
+  if (b3) { b3.disabled = !(_archUi.step >= 1 && live > 0 && el > 0) || _archUi.busy; b3.textContent = '3 · Move the rest' + (el && live > 0 && _archUi.step >= 1 ? ' (' + el + ')' : ''); }
+  const b1 = document.getElementById('arch-b1'); if (b1) b1.disabled = _archUi.busy;
+}
+async function _archUiCount() {
+  if (_archUi.busy) return; _archUi.busy = true; _archUiStatus();
+  _archUiOut('Checking sign-in, SharePoint and the cloud archive… (nothing is being moved)');
+  try {
+    const stats = await _archPreflight();
+    const c = _archEligible();
+    const chars = c.reduce((n, x) => n + _archBlobOf(x.lead, x.quotes).length, 0);
+    const keep = c.reduce((n, x) => n + JSON.stringify(_archMakeRow(x.lead, x.quotes, '2026-01-01T00:00:00.000Z')).length + 1, 0);
+    const u = gkStorageUsage(); const after = Math.max(0, Math.round((u.chars - chars + keep) / GK_LS_CAP * 100));
+    _archUi.step = Math.max(_archUi.step, 1);
+    _archUiStatus(stats);
+    _archUiOut(c.length
+      ? `✓ Count only — nothing was moved.\n\n${c.length} archived job(s) untouched for ${ARCH_DAYS}+ days can move, with ${c.reduce((n, x) => n + x.quotes.length, 0)} quote(s).\nThat frees about ${_archFmtMB(chars - keep)} on this computer: storage ${u.pct}% → about ${after}%.\n\nNext: click "2 · Move the first ${ARCH_BATCH}".`
+      : '✓ Nothing to move right now — no archived job has been untouched for ' + ARCH_DAYS + ' days.');
+  } catch (e) { _archUiOut('✗ ' + (e && e.message || e) + '\n\nNothing was moved.'); }
+  _archUi.busy = false; _archUiStatus();
+}
+async function _archUiMove(max) {
+  if (_archUi.busy) return;
+  const n = _archEligible().length; if (!n) { _archUiOut('Nothing to move.'); return; }
+  if (!max && !confirm('Move the remaining ' + n + ' archived job(s) to the cloud archive?\n\nEach one is written to the cloud, read back and compared before it is removed from this computer.')) return;
+  _archUi.busy = true; _archUiStatus();
+  try {
+    const r = await _archRun({ max: max || n, onProgress: t => _archUiOut(t) });
+    _archUi.step = Math.max(_archUi.step, 2); _archUi.last = r;
+    const u = gkStorageUsage();
+    let h = `<div><strong>✓ Moved ${r.moved.length} job(s) to the cloud archive.</strong> Each was written, read back and matched before it left this computer. Storage is now ${u.pct}% full.</div>`;
+    if (r.skipped.length) h += `<div style="margin-top:8px;color:var(--amber,#f59e0b)"><strong>${r.skipped.length} not moved (left exactly as they were):</strong><br>${r.skipped.slice(0, 12).map(s => escHtml(s.id + ' — ' + s.why)).join('<br>')}${r.skipped.length > 12 ? '<br>…' : ''}</div>`;
+    if (max && r.moved.length) h += `<div style="margin-top:10px"><strong>Check one:</strong> click a job below — it should open in full, exactly as before (opening it brings it back to this computer).</div><div style="margin-top:6px;max-height:190px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 10px">${r.moved.map(m => `<div><a href="#" onclick="event.preventDefault();document.getElementById('arch-modal').remove();openLeadDetail('${escHtml(m.id)}')" style="color:var(--blue)">${escHtml(m.name || '(no name)')}</a> <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${escHtml(m.id)}</span></div>`).join('')}</div><div style="margin-top:8px">${r.left} more can move. When you are satisfied, reopen this window, click 1, then "3 · Move the rest".</div>`;
+    if (!max && !r.left && r.moved.length) { const p = getPrefs(); if (document.getElementById('arch-auto') && document.getElementById('arch-auto').checked !== !!p.archAuto) { p.archAuto = document.getElementById('arch-auto').checked; savePrefs(p); queueSPSync(); } }
+    _archUiOut(h, true);
+    try { _archUi.stats = await _archWorker('/archive/stats', 'GET'); } catch (_) {}
+    try { const b = document.getElementById('gk-storage-banner'); if (b && u.pct < 75) b.remove(); } catch (_) {}
+  } catch (e) { _archUiOut('✗ ' + (e && e.message || e) + '\n\nAny job that was not confirmed in the cloud archive is still on this computer, unchanged.'); }
+  _archUi.busy = false; _archUiStatus();
+}
+
 function _dataUrlToBlob(dataUrl) {
   const arr = dataUrl.split(','), mime = arr[0].match(/:(.*?);/)[1];
   const bstr = atob(arr[1]);
@@ -30230,7 +31003,7 @@ async function _bellPollOnce() {
           });
           return;
         }
-        const lead = (typeof getLead === 'function') ? getLead(m.lead_id) : null;
+        const lead = (typeof getLeadOrStub === 'function') ? getLeadOrStub(m.lead_id) : ((typeof getLead === 'function') ? getLead(m.lead_id) : null);   // 11-21c: a text from an archived customer still shows their name
         const cust = (lead && lead.customerId && typeof getCustomer === 'function') ? getCustomer(lead.customerId) : null;
         const who = cust ? (typeof custFullName === 'function' ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim())
                          : ((lead && lead.customerName) || m.from_number || m.phone || 'Customer');
@@ -30292,7 +31065,7 @@ function _activitySetSince(iso) { try { localStorage.setItem(ACTIVITY_LAST_KEY, 
 function _activityCustName(ev, leadIdMaybe) {
   if (ev && ev.customerName) return ev.customerName;
   try {
-    const lead = leadIdMaybe && typeof getLead === 'function' ? getLead(leadIdMaybe) : null;
+    const lead = leadIdMaybe && typeof getLeadOrStub === 'function' ? getLeadOrStub(leadIdMaybe) : null;
     if (lead) {
       const cust = lead.customerId && typeof getCustomer === 'function' ? getCustomer(lead.customerId) : null;
       if (cust) return (typeof custFullName === 'function') ? custFullName(cust) : ((cust.firstName||'')+' '+(cust.lastName||'')).trim();
@@ -30519,6 +31292,7 @@ async function _leadInboxPollOnce() {
     if (!rows.length) return;
     for (const row of rows) {
       try {
+        await _archPreImport(row);   // crm-2026-11-21c
         const imported = _importWebLead(row);
         // Ack right after local creation so other devices don't re-import.
         // The map lets the worker re-key its auto-texts + consent records
@@ -31633,7 +32407,7 @@ function _callMatchByPhone(phone) {
   const custs = getCustomers().filter(c => !c.mergedInto && !c.deleted)
                  .filter(c => _callDigits(c.phone) === digits || _callDigits(c.phone2) === digits);
   const custIds = new Set(custs.map(c => c.id));
-  const leads = getLeads().filter(l => l && !l.deleted && (custIds.has(l.customerId) || _callDigits(l.customerPhone) === digits));
+  const leads = getLeadsAll().filter(l => l && !l.deleted && (custIds.has(l.customerId) || _callDigits(l.customerPhone) === digits));
   const live  = l => (typeof STAGE_MAP !== 'undefined' && STAGE_MAP[l.stage]) ? 1 : 0;
   leads.sort((a, b) => (live(b) - live(a)) || (new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)));
   const lead = leads[0] || null;
@@ -31660,7 +32434,9 @@ async function _callsPollOnce() {
     const acked = [];
     for (const row of rows) {
       try {
-        const { cust, lead } = _callMatchByPhone(row.from_phone);
+        let { cust, lead } = _callMatchByPhone(row.from_phone);
+        // crm-2026-11-21c: the matched job lives in the cloud archive — bring it back so the call note lands on it as before.
+        if (lead && lead._arch) { try { await _archRestoreJob(lead.id); lead = getLead(lead.id) || lead; } catch (e) { console.warn('[GK] archive: could not restore job for a call:', e); } }
         const who   = row.customer_name || (cust ? custFullName(cust) : '');
         const label = who ? `${who} — ${_callPretty(row.from_phone)}` : _callPretty(row.from_phone);
         const when  = row.created_at ? new Date(row.created_at).toLocaleString() : '';
@@ -33058,9 +33834,9 @@ function _splitOneLineAddress(row) {
 // ack the worker with the EXISTING lead id — so her texts re-key onto the real
 // job and phone_lead_map finally learns the number (the worker only knows a
 // caller if that map has them, which is why she got the intake link at all).
-function _openLeadForCustomer(custId) {
+function _openLeadForCustomer(custId, withCloud) {   // 11-21c: withCloud → also see jobs that live in the cloud archive (read-only stand-ins)
   try {
-    return getLeads()
+    return (withCloud && typeof getLeadsAll === 'function' ? getLeadsAll() : getLeads())
       .filter(l => l && l.customerId === custId && !l.deleted && STAGE_MAP && STAGE_MAP[l.stage])
       .sort((a,b) => new Date(b.updatedAt||b.createdAt||0) - new Date(a.updatedAt||a.createdAt||0))[0] || null;
   } catch (_) { return null; }
@@ -33097,7 +33873,7 @@ function _attachInboxRowToLead(row, lead, custId) {
   return { leadId: lead.id, custId, attached: true };
 }
 function _importWebLead(row) {
-  if (getLeads().some(l => l.webInboxId === row.id || (Array.isArray(l.webInboxIds) && l.webInboxIds.includes(row.id)))) return null;
+  if (getLeadsAll().some(l => l.webInboxId === row.id || (Array.isArray(l.webInboxIds) && l.webInboxIds.includes(row.id)))) return null;
   row = _splitOneLineAddress(row);
 
   const fn = row.first_name || '';
@@ -33571,7 +34347,7 @@ function _bellOpenLead(leadId) {
   }
   // Guard: an unresolvable id (e.g. 'unrouted' texts) must not open a blank
   // detail page — acknowledge-only with an honest toast instead.
-  if (typeof getLead === 'function' && !getLead(leadId)) {
+  if (typeof getLead === 'function' && !getLead(leadId) && !(typeof _archIsCloudOnly === 'function' && _archIsCloudOnly(leadId))) {   // 11-21c: a cloud-archived job IS a job — openLeadDetail fetches it
     // 2026-07-30: this used to stop here with a toast. An 'unrouted' notice is a
     // text from someone with no job yet — which is exactly the thing you want to
     // read and answer, so send it to the Calls page instead of nowhere.
@@ -38930,6 +39706,100 @@ function gkStorageUsage(){
   return { chars: n, pct: Math.round(n / GK_LS_CAP * 100), top: top.slice(0, 6) };
 }
 let _gkStorageWarned = 0;
+// crm-2026-11-21b (Jon: "I just got a pop up that the CRM browser is 94% full. That's all I saw before
+// it disappeared … make the pop up stay visible until it is acknowledged"). The warning is now its own
+// box at the bottom of the screen — no other toast can replace it — and it stays until the button is
+// clicked. It also names the biggest stores so the reader knows what is using the space. Still warns
+// only; it never deletes anything.
+// Leftover working data that is safe to drop from one browser (never synced, never the only copy):
+//   • an unfinished load-calc session (its photos) untouched for 3+ days;
+//   • Site View snapshots 14+ days old (the snapshot is also saved to the job's Documents);
+//   • gk_restore_rollback (orphan — nothing reads it).
+// Lists only; gkStorageFreeScratch() deletes exactly what this lists. Runs only from the banner button.
+function gkStorageScratch(){
+  const items=[]; const day=86400000, now=Date.now();
+  try {
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i); const v=localStorage.getItem(k)||''; const chars=k.length+v.length;
+      if(k==='gk_restore_rollback'){ items.push({key:k,chars,label:'Old restore leftover'}); continue; }
+      if(k==='gk_loadcalc_session'){
+        let at=0; try{ at=Date.parse((JSON.parse(v)||{}).savedAt||'')||0; }catch(_){}
+        if(now-at > 3*day) items.push({key:k,chars,label:'Unfinished load calc and its photos (last touched '+(at?new Date(at).toLocaleDateString():'unknown date')+')'});
+        continue;
+      }
+      if(k.indexOf('gk_siteview_shot_')===0){
+        let ts=0; try{ ts=(JSON.parse(v)||{}).ts||0; }catch(_){}
+        if(now-ts > 14*day) items.push({key:k,chars,label:'Site View snapshot '+k.slice('gk_siteview_shot_'.length)});
+      }
+    }
+  } catch(_){}
+  const shots=items.filter(i=>i.key.indexOf('gk_siteview_shot_')===0);
+  let out=items;
+  if(shots.length>3){   // one summary row instead of dozens
+    out=items.filter(i=>i.key.indexOf('gk_siteview_shot_')!==0);
+    out.push({key:null,keys:shots.map(i=>i.key),chars:shots.reduce((s,i)=>s+i.chars,0),label:shots.length+' Site View snapshots older than 14 days'});
+  }
+  return { items:out, chars:items.reduce((s,i)=>s+i.chars,0), keys:items.map(i=>i.key) };
+}
+function gkStorageFreeScratch(){
+  const scr=gkStorageScratch(); let freed=0;
+  scr.keys.forEach(k=>{ try{ const v=localStorage.getItem(k); if(v!=null){ freed+=k.length+v.length; localStorage.removeItem(k); } }catch(_){} });
+  console.log('[GK] storage: freed '+(freed/1e6).toFixed(2)+' M chars of scratch', scr.keys);
+  return freed;
+}
+function _gkStorageBanner(u, lvl){
+  try {
+    const old=document.getElementById('gk-storage-banner'); if(old) old.remove();
+    const NAMES={gk_arch_index:'Cloud archive index',gk_leads:'Jobs',gk_quotes:'Quotes',gk_customers:'Customers',gk_tasks:'Tasks',gk_notifications:'Notifications',gk_calls:'Call log',gk_materials:'Materials',gk_loadcalc_session:'Unfinished load calc (photos)'};
+    const label=k=>NAMES[k] || (String(k).indexOf('gk_siteview_shot_')===0 ? 'Site View snapshot' : String(k));
+    const top=(u.top||[]).slice(0,4).map(t=>label(t[0])+' '+(t[1]/1e6).toFixed(2)+' MB').join('  ·  ');
+    const el=document.createElement('div'); el.id='gk-storage-banner'; el.setAttribute('role','alert');
+    el.style.cssText='position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:99999;max-width:660px;width:calc(100% - 32px);box-sizing:border-box;background:'+(lvl===2?'#7f1d1d':'#78350f')+';color:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 8px 30px rgba(0,0,0,.4);font-size:13.5px;line-height:1.5';
+    const h=document.createElement('div'); h.style.cssText='font-weight:700;font-size:14.5px;margin-bottom:4px';
+    h.textContent=(lvl===2?'⚠ ':'')+'CRM storage on this computer is '+u.pct+'% full';
+    const b=document.createElement('div');
+    b.textContent=(lvl===2
+      ? 'Nothing is lost and the CRM is still saving. If it reaches 100%, this computer can no longer save changes. Tell Jon / Claude today so space can be freed.'
+      : 'Nothing is wrong yet. If it reaches 100%, this computer can no longer save changes. Mention it to Jon / Claude this week.');
+    const t=document.createElement('div'); t.style.cssText='opacity:.85;font-size:12px;margin-top:6px'; t.textContent=top ? 'Largest: '+top : '';
+    const btn=document.createElement('button'); btn.type='button'; btn.textContent='OK — I have read this';
+    btn.style.cssText='margin-top:10px;background:#fff;color:#111;border:0;border-radius:6px;padding:7px 14px;font-weight:600;font-size:13px;cursor:pointer';
+    btn.onclick=()=>el.remove();
+    el.appendChild(h); el.appendChild(b); el.appendChild(t); el.appendChild(btn);
+    // crm-2026-11-21c: the real fix — archived jobs untouched 30+ days move to the cloud archive.
+    try {
+      if (S.user && S.user.role === 'admin' && typeof _archEligible === 'function' && _archEligible().length) {
+        const ab=document.createElement('button'); ab.type='button'; ab.textContent='Move old archived jobs to the cloud…';
+        ab.style.cssText='margin:10px 0 0 10px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:6px;padding:6px 12px;font-weight:600;font-size:13px;cursor:pointer';
+        ab.onclick=()=>{ el.remove(); openArchiveModal(); };
+        el.appendChild(ab);
+      }
+    } catch (_) {}
+    // "Free up space": only offered when there is leftover working data old enough to remove.
+    const scr=gkStorageScratch();
+    if(scr.items.length){
+      const fb=document.createElement('button'); fb.type='button'; fb.textContent='Free up space on this computer…';
+      fb.style.cssText='margin:10px 0 0 10px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.6);border-radius:6px;padding:6px 12px;font-weight:600;font-size:13px;cursor:pointer';
+      fb.onclick=()=>{
+        const now=gkStorageScratch();
+        b.textContent='This removes leftover working data from THIS computer only — no jobs, quotes, customers or payments, and nothing in SharePoint:';
+        t.textContent=now.items.map(i=>'• '+i.label+' — '+(i.chars/1e6).toFixed(2)+' MB').join('   ')+'   (total '+(now.chars/1e6).toFixed(2)+' MB)';
+        fb.remove(); btn.textContent='Cancel';
+        const go=document.createElement('button'); go.type='button'; go.textContent='Delete these';
+        go.style.cssText=btn.style.cssText+';margin-left:10px';
+        go.onclick=()=>{ const freed=gkStorageFreeScratch(); const u2=gkStorageUsage();
+          h.textContent='Freed '+(freed/1e6).toFixed(2)+' MB — storage is now '+u2.pct+'% full';
+          b.textContent = u2.pct>=75 ? 'That helps, but the jobs and quotes themselves are most of it. Tell Jon / Claude — the long-term fix is still needed.' : 'Storage is back in a comfortable range.';
+          t.textContent=''; go.remove(); btn.textContent='OK'; };
+        el.appendChild(go);
+      };
+      el.appendChild(fb);
+    }
+    document.body.appendChild(el);
+  } catch (e) {
+    try { toast('CRM browser storage is ' + u.pct + '% full — tell Jon / Claude before it reaches 100% (saves would stop).', lvl === 2 ? 'error' : 'warning', 60000); } catch (_) {}
+  }
+}
 function gkStorageCheck(){
   try {
     const u = gkStorageUsage();
@@ -38937,7 +39807,7 @@ function gkStorageCheck(){
     const lvl = u.pct >= 90 ? 2 : (u.pct >= 75 ? 1 : 0);
     if (lvl > _gkStorageWarned) {
       _gkStorageWarned = lvl;
-      toast((lvl === 2 ? '⚠ CRM browser storage is ' : 'CRM browser storage is ') + u.pct + '% full — tell Jon / Claude before it reaches 100% (saves would stop).', lvl === 2 ? 'error' : 'warning');
+      _gkStorageBanner(u, lvl);   // crm-2026-11-21b: stays up until acknowledged (was a 3-second toast)
     }
     return u;
   } catch (_) { return null; }
@@ -38961,6 +39831,7 @@ async function init() {
   // (end of _pullFromSP), where the local copy is fresh. RULE: any repair that
   // bumps updatedAt must only run AFTER a pull.
   try { setTimeout(gkStorageCheck, 15000); setInterval(gkStorageCheck, 30*60*1000); } catch (_) {}
+  try { setTimeout(_archDailyTick, 4*60*1000); setInterval(_archDailyTick, 30*60*1000); } catch (_) {}   // 11-21c: daily cloud-archive move (if switched on) + SharePoint copy
   // Start the background quote-action poller. It self-throttles based on
   // tab visibility + current page so it's cheap when the user isn't on
   // the pipeline. Idempotent so safe to call from init.
