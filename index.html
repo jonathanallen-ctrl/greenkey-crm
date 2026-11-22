@@ -1314,7 +1314,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-21c</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-22a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -1636,7 +1636,7 @@
           <button class="rtab"        data-rpt="thismonth"    onclick="switchReport(this,'thismonth')">This Month</button>
           <button class="rtab"        data-rpt="overdue"      onclick="switchReport(this,'overdue')">Overdue Tasks</button>
           <button class="rtab"        data-rpt="revenue"      onclick="switchReport(this,'revenue')">Revenue by Type</button>
-          <button class="rtab"        data-rpt="royalty"      onclick="switchReport(this,'royalty')">Qmerit Royalty</button>
+          <button class="rtab"        data-rpt="royalty"      onclick="switchReport(this,'royalty')">Qmerit Fees</button>
           <button class="rtab"        data-rpt="margins"      onclick="switchReport(this,'margins')">Margin Summary</button>
           <button class="rtab"        data-rpt="jurisdiction" onclick="switchReport(this,'jurisdiction')">By Jurisdiction</button>
           <button class="rtab"        data-rpt="lost"         onclick="switchReport(this,'lost')">Lost Leads</button>
@@ -3231,7 +3231,7 @@ const SECS = {
   'Qmerit':`<div class="stitle">Qmerit Settings</div><div class="sdesc">Fee structure for Qmerit jobs. Auto-applied during quoting — never shown to customers.</div>
     <div class="srow"><div><div class="srl">Admin fee — minimum flat</div><div class="srd">Applied when 12% of subtotal is less than this</div></div><input class="sinput" value="$199"></div>
     <div class="srow"><div><div class="srl">Admin fee — percentage</div><div class="srd">Applied when greater than flat minimum</div></div><input class="sinput" value="12%"></div>
-    <div class="srow"><div><div class="srl">Quarterly royalty rate</div><div class="srd">Applied to all residential EV installs</div></div><input class="sinput" value="3%"></div>
+    <div class="srow"><div><div class="srl">Partner fee on Qmerit-sourced work</div><div class="srd">Kept out of Qmerit's payments to us since Oct 1, 2026 (permit included). Qmerit quotes add 5.26% to cover it. Replaced the 3% quarterly royalty on all residential EV installs.</div></div><input class="sinput" value="5%"></div>
     <div class="srow"><div><div class="srl">Customer contact deadline</div></div><input class="sinput" value="48 hrs"></div>
     <div class="srow"><div><div class="srl">Quote upload deadline</div></div><input class="sinput" value="3 days"></div>
     <div class="srow"><div><div class="srl">Install scheduling deadline</div></div><input class="sinput" value="7 days"></div>
@@ -5730,6 +5730,10 @@ function getQQPricing(){
     standardPermit:200, qmeritPermit:250, specialPermit:500,
     materialsBuffer:0.10,
     qmeritFlat:199, qmeritPct:0.12,
+    // crm-2026-11-22a (Jon): Qmerit's renewed contract (effective 2026-10-01)
+    // keeps 5% of everything it pays us on Qmerit-sourced work, permit included.
+    // Quotes add pct/(1-pct) = 5.26% so we net the full amount. See _qmeritPartnerAdd.
+    qmeritPartnerPct:0.05,
     // NEMA 14-50 adder over a hardwired charger install (2026-06-12): extra
     // neutral wire + outlet/box (~$65) + GFCI breaker (~$100 over standard)
     // ≈ $175 cost → ~$200 with ~30% markup. Same indoor or outdoor.
@@ -5793,7 +5797,7 @@ function getQuote(id){return getQuotes().find(q=>q.id===id)||null;}
 const QUOTE_PRICE_FIELDS = ['qq','lines','preProcessingTotal','quoteTotal','laborAndMaterials',
   'laborTotal','laborHours','laborRate','laborLines','matSubtotal','matAllowance','matTotal','rentalTotal',
   'veteranDiscount','manualDiscount','discountMode','discountValue','discountLabel',
-  'qmeritFee','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
+  'qmeritFee','qmeritPartnerFee','qmeritPartnerOn','permitFee','paymentBuffer','paymentProcessingFee','travelFee',
   'travelFeeType','depositAmount','isVeteran'];
 function _quoteIsCommitted(q){
   return !!q && (q.status==='approved' || q.status==='contingent-approved' || q.status==='invoiced');
@@ -6684,6 +6688,7 @@ function startQuoteBuilder(){
     lines:[], laborHours:0, laborRate:160, rentals:[],
     scope:'', inclusions:'', exclusions:'', notes:'', quoteTotal:0,
     paymentBuffer:_defaultBuffer,
+    qmeritPartnerOn: lead.source==='Qmerit',   // crm-2026-11-22a — new Qmerit quotes carry the 5% fee recovery
     contingentOnUtility: _isUtilityNew,
     utilityDelayed:      _isUtilityNew,
     billToCustomerId:    _autoBillTo,
@@ -8298,9 +8303,10 @@ function onQQChange(qid){
   // If a manual L&M total override is present, it replaces the computed lm.
   if (lmOverride!=null && !isNaN(lmOverride)) lm = lmOverride;
   // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
+  const qmeritPartnerFee=_qmeritPartnerAdd(q,lm,permitFee);   // crm-2026-11-22a
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
-  const _grossQ = lm + qmeritFee + permitFee;
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,(lm+qmeritPartnerFee)*p.qmeritPct);
+  const _grossQ = lm + qmeritPartnerFee + qmeritFee + permitFee;
   const _dQ = _readQuoteDiscount(q);
   const _ddQ = _applyQuoteDiscounts(_grossQ, isVeteran, p.veteranDiscountPct, _dQ);
   const veteranDiscount = _ddQ.vet;
@@ -8325,6 +8331,7 @@ function onQQChange(qid){
     manualDiscount,
     ..._dQ,
     qmeritFee,
+    qmeritPartnerFee,
     preProcessingTotal,
     paymentBuffer,
     paymentProcessingFee,
@@ -9052,6 +9059,43 @@ function _discountRowHTML(q, changeFn) {
   </div>`;
 }
 
+// ── QMERIT 5% PARTNER FEE (crm-2026-11-22a, Jon 2026-11-22) ─────────────────
+// Qmerit's renewed contract (effective 2026-10-01) replaced the 3% quarterly
+// royalty on ALL residential EV work with a 5% fee on Qmerit-sourced work only,
+// kept out of what Qmerit pays us (permit included). This is separate from
+// Qmerit's own $199 / 12% admin fee, which passes to the customer and is
+// unchanged. To net the full amount the quote adds pct/(1-pct) — 5.26% — of
+// (L&M + permit), rounded UP to a whole dollar so it adds no cents to the
+// stored-vs-shown total. Stored as q.qmeritPartnerFee, its own component
+// beside q.qmeritFee: Job Value (_quoteJobNet) therefore stays the BEFORE-fee
+// figure Qmerit owes, and the fee is recorded next to it.
+// Only quotes flagged q.qmeritPartnerOn === true carry it: new Qmerit quotes
+// are flagged at creation; a quote written before this build is never
+// re-priced on its own (stored must equal sent) — the margin box offers a
+// deliberate "Add the 5% fee" button instead.
+function _qmeritPartnerPct(){
+  const pct = Number((getQQPricing() || {}).qmeritPartnerPct) || 0;
+  return (pct > 0 && pct < 1) ? pct : 0;
+}
+function _qmeritPartnerAdd(q, lm, permitFee){
+  if (!q || q.source !== 'Qmerit' || q.qmeritPartnerOn !== true) return 0;
+  const pct = _qmeritPartnerPct(); if (!pct) return 0;
+  const base = Math.max(0, (Number(lm) || 0) + (Number(permitFee) || 0));
+  return Math.ceil(base * pct / (1 - pct) - 1e-9);
+}
+function toggleQmeritPartnerFee(qid, on){
+  const q = getQuote(qid); if (!q) return;
+  if (typeof _quoteIsCommitted === 'function' && _quoteIsCommitted(q)) {
+    toast('This quote is already accepted — its price is locked.', 'warning'); return;
+  }
+  upsertQuote({...q, qmeritPartnerOn: !!on});
+  try {
+    if (q.type === 'detailed') { if (typeof onDQChange === 'function') onDQChange(qid); }
+    else { if (typeof onQQChange === 'function') onQQChange(qid); }
+  } catch(_){}
+  renderQuoteBuilder(qid);
+  toast(on ? 'Qmerit 5% fee added to this quote' : 'Qmerit 5% fee removed from this quote', 'success');
+}
 function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   const p = getQQPricing();
   // ── Shared add-ons (2026-07-30) ──
@@ -9069,9 +9113,10 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
   lm = lm + additionalLM;
   const isVeteran = !!qqPatch.isVeteran;
   // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
+  const qmeritPartnerFee = _qmeritPartnerAdd(q, lm, permitFee);   // crm-2026-11-22a
   let qmeritFee = 0;
-  if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, lm * p.qmeritPct);
-  const _grossF = lm + qmeritFee + permitFee;
+  if (q.source === 'Qmerit') qmeritFee = Math.max(p.qmeritFlat, (lm + qmeritPartnerFee) * p.qmeritPct);
+  const _grossF = lm + qmeritPartnerFee + qmeritFee + permitFee;
   const _dF = _readQuoteDiscount(q);
   const _ddF = _applyQuoteDiscounts(_grossF, isVeteran, p.veteranDiscountPct, _dF);
   const veteranDiscount = _ddF.vet;
@@ -9093,6 +9138,7 @@ function _finalizeQQTotals(q, lm, qqPatch, permitFee) {
     manualDiscount,
     ..._dF,
     qmeritFee,
+    qmeritPartnerFee,
     preProcessingTotal,
     paymentBuffer,
     paymentProcessingFee,
@@ -11272,9 +11318,10 @@ function onDQChange(qid){
   const travelBaked=travelFeeType==='baked'?travelFee:0;
   const lm=laborTotal+matTotal+rentalTotal+travelBaked;
   // Discounts come off the TOTAL (2026-08-05) — see _applyQuoteDiscounts.
+  const qmeritPartnerFee=_qmeritPartnerAdd(q,lm,permitFee);   // crm-2026-11-22a
   let qmeritFee=0;
-  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,lm*p.qmeritPct);
-  const _grossD = lm + qmeritFee + permitFee;
+  if(q.source==='Qmerit') qmeritFee=Math.max(p.qmeritFlat,(lm+qmeritPartnerFee)*p.qmeritPct);
+  const _grossD = lm + qmeritPartnerFee + qmeritFee + permitFee;
   const _dD = _readQuoteDiscount(q);
   const _ddD = _applyQuoteDiscounts(_grossD, isVeteran, p.veteranDiscountPct, _dD);
   const veteranDiscount = _ddD.vet;
@@ -11287,7 +11334,7 @@ function onDQChange(qid){
   const preProcessingTotal = _r5D.pre;
   const paymentProcessingFee = _r5D.fee;
   const quoteTotal = _r5D.total;
-  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm + _r5D.pad,veteranDiscount,manualDiscount,..._dD,qmeritFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
+  upsertQuote({...q,laborLines,laborHours,laborRate,permitFee,travelFee,travelFeeType,isVeteran,matSubtotal:matSub,matAllowance,matTotal,laborTotal,rentalTotal,laborAndMaterials:lm + _r5D.pad,veteranDiscount,manualDiscount,..._dD,qmeritFee,qmeritPartnerFee,preProcessingTotal,paymentBuffer,paymentProcessingFee,quoteTotal});
   refreshQBSidebar(qid);
   // Live-refresh auto-generated scope text on the Detailed Quote form too.
   if (typeof _refreshAutoTextareas === 'function') _refreshAutoTextareas(qid);
@@ -11374,6 +11421,7 @@ function calcQuoteTotals(q){
   const rVet    = Math.floor(q.veteranDiscount||0);
   const rMan    = Math.floor(q.manualDiscount||0);
   const rQmerit = Math.ceil(q.qmeritFee||0);
+  const rPartner = Math.ceil(q.qmeritPartnerFee||0);   // crm-2026-11-22a — Qmerit 5% fee recovery
   const rPermit = Math.ceil(q.permitFee||0);
   // For detailed quotes L&M is the sum of its shown parts (so the breakdown
   // reconciles to the subtotal line); for quick quotes it's the pre-engineered
@@ -11390,7 +11438,7 @@ function calcQuoteTotals(q){
   // rounding). Display/aggregate only, same as the whole-dollar rule it
   // extends — stored quote fields and margin math untouched.
   const _ceil5 = (x) => Math.ceil(x / 5) * 5;
-  let preProcessingTotal = rLM + rQmerit + rPermit - rVet - rMan;  // reconciles with the shown lines
+  let preProcessingTotal = rLM + rPartner + rQmerit + rPermit - rVet - rMan;  // reconciles with the shown lines
   const _pad5 = _ceil5(preProcessingTotal) - preProcessingTotal;
   if (_pad5 > 0) { rLM += _pad5; preProcessingTotal += _pad5; }
   const lmAfterDiscount = rLM - rVet;                    // legacy compat only
@@ -11418,6 +11466,7 @@ function calcQuoteTotals(q){
     manualDiscount:rMan,
     discountLabel:(q.discountLabel||''),
     qmeritFee:rQmerit,
+    qmeritPartnerFee:rPartner,
     permitFee:rPermit,
     preProcessingTotal,
     paymentBuffer: ccBufferPct,
@@ -11619,7 +11668,7 @@ function calcDepositSchedule(q) {
 }
 function renderTotalsBox(q,totals,isAdmin,isQmerit){
   const rows=[];
-  const lmBaked = (totals.laborAndMaterials||0) + (isQmerit ? (totals.qmeritFee||0) : 0);
+  const lmBaked = (totals.laborAndMaterials||0) + (isQmerit ? ((totals.qmeritFee||0) + (totals.qmeritPartnerFee||0)) : 0);
   if(q.type==='detailed'){
     rows.push(`<div class="tot-row"><span>Materials</span><span class="tot-num">${fmt$(totals.matSubtotal)}</span></div>`);
     if((totals.matAllowance||0) > 0) {
@@ -11633,6 +11682,7 @@ function renderTotalsBox(q,totals,isAdmin,isQmerit){
     rows.push(`<div class="tot-row"><span>Total Installation Services</span><span class="tot-num">${fmt$(lmBaked)}</span></div>`);
     if(isAdmin) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ GreenKey L&amp;M <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.laborAndMaterials)}</span></div>`);
     if(isAdmin) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ Qmerit Admin Fee <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.qmeritFee)}</span></div>`);
+    if(isAdmin && (totals.qmeritPartnerFee||0) > 0) rows.push(`<div class="tot-row internal" style="padding-left:16px;font-size:11.5px"><span>↳ Qmerit 5% fee recovery <em style="font-size:10px">(internal)</em></span><span class="tot-num">${fmt$(totals.qmeritPartnerFee)}</span></div>`);
   } else {
     // Multi-scope quick quotes: itemize each scope so both prices are visible
     // before they sum (Jonathan, 2026-07-11). Lines reconcile to the L&M total.
@@ -11693,8 +11743,22 @@ function renderMarginBox(q,totals,isQmerit){
   // supply house. Other job types have no scMatCost and are unaffected.
   const _scMatCost=(q.qq&&typeof q.qq.scMatCost==='number')?q.qq.scMatCost:0;
   const net=(totals.laborAndMaterials||0)-(isQmerit?totals.qmeritFee||0:0)-_scMatCost;
-  const royaltyFlag=q.jobType==='ev-residential';
-  const royalty=royaltyFlag?totals.quoteTotal*0.03:0;
+  // crm-2026-11-22a — the 3% royalty note is gone (that fee ended 2026-10-01).
+  // Qmerit quotes show the 5% partner fee instead: what Qmerit will keep, and
+  // whether this price covers it.
+  let _qpRow='';
+  if(isQmerit){
+    const _qpCut=Math.round(Math.max(0,(totals.preProcessingTotal||0)-(totals.qmeritFee||0))*_qmeritPartnerPct());
+    const _qpLocked=(typeof _quoteIsCommitted==='function')&&_quoteIsCommitted(q);
+    if(q.qmeritPartnerOn===true){
+      _qpRow=`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>Qmerit 5% fee (kept from our payment)</span><span class="margin-num">−${fmt$(_qpCut)}</span></div>
+    <div class="margin-row" style="color:var(--green);font-size:11.5px"><span>✓ Covered — added to this price</span><span class="margin-num">+${fmt$(totals.qmeritPartnerFee||0)}</span></div>`
+        +(_qpLocked?'':`<div style="text-align:right;margin-top:2px"><a href="#" style="font-size:10.5px;color:var(--text-muted)" onclick="toggleQmeritPartnerFee('${q.id}',false);return false">remove from this quote</a></div>`);
+    } else {
+      _qpRow=`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>⚠ Qmerit 5% fee NOT in this price</span><span class="margin-num">−${fmt$(_qpCut)}</span></div>`
+        +(_qpLocked?'':`<div style="margin-top:4px"><button class="btn" style="font-size:11px;padding:3px 8px" onclick="toggleQmeritPartnerFee('${q.id}',true)">Add the 5% fee to this quote</button></div>`);
+    }
+  }
   // Gross-margin estimate vs the 15% floor (detailed quotes only — Quick
   // Quote rates have margin pre-engineered, so no line-cost basis exists).
   const _mchk=(typeof marginFloorCheck==='function')?marginFloorCheck(q):{pct:null};
@@ -11713,7 +11777,7 @@ function renderMarginBox(q,totals,isQmerit){
     ${marginRow}
     ${(q.qq?.lmOverride!=null && isFinite(q.qq.lmOverride))?`<div class="margin-row" style="color:var(--amber);font-size:11px"><span>L&amp;M overridden</span><span class="margin-num">${fmt$(q.qq.lmOverride)}</span></div>`:''}
     ${(q.qq?.lmOverrideNote||'').trim()?`<div style="font-size:11.5px;color:var(--text-secondary);line-height:1.45;margin-top:6px;padding-top:6px;border-top:1px dashed rgba(46,204,113,0.3);white-space:pre-wrap">📝 ${escHtml(q.qq.lmOverrideNote.trim())}</div>`:''}
-    ${royaltyFlag?`<div class="margin-row" style="color:var(--amber);font-size:11.5px"><span>⚠ 3% Qmerit Royalty (res. EV)</span><span class="margin-num">~${fmt$(royalty)}</span></div>`:''}
+    ${_qpRow}
   </div>`;
 }
 function refreshQBSidebar(qid){
@@ -12812,6 +12876,9 @@ function changeQuoteJobType(qid, newType) {
 function changeQuoteSource(qid,newSource){
   const q=getQuote(qid); if(!q) return;
   const updates = { source: newSource };
+  // crm-2026-11-22a — a quote switched TO Qmerit picks up the 5% fee recovery,
+  // unless someone already chose on/off for it or its price is locked.
+  if (newSource === 'Qmerit' && q.qmeritPartnerOn === undefined && !(typeof _quoteIsCommitted === 'function' && _quoteIsCommitted(q))) updates.qmeritPartnerOn = true;
   // Auto-suggest bill-to when source maps to a known B2B referrer
   if (Array.isArray(REFERRER_BILL_SOURCES) && REFERRER_BILL_SOURCES.includes(newSource) && !q.billToCustomerId) {
     const ref = getCustomers().find(c => c.isReferrer && (c.id === referrerIdForSource(newSource)));
@@ -14261,7 +14328,7 @@ function generateQuotePDF(q,cust,lead,returnDataUrl=false){
   }
   const _totalsPDF = calcQuoteTotals(q);
   const _isQmeritPDF = q.source==='Qmerit';
-  const _lmPDF = _isQmeritPDF ? (_totalsPDF.laborAndMaterials||0)+(_totalsPDF.qmeritFee||0) : (_totalsPDF.laborAndMaterials||0);
+  const _lmPDF = _isQmeritPDF ? (_totalsPDF.laborAndMaterials||0)+(_totalsPDF.qmeritFee||0)+(_totalsPDF.qmeritPartnerFee||0) : (_totalsPDF.laborAndMaterials||0);
   const _lmLabel = _isQmeritPDF ? 'Total Installation Services' : 'Labor & Materials';
   // Multi-scope quick quotes itemize each scope's price before the combined
   // L&M line (Jonathan, 2026-07-11). Skipped on Qmerit (fee baked into L&M).
@@ -26489,34 +26556,51 @@ function rptRevenueByType(period) {
   </table></div>`;
 }
 
-// ── 5. QMERIT ROYALTY ──
+// ── 5. QMERIT FEES ──
+// crm-2026-11-22a (Jon): two rules, split by date. Before 2026-10-01 Qmerit
+// was owed a quarterly royalty of 3% of ALL residential EV revenue, whatever
+// the source. From 2026-10-01 it keeps 5% of Qmerit-sourced work only, out of
+// what it pays us — nothing is owed on any other work. Job Value on a Qmerit
+// job is already the before-fee amount Qmerit pays, so 5% of it is the cut.
+function _qmeritFeeRule(q){
+  const d=String(q.invoiceDate||q.updatedAt||'');
+  const t=new Date(d).getTime();
+  const isNew=isFinite(t)?(t>=new Date('2026-10-01T00:00:00').getTime()):(d.slice(0,10)>='2026-10-01');
+  if(isNew) return q.source==='Qmerit'?{rate:0.05,label:'5%',kind:'new'}:null;
+  return q.jobType==='ev-residential'?{rate:0.03,label:'3%',kind:'old'}:null;
+}
+function _qmeritFeeLines(period){
+  return _revenueLines(period).map(q=>{const r=_qmeritFeeRule(q);return r?Object.assign({},q,{_qr:r,_qfee:(q.quoteTotal||0)*r.rate}):null;}).filter(Boolean);
+}
 function rptQmeritRoyalty(period) {
-  const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
-  if (!allEV.length) return emptyRpt('No residential EV installs for this period.');
-  const totalRev=allEV.reduce((s,q)=>s+(q.quoteTotal||0),0);
-  const royalty=totalRev*0.03;
-  const leads=getLeadsAll(),custs=getCustomers();
+  const lines=_qmeritFeeLines(period);
+  if (!lines.length) return emptyRpt('No Qmerit fees for this period. Since Oct 1, 2026 the fee is 5% of Qmerit-sourced work only.');
+  const oldL=lines.filter(q=>q._qr.kind==='old'), newL=lines.filter(q=>q._qr.kind==='new');
+  const sum=(a,f)=>a.reduce((s,q)=>s+(f(q)||0),0);
+  const oldFee=sum(oldL,q=>q._qfee), newFee=sum(newL,q=>q._qfee), newRev=sum(newL,q=>q.quoteTotal), oldRev=sum(oldL,q=>q.quoteTotal);
+  const leads=getLeadsAll();
   const bySrc={};
-  allEV.forEach(q=>{const s=q.source||'Unknown';if(!bySrc[s])bySrc[s]={count:0,rev:0};bySrc[s].count++;bySrc[s].rev+=q.quoteTotal||0;});
+  lines.forEach(q=>{const s=q.source||'Unknown';if(!bySrc[s])bySrc[s]={count:0,rev:0,fee:0};bySrc[s].count++;bySrc[s].rev+=q.quoteTotal||0;bySrc[s].fee+=q._qfee;});
   const srcRows=Object.entries(bySrc).sort((a,b)=>b[1].rev-a[1].rev).map(([s,v])=>
-    `<tr><td style="padding:7px 14px">${sourceChip(s)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:center">${v.count}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(v.rev)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(v.rev*0.03)}</td></tr>`).join('');
-  const detailRows=allEV.sort((a,b)=>new Date(b.invoiceDate||b.updatedAt)-new Date(a.invoiceDate||a.updatedAt)).map(q=>{
+    `<tr><td style="padding:7px 14px">${sourceChip(s)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:center">${v.count}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(v.rev)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(v.fee)}</td></tr>`).join('');
+  const detailRows=lines.slice().sort((a,b)=>new Date(b.invoiceDate||b.updatedAt)-new Date(a.invoiceDate||a.updatedAt)).map(q=>{
     const lead=leads.find(l=>l.id===q.leadId);
     const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);
     const name=cust?custFullName(cust):(q.leadId||'—');
-    return `<tr><td style="padding:7px 14px;font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td><td style="padding:7px 14px">${escHtml(name)}</td><td style="padding:7px 14px">${sourceChip(q.source)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(q.quoteTotal)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(q.quoteTotal*0.03)}</td><td style="padding:7px 14px;font-size:12px;color:var(--text-muted)">${mdy((q.invoiceDate||q.updatedAt||''))}</td></tr>`;
+    return `<tr><td style="padding:7px 14px;font-family:var(--mono);font-size:12px">${q.leadId||'—'}</td><td style="padding:7px 14px">${escHtml(name)}</td><td style="padding:7px 14px">${sourceChip(q.source)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right">${fmtDollar(q.quoteTotal)}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:center">${q._qr.label}</td><td style="padding:7px 14px;font-family:var(--mono);text-align:right;color:var(--amber)">${fmtDollar(q._qfee)}</td><td style="padding:7px 14px;font-size:12px;color:var(--text-muted)">${mdy((q.invoiceDate||q.updatedAt||''))}</td></tr>`;
   }).join('');
+  const tile=(lbl,val,amber)=>`<div><div style="font-size:11px;color:var(--text-muted)">${lbl}</div><div style="font-size:24px;font-weight:700;font-family:var(--mono)${amber?';color:var(--amber)':''}">${val}</div></div>`;
   return `<div style="background:var(--amber-dim);border-bottom:1px solid var(--amber);padding:14px 18px">
-    <div style="font-size:11px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Qmerit Quarterly Royalty (3% of All Residential EV Revenue)</div>
+    <div style="font-size:11px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Qmerit Fees — 5% of Qmerit work since Oct 1, 2026 · 3% of all residential EV before that</div>
     <div style="display:flex;gap:28px;flex-wrap:wrap">
-      <div><div style="font-size:11px;color:var(--text-muted)">Total EV Revenue (All Sources)</div><div style="font-size:24px;font-weight:700;font-family:var(--mono)">${fmtDollar(totalRev)}</div></div>
-      <div><div style="font-size:11px;color:var(--text-muted)">3% Royalty Owed to Qmerit</div><div style="font-size:24px;font-weight:700;font-family:var(--mono);color:var(--amber)">${fmtDollar(royalty)}</div></div>
-      <div><div style="font-size:11px;color:var(--text-muted)">Jobs Included</div><div style="font-size:24px;font-weight:700;font-family:var(--mono)">${allEV.length}</div></div>
+      ${newL.length?tile('Qmerit work (since Oct 1, 2026)',fmtDollar(newRev))+tile('5% kept by Qmerit from its payments',fmtDollar(newFee),true):''}
+      ${oldL.length?tile('Residential EV revenue (before Oct 1, 2026)',fmtDollar(oldRev))+tile('3% royalty owed to Qmerit',fmtDollar(oldFee),true):''}
+      ${tile('Jobs Included',lines.length)}
     </div>
   </div>
   <div class="rpt-split">
-    <div class="rpt-split-l">${rptSecHdr('By Source')}<table style="width:100%;border-collapse:collapse"><thead><tr>${TH('Source')}${THC('#')}${THR('Revenue')}${THR('3% Due')}</tr></thead><tbody>${srcRows}</tbody></table></div>
-    <div>${rptSecHdr('Job Detail')}<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>${TH('Job ID')}${TH('Customer')}${TH('Source')}${THR('Amount')}${THR('3%')}${TH('Date')}</tr></thead><tbody>${detailRows}</tbody></table></div></div>
+    <div class="rpt-split-l">${rptSecHdr('By Source')}<table style="width:100%;border-collapse:collapse"><thead><tr>${TH('Source')}${THC('#')}${THR('Revenue')}${THR('Fee')}</tr></thead><tbody>${srcRows}</tbody></table></div>
+    <div>${rptSecHdr('Job Detail')}<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>${TH('Job ID')}${TH('Customer')}${TH('Source')}${THR('Amount')}${THC('Rate')}${THR('Fee')}${TH('Date')}</tr></thead><tbody>${detailRows}</tbody></table></div></div>
   </div>`;
 }
 
@@ -26728,11 +26812,11 @@ function exportReportCSV() {
       filename='overdue-tasks';break;
     }
     case 'royalty':{
-      const allEV=_revenueLines(period).filter(q=>q.jobType==='ev-residential');
-      const leads=getLeadsAll(),custs=getCustomers();
-      rows=[['Job ID','Customer','Source','Amount','3% Royalty','Date']];
-      allEV.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,(q.quoteTotal||0)*0.03,mdy((q.invoiceDate||q.updatedAt||''))]);});
-      filename='qmerit-royalty';break;
+      const feeLines=_qmeritFeeLines(period);
+      const leads=getLeadsAll();
+      rows=[['Job ID','Customer','Source','Amount','Rate','Qmerit Fee','Date']];
+      feeLines.forEach(q=>{const lead=leads.find(l=>l.id===q.leadId);const cust=getCustomer(q.customerId)||(lead?getCustomer(lead.customerId):null);rows.push([q.leadId||'',cust?custFullName(cust):'',q.source||'',q.quoteTotal||0,q._qr.label,Math.round(q._qfee*100)/100,mdy((q.invoiceDate||q.updatedAt||''))]);});
+      filename='qmerit-fees';break;
     }
     case 'margins':{
       const quotes=_revenueLines(period);
@@ -26775,7 +26859,7 @@ function exportReportCSV() {
 function exportReportPDF() {
   const body=document.getElementById('rpt-body');
   if (!body) return;
-  const rptNames={pipeline:'Open Pipeline',thismonth:'Jobs This Month',overdue:'Overdue Tasks',revenue:'Revenue by Service Type',royalty:'Qmerit Royalty',margins:'Margin Summary',jurisdiction:'Jobs by Jurisdiction',lost:'Lost Leads'};
+  const rptNames={pipeline:'Open Pipeline',thismonth:'Jobs This Month',overdue:'Overdue Tasks',revenue:'Revenue by Service Type',royalty:'Qmerit Fees',margins:'Margin Summary',jurisdiction:'Jobs by Jurisdiction',lost:'Lost Leads'};
   const period=document.getElementById('rpt-period')?.value||'all';
   const pNames={month:'This Month',lastmonth:'Last Month',quarter:'This Quarter',lastquarter:'Last Quarter',year:'This Year',all:'All Time'};
   const css=`body{font-family:Arial,sans-serif;color:#1a1a2e;background:#fff;margin:0;padding:20px;font-size:12px}
