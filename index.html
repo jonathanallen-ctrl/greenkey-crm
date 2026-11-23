@@ -1314,7 +1314,7 @@
       <!-- BUILD LABEL — BUMP THE TEXT ON EVERY PUSH (new date, or bump the letter for a same-day push).
            GitHub Pages can lag a push by a few minutes; this chip is how you know the deploy landed.
            If the chip doesn't show the expected build after Ctrl+F5, you're still on the old deploy. -->
-      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-22a</span>
+      <span id="crm-build-lbl" title="CRM build — bumped in index.html on every push. If this doesn't match the latest push label, GitHub Pages hasn't finished deploying yet." style="font-size:10.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0">crm-2026-11-23a</span>
       <div class="tright">
         <div class="swrap">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l3.5 3.5"/></svg>
@@ -5104,7 +5104,7 @@ function custSearchInput(val) {
   const drop = document.getElementById('csd');
   if (!val.trim()) { drop.classList.remove('show'); return; }
   const vKey = _nameKey(val);
-  const custs = getCustomers().filter(c=>custFullName(c).toLowerCase().includes(val.toLowerCase())||(vKey&&_nameKey(custFullName(c)).includes(vKey))).slice(0,6);
+  const custs = getCustomers().filter(c=> c && !c.mergedInto).filter(c=>custFullName(c).toLowerCase().includes(val.toLowerCase())||(vKey&&_nameKey(custFullName(c)).includes(vKey))).slice(0,6);
   drop.innerHTML = custs.map(c=>
     `<div class="csd-item" onclick="selectExistingCust('${c.id}','${custFullName(c).replace(/'/g,"\\'")}')">
        ${custFullName(c)} — <span style="color:var(--text-muted)">${c.phone||c.email||'No contact'}</span>
@@ -5446,7 +5446,8 @@ function doGlobalSearch(q) {
   // "justin" with 5 Justins hid "Justin Smith" off the bottom). Overflow beyond
   // this is surfaced with a "+N more" hint so nothing looks missing.
   const SEARCH_LIMIT = 8;
-  const custAll = getCustomers().filter(c=>
+  // crm-2026-11-23a: skip merged-away duplicates (mergedInto) — they listed as a second "No contact" row.
+  const custAll = getCustomers().filter(c=> c && !c.mergedInto).filter(c=>
     custFullName(c).toLowerCase().includes(ql)||
     (qKey && _nameKey(custFullName(c)).includes(qKey))||
     (qKey && _nameKey(c.businessName).includes(qKey))||
